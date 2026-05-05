@@ -85,38 +85,8 @@ if ($pthFile) {
 $SitePackages = "$PyDir\Lib\site-packages"
 New-Item -ItemType Directory -Path $SitePackages -Force | Out-Null
 
-# --- 2. NSSM (bundled in tools/nssm.exe - no download needed) ---
-if (Test-Path $NssmExe) {
-    Write-Host "[2/6] NSSM bundled at tools\nssm.exe" -ForegroundColor DarkGray
-} else {
-    Write-Host "ERROR: tools\nssm.exe missing - re-download the repo ZIP." -ForegroundColor Red
-    pause; exit 1
-}
-
-# --- 3. Stop existing service & free port ---
-$ErrorActionPreference = "Continue"
-$existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($existing) {
-    Write-Host "[3/6] Stopping existing service..." -ForegroundColor Yellow
-    & $NssmExe stop $ServiceName 2>&1 | Out-Null
-    Start-Sleep -Seconds 2
-    & $NssmExe remove $ServiceName confirm 2>&1 | Out-Null
-} else {
-    Write-Host "[3/6] No existing service." -ForegroundColor DarkGray
-}
-$portPid = (netstat -ano | Select-String ":$Port\s" | ForEach-Object {
-    ($_ -split '\s+')[-1]
-} | Where-Object { $_ -match '^\d+$' } | Select-Object -Unique)
-foreach ($p in $portPid) {
-    if ($p -and $p -ne "0") {
-        Write-Host "  Killing PID $p holding port $Port" -ForegroundColor Yellow
-        taskkill /PID $p /F 2>&1 | Out-Null
-    }
-}
-$ErrorActionPreference = "Stop"
-
-# --- 4. Download latest code ---
-Write-Host "[4/6] Downloading latest code..." -ForegroundColor Yellow
+# --- 2. Download latest code FIRST (brings vendor/ wheels and tools/nssm.exe into place) ---
+Write-Host "[2/6] Downloading latest code from GitHub..." -ForegroundColor Yellow
 Invoke-WebRequest -Uri $ZipUrl -OutFile $ZipPath -UseBasicParsing
 $TempExtract = "$ProjectDir\_extract_temp"
 if (Test-Path $TempExtract) { Remove-Item $TempExtract -Recurse -Force }
@@ -130,6 +100,36 @@ Remove-Item $ZipPath -Force
 $ver = Get-Date -Format "yyyyMMdd-HHmmss"
 Set-Content "$CodeDir\VERSION" $ver
 Write-Host "  Version stamped: $ver" -ForegroundColor DarkGray
+
+# --- 3. NSSM (bundled in tools/nssm.exe by step 2's download) ---
+if (Test-Path $NssmExe) {
+    Write-Host "[3/6] NSSM bundled at tools\nssm.exe" -ForegroundColor DarkGray
+} else {
+    Write-Host "ERROR: tools\nssm.exe still missing after code download. Repo state is broken." -ForegroundColor Red
+    pause; exit 1
+}
+
+# --- 4. Stop existing service & free port ---
+$ErrorActionPreference = "Continue"
+$existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+if ($existing) {
+    Write-Host "[4/6] Stopping existing service..." -ForegroundColor Yellow
+    & $NssmExe stop $ServiceName 2>&1 | Out-Null
+    Start-Sleep -Seconds 2
+    & $NssmExe remove $ServiceName confirm 2>&1 | Out-Null
+} else {
+    Write-Host "[4/6] No existing service." -ForegroundColor DarkGray
+}
+$portPid = (netstat -ano | Select-String ":$Port\s" | ForEach-Object {
+    ($_ -split '\s+')[-1]
+} | Where-Object { $_ -match '^\d+$' } | Select-Object -Unique)
+foreach ($p in $portPid) {
+    if ($p -and $p -ne "0") {
+        Write-Host "  Killing PID $p holding port $Port" -ForegroundColor Yellow
+        taskkill /PID $p /F 2>&1 | Out-Null
+    }
+}
+$ErrorActionPreference = "Stop"
 
 # --- 5. Install bundled wheels (no pip, no PyPI - everything is in vendor/) ---
 Write-Host "[5/6] Installing bundled libraries from vendor\..." -ForegroundColor Yellow
