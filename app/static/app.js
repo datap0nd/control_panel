@@ -624,51 +624,74 @@ async function renderUpdate() {
 }
 
 window.triggerUpdate = async function() {
-  if (!confirm("Trigger update? A PowerShell window should open and the service will restart.")) return;
+  if (!confirm("This will download the latest version and restart the service. Continue?")) return;
   try {
     const r = await api("/update/run", { method: "POST" });
-    const attempts = (r.attempts || []).map(a => `<div class="mono" style="font-size:11px;">${esc(a)}</div>`).join("");
-    if (r.ok) {
-      modal(`
-        <h3>Update launched</h3>
-        <p>${esc(r.message)}</p>
-        ${r.method === "scheduled_task" ? `
-          <div class="card" style="margin-top:12px;">
-            <h3>What to expect</h3>
-            <ol>
-              <li>UAC prompt appears - click Yes</li>
-              <li>PowerShell window opens, runs update.ps1</li>
-              <li>Service stops, code is downloaded, libraries re-extracted</li>
-              <li>Service starts back up (~30s)</li>
-              <li>Refresh this page to see the new version</li>
-            </ol>
-          </div>
-        ` : `
-          <div class="card" style="margin-top:12px;">
-            <h3>Manual step needed</h3>
-            <p>Auto-launch didn't work. The install folder was opened in Explorer.</p>
-            <p>Right-click <span class="mono">update.ps1</span> > <b>Run with PowerShell</b>.</p>
-            <p class="muted">Folder: <span class="mono">${esc(r.install_dir)}</span></p>
-          </div>
-        `}
-        ${attempts ? `<details style="margin-top:12px;"><summary class="muted">Debug attempts</summary>${attempts}</details>` : ""}
-        <div class="modal-actions">
-          <button class="btn btn-primary" onclick="closeModal()">OK</button>
-        </div>
-      `);
-    } else {
-      modal(`
-        <h3>Update failed to launch</h3>
-        <p>${esc(r.error || "Unknown error")}</p>
-        <p>Manually run <span class="mono">update.ps1</span> from <span class="mono">${esc(r.install_dir || "your install folder")}</span>.</p>
-        ${attempts ? `<details style="margin-top:12px;"><summary class="muted">Debug attempts</summary>${attempts}</details>` : ""}
-        <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>
-      `);
+    if (!r.ok) {
+      const attempts = (r.attempts || []).map(a => `<div class="mono" style="font-size:11px;">${esc(a)}</div>`).join("");
+      modal(`<h3>Update failed to launch</h3><p>${esc(r.error || "Unknown")}</p><p>Manually run update.ps1 from <span class="mono">${esc(r.install_dir || "")}</span>.</p>${attempts ? `<details style="margin-top:12px;"><summary class="muted">Debug</summary>${attempts}</details>` : ""}<div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
+      return;
     }
+    showUpdatingOverlay(r.method === "explorer_fallback");
+    pollForServiceBack();
   } catch (err) {
     modal(`<h3>Request failed</h3><pre class="console">${esc(err.message)}</pre><div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
   }
 };
+
+function showUpdatingOverlay(manualMode) {
+  document.body.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg);color:var(--text);font-family:inherit;">
+      <div style="text-align:center;max-width:500px;padding:40px;">
+        <div style="display:inline-block;width:48px;height:48px;border:4px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;margin-bottom:24px;"></div>
+        <h2 style="margin:0 0 12px;">${manualMode ? "Waiting for manual update" : "Updating..."}</h2>
+        <p style="color:var(--text-dim);margin:0 0 16px;">
+          ${manualMode
+            ? "Run update.ps1 in the Explorer window that opened. This page will reload when the service is back."
+            : "PowerShell is running update.ps1. Approve the UAC prompt. This page will reload when the service is back (~30 sec)."}
+        </p>
+        <p class="mono" id="pollStatus" style="color:var(--text-dim);font-size:12px;">checking service...</p>
+      </div>
+    </div>
+    <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+  `;
+}
+
+async function pollForServiceBack() {
+  let lastVersion = null;
+  let attempts = 0;
+  const startTime = Date.now();
+  const oldVersion = $("#pollStatus") ? null : null;
+  try {
+    const cur = await fetch("/api/health").then(r => r.json()).catch(() => null);
+    lastVersion = cur ? cur.version : null;
+  } catch {}
+  const status = () => document.getElementById("pollStatus");
+  const interval = setInterval(async () => {
+    attempts++;
+    const secs = Math.round((Date.now() - startTime) / 1000);
+    if (status()) status().textContent = `checking service... (${secs}s)`;
+    try {
+      const res = await fetch("/api/health", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        if (lastVersion && data.version !== lastVersion) {
+          if (status()) status().textContent = `service back, new version ${data.version}. Reloading...`;
+          clearInterval(interval);
+          setTimeout(() => location.reload(), 1500);
+        } else if (!lastVersion) {
+          lastVersion = data.version;
+        }
+      }
+    } catch {
+      // service is down, keep waiting
+    }
+    if (attempts > 90) {  // 3 minutes
+      clearInterval(interval);
+      if (status()) status().innerHTML = "service didn't come back. <a href='/' style='color:var(--accent);'>Reload manually</a>";
+    }
+  }, 2000);
+}
 
 // ============================================================
 // Settings

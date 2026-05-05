@@ -50,31 +50,28 @@ def trigger_update():
     task_name = "ControlPanelUpdate"
     attempts: list[str] = []
 
-    # Try scheduled task approach
+    # Same pattern as data_governance update flow:
+    # - No /RL HIGHEST (the .ps1 self-elevates via its own UAC trigger)
+    # - /ST 00:00 (past time - never auto-fires; we /Run on demand)
+    # - /IT makes it run in the logged-on user's interactive session (visible window)
     try:
-        # Clean up any stale task
         subprocess.run(
             ["schtasks", "/Delete", "/TN", task_name, "/F"],
             capture_output=True, timeout=10,
         )
 
-        # Schedule for 1 minute from now (we'll trigger immediately with /Run)
-        when = (datetime.now() + timedelta(minutes=1)).strftime("%H:%M")
-        tr = f'powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File "{update_script}"'
-
+        tr = f'powershell.exe -ExecutionPolicy Bypass -NoExit -File "{update_script}"'
         create_cmd = [
             "schtasks", "/Create", "/TN", task_name,
             "/TR", tr,
-            "/SC", "ONCE", "/ST", when,
-            "/RL", "HIGHEST",  # request admin
-            "/IT",             # interactive - runs in user's session, visible window
-            "/F",              # overwrite
+            "/SC", "ONCE", "/ST", "00:00",
+            "/IT",
+            "/F",
         ]
         r = subprocess.run(create_cmd, capture_output=True, text=True, timeout=30)
         attempts.append(f"create: rc={r.returncode} {(r.stdout + r.stderr).strip()}")
 
         if r.returncode == 0:
-            # Trigger immediately
             r2 = subprocess.run(
                 ["schtasks", "/Run", "/TN", task_name],
                 capture_output=True, text=True, timeout=10,
@@ -84,7 +81,7 @@ def trigger_update():
                 return {
                     "ok": True,
                     "method": "scheduled_task",
-                    "message": "Update task launched in your user session. A PowerShell window will appear in a few seconds. Watch for the UAC prompt to elevate.",
+                    "message": "Update task launched. A PowerShell window will appear in your session shortly.",
                     "install_dir": str(INSTALL_DIR),
                     "attempts": attempts,
                 }
