@@ -210,20 +210,27 @@ window.closeModal = closeModal;
 // ============================================================
 
 async function renderScripts() {
-  const data = await api("/scripts");
-  const runs = await api("/scripts/runs?limit=20");
+  const [data, runs, pathInfo] = await Promise.all([
+    api("/scripts"),
+    api("/scripts/runs?limit=20"),
+    api("/scripts/path"),
+  ]);
 
   $("#content").innerHTML = `
     <div class="toolbar">
       <h2 style="margin:0">Scripts</h2>
       <div class="spacer"></div>
       <span class="muted mono">${esc(data.scripts_path)}</span>
+      ${pathInfo.is_override ? `<span class="badge purple">override</span>` : ""}
+      <button class="btn btn-sm" onclick="changeScriptsPath()">Change folder</button>
+      ${pathInfo.is_override ? `<button class="btn btn-sm" onclick="resetScriptsPath()">Reset to default</button>` : ""}
     </div>
 
     ${!data.exists ? `
       <div class="card">
         <h3>Scripts folder not found</h3>
-        <p class="muted">Set <span class="mono">CP_SCRIPTS_PATH</span> to a folder containing your .ps1 / .py / .bat / .sh files. Each script can have a sidecar <span class="mono">name.meta.json</span> with <span class="mono">{ "name": "...", "description": "...", "args": "..." }</span>.</p>
+        <p class="muted">Path: <span class="mono">${esc(data.scripts_path)}</span></p>
+        <p class="muted">Click "Change folder" above to point to a folder with your <span class="mono">.ps1</span> / <span class="mono">.py</span> / <span class="mono">.bat</span> / <span class="mono">.sh</span> files. Sidecar <span class="mono">name.meta.json</span> with <span class="mono">{ "name": "...", "description": "...", "args": "..." }</span> is optional.</p>
       </div>
     ` : data.scripts.length === 0 ? `
       <div class="card empty">No scripts found in <span class="mono">${esc(data.scripts_path)}</span>.</div>
@@ -272,6 +279,42 @@ async function renderScripts() {
     </div>
   `;
 }
+
+window.changeScriptsPath = async function() {
+  const current = await api("/scripts/path");
+  modal(`
+    <h3>Change scripts folder</h3>
+    <p class="muted">Currently: <span class="mono">${esc(current.path)}</span></p>
+    <p class="muted">Default (env var <span class="mono">CP_SCRIPTS_PATH</span>): <span class="mono">${esc(current.default_path)}</span></p>
+    <label>New folder path (paste full Windows path)</label>
+    <input id="newPath" placeholder="C:\\Users\\...\\my scripts" autofocus>
+    <p class="muted" style="font-size:11px;margin-top:8px;">Folder must already exist on this machine. The override is stored in the SQLite settings table and persists across restarts. Reset to default any time.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveScriptsPath()">Save</button>
+    </div>
+  `, () => $("#newPath").focus());
+};
+
+window.saveScriptsPath = async function() {
+  const path = $("#newPath").value.trim();
+  if (!path) { toast("Path required", "error"); return; }
+  try {
+    const r = await api("/scripts/path", { method: "PUT", body: JSON.stringify({ path }) });
+    closeModal();
+    toast(`Scripts folder set to ${r.path}`, "success");
+    navigate();
+  } catch (err) {
+    toast(err.message, "error");
+  }
+};
+
+window.resetScriptsPath = async function() {
+  if (!confirm("Reset to the default scripts folder (CP_SCRIPTS_PATH env var)?")) return;
+  await api("/scripts/path", { method: "DELETE" });
+  toast("Reset to default", "success");
+  navigate();
+};
 
 window.runScript = function(path, argsHelp) {
   modal(`

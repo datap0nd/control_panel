@@ -16,8 +16,17 @@ router = APIRouter()
 ALLOWED_EXTS = {".ps1", ".py", ".bat", ".cmd", ".sh"}
 
 
+def _effective_scripts_path() -> Path:
+    """DB override (settings.scripts_path) wins, else CP_SCRIPTS_PATH env default."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key='scripts_path'").fetchone()
+    if row and row["value"]:
+        return Path(row["value"])
+    return config.SCRIPTS_PATH
+
+
 def _safe_path(rel_path: str) -> Path:
-    base = config.SCRIPTS_PATH.resolve()
+    base = _effective_scripts_path().resolve()
     candidate = (base / rel_path).resolve()
     if not str(candidate).startswith(str(base)):
         raise HTTPException(400, "path escapes scripts root")
@@ -40,9 +49,46 @@ def _meta_for(path: Path) -> dict:
     return {}
 
 
+@router.get("/path")
+def get_path():
+    eff = _effective_scripts_path()
+    is_override = eff.resolve() != config.SCRIPTS_PATH.resolve()
+    return {
+        "path": str(eff),
+        "exists": eff.exists(),
+        "default_path": str(config.SCRIPTS_PATH),
+        "is_override": is_override,
+    }
+
+
+@router.put("/path")
+def set_path(payload: dict):
+    raw = (payload.get("path") or "").strip().strip('"')
+    if not raw:
+        raise HTTPException(400, "path required")
+    p = Path(raw)
+    if not p.exists() or not p.is_dir():
+        raise HTTPException(400, f"folder does not exist or not a directory: {raw}")
+    resolved = str(p.resolve())
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES('scripts_path', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')",
+            (resolved,),
+        )
+    return {"ok": True, "path": resolved}
+
+
+@router.delete("/path")
+def reset_path():
+    with get_conn() as conn:
+        conn.execute("DELETE FROM settings WHERE key='scripts_path'")
+    return {"ok": True, "path": str(config.SCRIPTS_PATH)}
+
+
 @router.get("")
 def list_scripts():
-    base = config.SCRIPTS_PATH
+    base = _effective_scripts_path()
     if not base.exists():
         return {"scripts_path": str(base), "scripts": [], "exists": False}
     items = []
