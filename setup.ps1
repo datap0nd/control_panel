@@ -36,9 +36,7 @@ $ZipPath     = "$ProjectDir\_update.zip"
 $PyDir       = "$ProjectDir\python313"
 $PyExe       = "$PyDir\python.exe"
 $PyZipUrl    = "https://www.python.org/ftp/python/3.13.2/python-3.13.2-embed-amd64.zip"
-$NssmDir     = "$ProjectDir\nssm"
-$NssmExe     = "$NssmDir\nssm.exe"
-$NssmZipUrl  = "https://nssm.cc/release/nssm-2.24.zip"
+$NssmExe     = "$CodeDir\tools\nssm.exe"
 
 if (-not (Test-Path "$CodeDir\app\main.py")) {
     Write-Host "ERROR: Run this from inside the control_panel-main folder." -ForegroundColor Red
@@ -87,22 +85,12 @@ if ($pthFile) {
 $SitePackages = "$PyDir\Lib\site-packages"
 New-Item -ItemType Directory -Path $SitePackages -Force | Out-Null
 
-# --- 2. NSSM ---
-if (-not (Test-Path $NssmExe)) {
-    Write-Host "[2/6] Downloading NSSM..." -ForegroundColor Yellow
-    $NssmZipPath = "$ProjectDir\_nssm.zip"
-    Invoke-WebRequest -Uri $NssmZipUrl -OutFile $NssmZipPath -UseBasicParsing
-    $NssmTemp = "$ProjectDir\_nssm_extract"
-    Expand-Archive -Path $NssmZipPath -DestinationPath $NssmTemp -Force
-    $NssmInner = Get-ChildItem $NssmTemp -Directory | Select-Object -First 1
-    $arch = if ([Environment]::Is64BitOperatingSystem) { "win64" } else { "win32" }
-    New-Item -ItemType Directory -Path $NssmDir -Force | Out-Null
-    Copy-Item "$($NssmInner.FullName)\$arch\nssm.exe" $NssmExe -Force
-    Remove-Item $NssmTemp -Recurse -Force
-    Remove-Item $NssmZipPath -Force
-    Write-Host "  NSSM installed." -ForegroundColor Green
+# --- 2. NSSM (bundled in tools/nssm.exe - no download needed) ---
+if (Test-Path $NssmExe) {
+    Write-Host "[2/6] NSSM bundled at tools\nssm.exe" -ForegroundColor DarkGray
 } else {
-    Write-Host "[2/6] NSSM already present." -ForegroundColor DarkGray
+    Write-Host "ERROR: tools\nssm.exe missing - re-download the repo ZIP." -ForegroundColor Red
+    pause; exit 1
 }
 
 # --- 3. Stop existing service & free port ---

@@ -17,7 +17,7 @@ $CodeDir      = $PSScriptRoot
 $ProjectDir   = Split-Path $CodeDir
 $ZipUrl       = "https://github.com/datap0nd/control_panel/archive/refs/heads/main.zip"
 $ZipPath      = "$ProjectDir\_update.zip"
-$NssmExe      = "$ProjectDir\nssm\nssm.exe"
+$NssmExe      = "$CodeDir\tools\nssm.exe"
 $PyDir        = "$ProjectDir\python313"
 $SitePackages = "$PyDir\Lib\site-packages"
 

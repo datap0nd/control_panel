@@ -21,13 +21,11 @@ scripts/
 
 # Bundled runtime (auto-installed by setup.ps1)
 python313/
-nssm/
 _update.zip
 _python.zip
-_nssm.zip
 _extract_temp/
 
-# Note: vendor/ IS committed (bundled wheels) - do not exclude
+# Note: vendor/ AND tools/nssm.exe ARE committed (bundled deps) - do not exclude
 
 # Editor / OS
 .vscode/
