@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+venv/
+.venv/
+
+# Local data (never commit)
+control_panel.db
+control_panel.db-journal
+control_panel.db-wal
+control_panel.db-shm
+backups/
+logs/
+scripts/
+*.log
+
+# Bundled runtime (auto-installed by setup.ps1)
+python313/
+nssm/
+_update.zip
+_python.zip
+_nssm.zip
+_extract_temp/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

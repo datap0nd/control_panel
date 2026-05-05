@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Control Panel</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="dot"></span>
+    <h1>Control Panel</h1>
+    <span class="version" id="versionTag"></span>
+  </div>
+  <nav class="tabs" id="tabs">
+    <a href="#dashboard" data-tab="dashboard">Dashboard</a>
+    <a href="#scripts" data-tab="scripts">Scripts</a>
+    <a href="#tasks" data-tab="tasks">Tasks</a>
+    <a href="#notes" data-tab="notes">Notes</a>
+    <a href="#update" data-tab="update">Update</a>
+    <a href="#settings" data-tab="settings">Settings</a>
+  </nav>
+</header>
+
+<main id="content"></main>
+
+<div id="toast" class="toast"></div>
+<div id="modal" class="modal hidden">
+  <div class="modal-card" id="modalCard"></div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
