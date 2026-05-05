@@ -27,6 +27,8 @@ _python.zip
 _nssm.zip
 _extract_temp/
 
+# Note: vendor/ IS committed (bundled wheels) - do not exclude
+
 # Editor / OS
 .vscode/
 .idea/

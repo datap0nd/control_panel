@@ -20,7 +20,7 @@ FastAPI + vanilla JS SPA. No build step. Runs as a Windows service.
    - Auto-elevate to Admin
    - Download a portable Python 3.13 (no system install)
    - Download NSSM (service wrapper)
-   - Install Python deps
+   - Extract bundled Python libraries from `vendor\` (no pip, no PyPI calls)
    - Register `ControlPanel` Windows service
    - Start it on http://localhost:8765
 5. The browser opens automatically when ready.
@@ -90,6 +90,12 @@ Manual backup button in Settings.
 pip install -r requirements.txt
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8765 --reload
 ```
+
+## Bundled libraries (no pip needed at install)
+
+The `vendor/` folder contains all required Python wheels (~5 MB) targeting Windows + Python 3.13. `setup.ps1` extracts them directly into the portable Python's `Lib\site-packages` - no `pip install`, no PyPI calls, fully offline after the initial portable Python + NSSM downloads.
+
+If you bump versions in `requirements.txt`, also re-download the matching wheels into `vendor/` and commit them.
 
 ## API
 

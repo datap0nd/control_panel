@@ -1,7 +1,7 @@
 # Control Panel - Update
 # Called from the Update tab in the app, or run manually.
-# Downloads latest code from GitHub and restarts the service.
-# Re-uses the existing portable Python and NSSM. For first-time install, run setup.ps1 instead.
+# Downloads latest code from GitHub, re-extracts bundled libraries (no pip), restarts the service.
+# For first-time install, run setup.ps1 instead.
 
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Start-Process powershell.exe "-NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
@@ -9,19 +9,17 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 }
 
 $ErrorActionPreference = "Stop"
-trap {
-    Write-Host "UPDATE FAILED: $_" -ForegroundColor Red
-    pause; exit 1
-}
+trap { Write-Host "UPDATE FAILED: $_" -ForegroundColor Red; pause; exit 1 }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ServiceName = "ControlPanel"
-$CodeDir     = $PSScriptRoot
-$ProjectDir  = Split-Path $CodeDir
-$ZipUrl      = "https://github.com/datap0nd/control_panel/archive/refs/heads/main.zip"
-$ZipPath     = "$ProjectDir\_update.zip"
-$NssmExe     = "$ProjectDir\nssm\nssm.exe"
-$PipExe      = "$ProjectDir\python313\Scripts\pip.exe"
+$ServiceName  = "ControlPanel"
+$CodeDir      = $PSScriptRoot
+$ProjectDir   = Split-Path $CodeDir
+$ZipUrl       = "https://github.com/datap0nd/control_panel/archive/refs/heads/main.zip"
+$ZipPath      = "$ProjectDir\_update.zip"
+$NssmExe      = "$ProjectDir\nssm\nssm.exe"
+$PyDir        = "$ProjectDir\python313"
+$SitePackages = "$PyDir\Lib\site-packages"
 
 Write-Host "Updating Control Panel..." -ForegroundColor Cyan
 
@@ -45,14 +43,27 @@ $ver = Get-Date -Format "yyyyMMdd-HHmmss"
 Set-Content "$CodeDir\VERSION" $ver
 Write-Host "Updated to: $ver" -ForegroundColor Green
 
-if (Test-Path $PipExe) {
-    Write-Host "Refreshing dependencies..." -ForegroundColor Yellow
-    & $PipExe install -r "$CodeDir\requirements.txt" -q
+# Re-extract bundled wheels (in case any changed)
+$VendorDir = "$CodeDir\vendor"
+if (Test-Path $VendorDir) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    foreach ($whl in Get-ChildItem -Path $VendorDir -Filter "*.whl") {
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($whl.FullName)
+        try {
+            foreach ($entry in $archive.Entries) {
+                if ($entry.FullName.EndsWith('/')) { continue }
+                $target = Join-Path $SitePackages $entry.FullName
+                $targetDir = Split-Path $target -Parent
+                if (-not (Test-Path $targetDir)) { New-Item -ItemType Directory -Path $targetDir -Force | Out-Null }
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+            }
+        } finally { $archive.Dispose() }
+    }
+    Write-Host "Libraries refreshed from vendor\" -ForegroundColor DarkGray
 }
 
 if (Test-Path $NssmExe) {
     & $NssmExe start $ServiceName
     Write-Host "Service restarted." -ForegroundColor Green
 }
-
 Write-Host "Done."

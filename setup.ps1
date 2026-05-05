@@ -1,10 +1,10 @@
 # Control Panel - Setup & Update
 # Right-click > Run with PowerShell
 #
-# Idempotent: first run installs everything, later runs update code + deps.
+# Idempotent: first run installs, later runs update code + libs.
 # Auto-elevates to Admin if needed.
 # Never deletes your data: control_panel.db, backups/, scripts/ are preserved.
-# Uses portable Python 3.13 (no system changes).
+# Uses portable Python 3.13 (no system changes) and BUNDLED wheels (no pip, no PyPI calls).
 
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Start-Process powershell.exe "-NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
@@ -16,8 +16,7 @@ trap {
     Write-Host ""
     Write-Host "SETUP FAILED: $_" -ForegroundColor Red
     Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
-    pause
-    exit 1
+    pause; exit 1
 }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -59,7 +58,7 @@ if (Test-Path $DbPath) {
     Write-Host "  DB: new (created on first run)" -ForegroundColor Yellow
 }
 
-# --- 1. Portable Python 3.13 ---
+# --- 1. Portable Python 3.13 (no pip - that's done via bundled wheels) ---
 if (-not (Test-Path $PyExe)) {
     Write-Host "[1/6] Downloading portable Python 3.13..." -ForegroundColor Yellow
     $PyZipPath = "$ProjectDir\_python.zip"
@@ -67,22 +66,26 @@ if (-not (Test-Path $PyExe)) {
     New-Item -ItemType Directory -Path $PyDir -Force | Out-Null
     Expand-Archive -Path $PyZipPath -DestinationPath $PyDir -Force
     Remove-Item $PyZipPath -Force
-
-    $pthFile = Get-ChildItem $PyDir -Filter "python*._pth" | Select-Object -First 1
-    if ($pthFile) {
-        $content = Get-Content $pthFile.FullName
-        $content = $content -replace '^#\s*import site', 'import site'
-        Set-Content $pthFile.FullName $content
-    }
-
-    Write-Host "  Bootstrapping pip..." -ForegroundColor DarkGray
-    $getPipPath = "$PyDir\get-pip.py"
-    Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $getPipPath -UseBasicParsing
-    & $PyExe $getPipPath --no-warn-script-location -q
     Write-Host "  Portable Python ready." -ForegroundColor Green
 } else {
     Write-Host "[1/6] Portable Python 3.13 already installed." -ForegroundColor DarkGray
 }
+
+# Configure embed: enable site-packages by uncommenting 'import site' and adding Lib paths
+$pthFile = Get-ChildItem $PyDir -Filter "python*._pth" | Select-Object -First 1
+if ($pthFile) {
+    $content = Get-Content $pthFile.FullName -Raw
+    if ($content -notmatch '(?m)^\s*import site\s*$') {
+        $content = $content -replace '(?m)^\s*#\s*import site\s*$', 'import site'
+        if ($content -notmatch '(?m)^\s*import site\s*$') { $content += "`r`nimport site`r`n" }
+    }
+    if ($content -notmatch '(?m)^\s*Lib\\site-packages\s*$') {
+        $content += "`r`nLib`r`nLib\site-packages`r`n"
+    }
+    Set-Content $pthFile.FullName $content -NoNewline
+}
+$SitePackages = "$PyDir\Lib\site-packages"
+New-Item -ItemType Directory -Path $SitePackages -Force | Out-Null
 
 # --- 2. NSSM ---
 if (-not (Test-Path $NssmExe)) {
@@ -140,11 +143,47 @@ $ver = Get-Date -Format "yyyyMMdd-HHmmss"
 Set-Content "$CodeDir\VERSION" $ver
 Write-Host "  Version stamped: $ver" -ForegroundColor DarkGray
 
-# --- 5. Install Python dependencies ---
-Write-Host "[5/6] Installing Python dependencies..." -ForegroundColor Yellow
-Set-Location $CodeDir
-$PipExe = "$PyDir\Scripts\pip.exe"
-& $PipExe install -r requirements.txt -q
+# --- 5. Install bundled wheels (no pip, no PyPI - everything is in vendor/) ---
+Write-Host "[5/6] Installing bundled libraries from vendor\..." -ForegroundColor Yellow
+$VendorDir = "$CodeDir\vendor"
+if (-not (Test-Path $VendorDir)) {
+    Write-Host "ERROR: vendor folder not found at $VendorDir" -ForegroundColor Red
+    Write-Host "Make sure the repo ZIP includes the vendor folder." -ForegroundColor Red
+    pause; exit 1
+}
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$wheels = Get-ChildItem -Path $VendorDir -Filter "*.whl" | Sort-Object Name
+Write-Host "  $($wheels.Count) wheels found." -ForegroundColor DarkGray
+
+foreach ($whl in $wheels) {
+    Write-Host "  -> $($whl.Name)" -ForegroundColor DarkGray
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($whl.FullName)
+    try {
+        foreach ($entry in $archive.Entries) {
+            if ($entry.FullName.EndsWith('/')) { continue }
+            $target = Join-Path $SitePackages $entry.FullName
+            $targetDir = Split-Path $target -Parent
+            if (-not (Test-Path $targetDir)) {
+                New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+            }
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+        }
+    } finally {
+        $archive.Dispose()
+    }
+}
+Write-Host "  Libraries extracted to $SitePackages" -ForegroundColor Green
+
+# Quick sanity check: import each top-level package
+Write-Host "  Verifying imports..." -ForegroundColor DarkGray
+$verifyOut = & $PyExe -c "import fastapi, uvicorn, pydantic, apscheduler; print('OK', fastapi.__version__, uvicorn.__version__, pydantic.VERSION, apscheduler.__version__)" 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  Import check failed:" -ForegroundColor Red
+    Write-Host $verifyOut -ForegroundColor Red
+    pause; exit 1
+}
+Write-Host "  $verifyOut" -ForegroundColor Green
 
 # --- 6. Create folders & start service ---
 Write-Host "[6/6] Creating folders and starting service..." -ForegroundColor Yellow
