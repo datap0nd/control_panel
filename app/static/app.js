@@ -624,13 +624,49 @@ async function renderUpdate() {
 }
 
 window.triggerUpdate = async function() {
-  if (!confirm("Trigger update? The service will restart and this page will briefly disconnect.")) return;
+  if (!confirm("Trigger update? A PowerShell window should open and the service will restart.")) return;
   try {
     const r = await api("/update/run", { method: "POST" });
-    if (r.ok) toast("Update started. Service restarting...", "success");
-    else toast(r.error || "Failed", "error");
+    const attempts = (r.attempts || []).map(a => `<div class="mono" style="font-size:11px;">${esc(a)}</div>`).join("");
+    if (r.ok) {
+      modal(`
+        <h3>Update launched</h3>
+        <p>${esc(r.message)}</p>
+        ${r.method === "scheduled_task" ? `
+          <div class="card" style="margin-top:12px;">
+            <h3>What to expect</h3>
+            <ol>
+              <li>UAC prompt appears - click Yes</li>
+              <li>PowerShell window opens, runs update.ps1</li>
+              <li>Service stops, code is downloaded, libraries re-extracted</li>
+              <li>Service starts back up (~30s)</li>
+              <li>Refresh this page to see the new version</li>
+            </ol>
+          </div>
+        ` : `
+          <div class="card" style="margin-top:12px;">
+            <h3>Manual step needed</h3>
+            <p>Auto-launch didn't work. The install folder was opened in Explorer.</p>
+            <p>Right-click <span class="mono">update.ps1</span> > <b>Run with PowerShell</b>.</p>
+            <p class="muted">Folder: <span class="mono">${esc(r.install_dir)}</span></p>
+          </div>
+        `}
+        ${attempts ? `<details style="margin-top:12px;"><summary class="muted">Debug attempts</summary>${attempts}</details>` : ""}
+        <div class="modal-actions">
+          <button class="btn btn-primary" onclick="closeModal()">OK</button>
+        </div>
+      `);
+    } else {
+      modal(`
+        <h3>Update failed to launch</h3>
+        <p>${esc(r.error || "Unknown error")}</p>
+        <p>Manually run <span class="mono">update.ps1</span> from <span class="mono">${esc(r.install_dir || "your install folder")}</span>.</p>
+        ${attempts ? `<details style="margin-top:12px;"><summary class="muted">Debug attempts</summary>${attempts}</details>` : ""}
+        <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>
+      `);
+    }
   } catch (err) {
-    toast(err.message, "error");
+    modal(`<h3>Request failed</h3><pre class="console">${esc(err.message)}</pre><div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
   }
 };
 
