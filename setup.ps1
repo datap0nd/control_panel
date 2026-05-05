@@ -87,7 +87,44 @@ New-Item -ItemType Directory -Path $SitePackages -Force | Out-Null
 
 # --- 2. Download latest code FIRST (brings vendor/ wheels and tools/nssm.exe into place) ---
 Write-Host "[2/6] Downloading latest code from GitHub..." -ForegroundColor Yellow
-Invoke-WebRequest -Uri $ZipUrl -OutFile $ZipPath -UseBasicParsing
+
+# Fallback chain - corporate proxies often block one of these but not all
+$sources = @(
+    @{Name="api.github.com zipball";    Url="https://api.github.com/repos/$RepoOwner/$RepoName/zipball/main"},
+    @{Name="github.com archive";        Url="https://github.com/$RepoOwner/$RepoName/archive/refs/heads/main.zip"},
+    @{Name="codeload.github.com direct"; Url="https://codeload.github.com/$RepoOwner/$RepoName/zip/refs/heads/main"}
+)
+$headers = @{"User-Agent" = "ControlPanel-Setup"}
+$downloaded = $false
+foreach ($s in $sources) {
+    Write-Host "  Trying $($s.Name)..." -ForegroundColor DarkGray
+    try {
+        Invoke-WebRequest -Uri $s.Url -OutFile $ZipPath -UseBasicParsing -Headers $headers -ErrorAction Stop
+        $size = (Get-Item $ZipPath -ErrorAction SilentlyContinue).Length
+        if ($size -lt 10000) {
+            Write-Host "    Got $size bytes - too small, likely error response. Skipping." -ForegroundColor DarkYellow
+            continue
+        }
+        Write-Host "    OK ($size bytes via $($s.Name))" -ForegroundColor Green
+        $downloaded = $true
+        break
+    } catch {
+        Write-Host "    $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+}
+
+if (-not $downloaded) {
+    Write-Host ""
+    Write-Host "All GitHub sources failed. Manual fallback:" -ForegroundColor Red
+    Write-Host "  1. From any unblocked machine, download:" -ForegroundColor White
+    Write-Host "     https://github.com/$RepoOwner/$RepoName/archive/refs/heads/main.zip" -ForegroundColor White
+    Write-Host "  2. Save it as: $ZipPath" -ForegroundColor White
+    Write-Host "  3. Re-run this script - it will skip the download if the zip is already present." -ForegroundColor White
+    Write-Host ""
+    if (-not (Test-Path $ZipPath)) { pause; exit 1 }
+    Write-Host "  Found existing $ZipPath - using it." -ForegroundColor Green
+}
+
 $TempExtract = "$ProjectDir\_extract_temp"
 if (Test-Path $TempExtract) { Remove-Item $TempExtract -Recurse -Force }
 Expand-Archive -Path $ZipPath -DestinationPath $TempExtract -Force
