@@ -599,7 +599,7 @@ async function renderTasks() {
                   </td>
                   <td><span class="badge ${t.status === 'done' ? 'green' : t.status === 'doing' || t.status === 'in_progress' ? 'yellow' : ''}">${esc(t.status || "")}</span></td>
                   <td><span class="badge ${t.priority === 'high' ? 'red' : t.priority === 'low' ? 'blue' : ''}">${esc(t.priority || "")}</span></td>
-                  <td class="muted">${esc(t.assignee || "")}</td>
+                  <td class="muted">${esc(t.assigned_to || t.assignee || t.owner || "")}</td>
                   <td class="muted">${esc(t.due_date || "")}</td>
                 </tr>
               `).join("")}

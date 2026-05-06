@@ -37,7 +37,15 @@ def governance_tasks():
 
     user = (config.GOVERNANCE_USER or "").lower()
     if user:
-        items = [t for t in items if user in (str(t.get("assignee") or "")).lower()]
+        # Match against multiple possible field names. Governance currently uses 'assigned_to'.
+        # Case-insensitive contains so "Rafael" matches "Rafael Cunha" etc.
+        def _matches(t):
+            for field in ("assigned_to", "assignee", "owner"):
+                v = str(t.get(field) or "").lower()
+                if user in v:
+                    return True
+            return False
+        items = [t for t in items if _matches(t)]
 
     return {
         "configured": True,
