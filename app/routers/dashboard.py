@@ -1,4 +1,3 @@
-from datetime import datetime, timedelta
 from fastapi import APIRouter
 
 from .. import config
@@ -17,28 +16,12 @@ def overview():
             )
         }
 
-        today_iso = datetime.now().strftime("%Y-%m-%d")
-        scripts_today = conn.execute(
-            "SELECT COUNT(*) AS n FROM script_runs WHERE date(started_at) = ?",
-            (today_iso,),
-        ).fetchone()["n"]
-
-        last_run = conn.execute(
-            "SELECT script_path, started_at, exit_code, duration_seconds "
-            "FROM script_runs ORDER BY started_at DESC LIMIT 1"
-        ).fetchone()
-
         last_backup = conn.execute(
             "SELECT path, status, size_bytes, created_at "
             "FROM backup_log ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
 
         notes_total = conn.execute("SELECT COUNT(*) AS n FROM notes").fetchone()["n"]
-
-        recent_runs = conn.execute(
-            "SELECT script_path, started_at, exit_code, duration_seconds "
-            "FROM script_runs ORDER BY started_at DESC LIMIT 5"
-        ).fetchall()
 
         upcoming_due = conn.execute(
             "SELECT id, title, due_date, priority FROM tasks "
@@ -57,11 +40,8 @@ def overview():
             "doing": tasks_by_status.get("doing", 0),
             "done": tasks_by_status.get("done", 0),
         },
-        "scripts_today": scripts_today,
-        "last_script": dict(last_run) if last_run else None,
         "last_backup": dict(last_backup) if last_backup else None,
         "notes_total": notes_total,
-        "recent_runs": rows_to_list(recent_runs),
         "upcoming_due": rows_to_list(upcoming_due),
         "custom_metrics": rows_to_list(custom_metrics),
     }

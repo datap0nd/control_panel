@@ -31,20 +31,6 @@ CREATE TABLE IF NOT EXISTS notes (
 );
 CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at DESC);
 
-CREATE TABLE IF NOT EXISTS script_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    script_path TEXT NOT NULL,
-    args TEXT,
-    started_at TEXT NOT NULL DEFAULT (datetime('now')),
-    finished_at TEXT,
-    exit_code INTEGER,
-    stdout TEXT,
-    stderr TEXT,
-    duration_seconds REAL
-);
-CREATE INDEX IF NOT EXISTS idx_runs_script ON script_runs(script_path, started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_runs_started ON script_runs(started_at DESC);
-
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -73,7 +59,6 @@ CREATE TABLE IF NOT EXISTS script_metadata (
     script_path TEXT PRIMARY KEY,
     name TEXT,
     description TEXT,
-    args_help TEXT,
     archived INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

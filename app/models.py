@@ -44,8 +44,6 @@ class NoteUpdate(BaseModel):
 
 class ScriptRunRequest(BaseModel):
     script_path: str
-    args: Optional[str] = None
-    timeout_seconds: int = 300
 
 
 class SettingIn(BaseModel):

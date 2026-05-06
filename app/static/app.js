@@ -113,10 +113,6 @@ async function renderDashboard() {
         <div class="value">${d.tasks.done}</div>
       </div>
       <div class="metric">
-        <div class="label">Scripts run today</div>
-        <div class="value">${d.scripts_today}</div>
-      </div>
-      <div class="metric">
         <div class="label">Notes</div>
         <div class="value">${d.notes_total}</div>
       </div>
@@ -126,54 +122,28 @@ async function renderDashboard() {
         <div class="sub">${d.last_backup ? fmtDate(d.last_backup.created_at) : ""}</div>
       </div>
       <div class="metric">
-        <div class="label">Last script</div>
-        <div class="value" style="font-size:13px;">${d.last_script ? esc(d.last_script.script_path) : "never"}</div>
-        <div class="sub">${d.last_script ? `exit ${d.last_script.exit_code}` : ""}</div>
-      </div>
-      <div class="metric">
         <div class="label">Version</div>
         <div class="value" style="font-size:13px;">${esc(d.version)}</div>
       </div>
       ${metricCards}
     </div>
 
-    <div class="grid grid-2" style="margin-top:24px;">
-      <div class="card">
-        <h3>Upcoming due</h3>
-        ${(d.upcoming_due && d.upcoming_due.length) ? `
-          <table>
-            <thead><tr><th>Title</th><th>Due</th><th>Priority</th></tr></thead>
-            <tbody>
-              ${d.upcoming_due.map(t => `
-                <tr>
-                  <td>${esc(t.title)}</td>
-                  <td>${esc(t.due_date)}</td>
-                  <td><span class="badge ${t.priority === 'high' ? 'red' : t.priority === 'low' ? 'blue' : ''}">${esc(t.priority)}</span></td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        ` : `<div class="empty">No tasks with due dates.</div>`}
-      </div>
-
-      <div class="card">
-        <h3>Recent script runs</h3>
-        ${(d.recent_runs && d.recent_runs.length) ? `
-          <table>
-            <thead><tr><th>Script</th><th>When</th><th>Exit</th><th>Duration</th></tr></thead>
-            <tbody>
-              ${d.recent_runs.map(r => `
-                <tr>
-                  <td class="mono">${esc(r.script_path)}</td>
-                  <td>${fmtDate(r.started_at)}</td>
-                  <td><span class="badge ${r.exit_code === 0 ? 'green' : 'red'}">${r.exit_code ?? "-"}</span></td>
-                  <td>${r.duration_seconds != null ? r.duration_seconds.toFixed(1) + "s" : "-"}</td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        ` : `<div class="empty">No runs yet.</div>`}
-      </div>
+    <div class="card" style="margin-top:24px;">
+      <h3>Upcoming due</h3>
+      ${(d.upcoming_due && d.upcoming_due.length) ? `
+        <table>
+          <thead><tr><th>Title</th><th>Due</th><th>Priority</th></tr></thead>
+          <tbody>
+            ${d.upcoming_due.map(t => `
+              <tr>
+                <td>${esc(t.title)}</td>
+                <td>${esc(t.due_date)}</td>
+                <td><span class="badge ${t.priority === 'high' ? 'red' : t.priority === 'low' ? 'blue' : ''}">${esc(t.priority)}</span></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      ` : `<div class="empty">No tasks with due dates.</div>`}
     </div>
   `;
 }
@@ -214,9 +184,8 @@ let _showArchivedScripts = false;
 
 async function renderScripts() {
   const qs = _showArchivedScripts ? "?include_archived=true" : "";
-  const [data, runs, pathInfo] = await Promise.all([
+  const [data, pathInfo] = await Promise.all([
     api("/scripts" + qs),
-    api("/scripts/runs?limit=20"),
     api("/scripts/path"),
   ]);
 
@@ -262,7 +231,7 @@ async function renderScripts() {
                 <td><span class="badge blue">${esc(s.language)}</span></td>
                 <td class="muted">${esc(s.modified_at)}</td>
                 <td>
-                  <button class="btn btn-sm btn-primary" onclick='runScript(${JSON.stringify(s.path)}, ${JSON.stringify(s.args_help || "")})'>Run</button>
+                  <button class="btn btn-sm btn-primary" onclick='runScript(${JSON.stringify(s.path)})'>Run</button>
                   <button class="btn btn-sm" onclick='toggleArchiveScript(${JSON.stringify(s.path)}, ${s.archived ? "false" : "true"})'>${s.archived ? "Unarchive" : "Archive"}</button>
                 </td>
               </tr>
@@ -272,25 +241,6 @@ async function renderScripts() {
       </div>
     `}
 
-    <div class="card" style="margin-top:24px;">
-      <h3>Recent runs</h3>
-      ${runs.length === 0 ? `<div class="empty">No runs yet.</div>` : `
-        <table>
-          <thead><tr><th>Script</th><th>Started</th><th>Exit</th><th>Duration</th><th>Output</th></tr></thead>
-          <tbody>
-            ${runs.map(r => `
-              <tr>
-                <td class="mono">${esc(r.script_path)}</td>
-                <td>${fmtDate(r.started_at)}</td>
-                <td><span class="badge ${r.exit_code === 0 ? 'green' : r.exit_code == null ? 'yellow' : 'red'}">${r.exit_code ?? "running"}</span></td>
-                <td>${r.duration_seconds != null ? r.duration_seconds.toFixed(2) + "s" : "-"}</td>
-                <td><button class="btn btn-sm" onclick="viewRun(${r.id})">View</button></td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      `}
-    </div>
   `;
 }
 
@@ -369,57 +319,16 @@ window.resetScriptsPath = async function() {
   navigate();
 };
 
-window.runScript = function(path, argsHelp) {
-  modal(`
-    <h3>Run: <span class="mono">${esc(path)}</span></h3>
-    ${argsHelp ? `<p class="muted">Args hint: <span class="mono">${esc(argsHelp)}</span></p>` : ""}
-    <label>Arguments (optional)</label>
-    <input id="runArgs" placeholder="space-separated args">
-    <label>Timeout (seconds)</label>
-    <input id="runTimeout" type="number" value="300">
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick='execRun(${JSON.stringify(path)})'>Run</button>
-    </div>
-  `);
-};
-
-window.execRun = async function(path) {
-  const args = $("#runArgs").value.trim() || null;
-  const timeout = parseInt($("#runTimeout").value) || 300;
-  $("#modalCard").innerHTML = `<h3>Running...</h3><pre class="console" id="liveOut">starting...</pre>`;
+window.runScript = async function(path) {
   try {
-    const result = await api("/scripts/run", {
+    await api("/scripts/run", {
       method: "POST",
-      body: JSON.stringify({ script_path: path, args, timeout_seconds: timeout }),
+      body: JSON.stringify({ script_path: path }),
     });
-    $("#modalCard").innerHTML = `
-      <h3>Run finished - exit ${result.exit_code}</h3>
-      <p class="muted">Duration: ${result.duration_seconds.toFixed(2)}s</p>
-      <h3>stdout</h3>
-      <pre class="console">${esc(result.stdout || "(empty)")}</pre>
-      <h3>stderr</h3>
-      <pre class="console">${esc(result.stderr || "(empty)")}</pre>
-      <div class="modal-actions">
-        <button class="btn btn-primary" onclick="closeModal(); navigate();">Close</button>
-      </div>
-    `;
+    toast("Launched - check your cmd window", "success");
   } catch (err) {
-    $("#modalCard").innerHTML = `<h3>Failed</h3><pre class="console">${esc(err.message)}</pre><div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`;
+    toast(err.message, "error");
   }
-};
-
-window.viewRun = async function(id) {
-  const r = await api(`/scripts/runs/${id}`);
-  modal(`
-    <h3>${esc(r.script_path)} - exit ${r.exit_code ?? "(running)"}</h3>
-    <p class="muted">${fmtDate(r.started_at)} - ${r.duration_seconds != null ? r.duration_seconds.toFixed(2) + "s" : "-"}</p>
-    <h3>stdout</h3>
-    <pre class="console">${esc(r.stdout || "(empty)")}</pre>
-    <h3>stderr</h3>
-    <pre class="console">${esc(r.stderr || "(empty)")}</pre>
-    <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>
-  `);
 };
 
 // ============================================================

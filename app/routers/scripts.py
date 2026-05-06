@@ -1,14 +1,13 @@
 import json
 import subprocess
+import sys
 import time
 from pathlib import Path
-from typing import Iterator
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
 
 from .. import config
-from ..database import get_conn, rows_to_list
+from ..database import get_conn
 from ..models import ScriptRunRequest
 
 router = APIRouter()
@@ -110,7 +109,6 @@ def list_scripts(include_archived: bool = False):
             "path": rel,
             "name": db.get("name") or sidecar.get("name") or f.stem,
             "description": db.get("description") or sidecar.get("description"),
-            "args_help": db.get("args_help") or sidecar.get("args"),
             "archived": archived,
             "has_db_override": rel in db_meta,
             "language": f.suffix.lstrip(".").lower(),
@@ -123,13 +121,12 @@ def list_scripts(include_archived: bool = False):
 
 @router.patch("/metadata")
 def update_metadata(payload: dict):
-    """Set/clear DB-backed metadata for a script. Body: {path, name?, description?, args_help?, archived?}"""
+    """Set/clear DB-backed metadata for a script. Body: {path, name?, description?, archived?}"""
     rel = (payload.get("path") or "").strip()
     if not rel:
         raise HTTPException(400, "path required")
     name = payload.get("name")
     description = payload.get("description")
-    args_help = payload.get("args_help")
     archived = payload.get("archived")
     with get_conn() as conn:
         existing = conn.execute(
@@ -139,7 +136,7 @@ def update_metadata(payload: dict):
             fields = []
             vals = []
             for k, v in [("name", name), ("description", description),
-                         ("args_help", args_help), ("archived", 1 if archived else 0 if archived is False else None)]:
+                         ("archived", 1 if archived else 0 if archived is False else None)]:
                 if v is not None:
                     fields.append(f"{k} = ?")
                     vals.append(v)
@@ -149,9 +146,9 @@ def update_metadata(payload: dict):
                 conn.execute(f"UPDATE script_metadata SET {', '.join(fields)} WHERE script_path = ?", vals)
         else:
             conn.execute(
-                "INSERT INTO script_metadata(script_path, name, description, args_help, archived) "
-                "VALUES(?, ?, ?, ?, ?)",
-                (rel, name, description, args_help, 1 if archived else 0),
+                "INSERT INTO script_metadata(script_path, name, description, archived) "
+                "VALUES(?, ?, ?, ?)",
+                (rel, name, description, 1 if archived else 0),
             )
     return {"ok": True}
 
@@ -163,132 +160,49 @@ def clear_metadata(path: str):
     return {"ok": True}
 
 
-@router.get("/runs")
-def list_runs(limit: int = 50, script: str | None = None):
-    sql = "SELECT * FROM script_runs"
-    params: tuple = ()
-    if script:
-        sql += " WHERE script_path = ?"
-        params = (script,)
-    sql += " ORDER BY started_at DESC LIMIT ?"
-    params = params + (limit,)
-    with get_conn() as conn:
-        rows = conn.execute(sql, params).fetchall()
-    return rows_to_list(rows)
-
-
-@router.get("/runs/{run_id}")
-def get_run(run_id: int):
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM script_runs WHERE id = ?", (run_id,)).fetchone()
-    if not row:
-        raise HTTPException(404, "run not found")
-    return dict(row)
-
-
-def _build_command(path: Path, args: str | None) -> list[str]:
+def _runner_for(path: Path) -> str:
     ext = path.suffix.lower()
-    arg_list = args.split() if args else []
     if ext == ".ps1":
-        return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(path), *arg_list]
+        return f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{path}"'
     if ext == ".py":
-        import sys
-        return [sys.executable, str(path), *arg_list]
+        return f'python "{path}"'
     if ext in {".bat", ".cmd"}:
-        return ["cmd", "/c", str(path), *arg_list]
+        return f'"{path}"'
     if ext == ".sh":
-        return ["bash", str(path), *arg_list]
+        return f'bash "{path}"'
     raise HTTPException(400, f"no runner for {ext}")
 
 
 @router.post("/run")
 def run_script(payload: ScriptRunRequest):
+    """Open a cmd window in the user's interactive session and run the script.
+
+    Service lives in session 0 (no desktop), so subprocess.Popen cannot show a
+    window. Same Task Scheduler trick as the Update flow: schtasks /IT runs
+    in the logged-on user's session. cmd.exe /K keeps the window open after
+    the script exits so the user can read output.
+    """
+    if sys.platform != "win32":
+        raise HTTPException(400, "Windows only")
+
     path = _safe_path(payload.script_path)
-    cmd = _build_command(path, payload.args)
-    started = time.time()
-    with get_conn() as conn:
-        cur = conn.execute(
-            "INSERT INTO script_runs(script_path, args) VALUES(?,?)",
-            (payload.script_path, payload.args),
-        )
-        run_id = cur.lastrowid
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=payload.timeout_seconds,
-            cwd=path.parent,
-        )
-        duration = time.time() - started
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE script_runs SET finished_at = datetime('now'), exit_code = ?, "
-                "stdout = ?, stderr = ?, duration_seconds = ? WHERE id = ?",
-                (proc.returncode, proc.stdout, proc.stderr, duration, run_id),
-            )
-        return {
-            "ok": True,
-            "run_id": run_id,
-            "exit_code": proc.returncode,
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
-            "duration_seconds": duration,
-        }
-    except subprocess.TimeoutExpired:
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE script_runs SET finished_at = datetime('now'), exit_code = -1, "
-                "stderr = ?, duration_seconds = ? WHERE id = ?",
-                ("Timeout", payload.timeout_seconds, run_id),
-            )
-        raise HTTPException(408, "script timed out")
-    except Exception as exc:
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE script_runs SET finished_at = datetime('now'), exit_code = -1, "
-                "stderr = ? WHERE id = ?",
-                (str(exc), run_id),
-            )
-        raise HTTPException(500, str(exc))
+    runner = _runner_for(path)
+    task_name = "ControlPanelScript"
+    tr = f'cmd.exe /K {runner}'
 
-
-@router.post("/run/stream")
-def run_script_stream(payload: ScriptRunRequest):
-    path = _safe_path(payload.script_path)
-    cmd = _build_command(path, payload.args)
-
-    def generate() -> Iterator[bytes]:
-        started = time.time()
-        with get_conn() as conn:
-            cur = conn.execute(
-                "INSERT INTO script_runs(script_path, args) VALUES(?,?)",
-                (payload.script_path, payload.args),
-            )
-            run_id = cur.lastrowid
-        yield f"event: start\ndata: {json.dumps({'run_id': run_id})}\n\n".encode()
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            cwd=path.parent,
-        )
-        captured: list[str] = []
-        try:
-            for line in proc.stdout:  # type: ignore[union-attr]
-                captured.append(line)
-                yield f"data: {json.dumps({'line': line.rstrip()})}\n\n".encode()
-        finally:
-            code = proc.wait()
-            duration = time.time() - started
-            with get_conn() as conn:
-                conn.execute(
-                    "UPDATE script_runs SET finished_at = datetime('now'), exit_code = ?, "
-                    "stdout = ?, duration_seconds = ? WHERE id = ?",
-                    (code, "".join(captured), duration, run_id),
-                )
-            yield f"event: end\ndata: {json.dumps({'exit_code': code, 'duration': duration})}\n\n".encode()
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    subprocess.run(["schtasks", "/Delete", "/TN", task_name, "/F"],
+                   capture_output=True, timeout=10)
+    create = subprocess.run(
+        ["schtasks", "/Create", "/TN", task_name,
+         "/TR", tr, "/SC", "ONCE", "/ST", "00:00", "/IT", "/F"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if create.returncode != 0:
+        raise HTTPException(500, f"create task failed: {(create.stdout + create.stderr).strip()}")
+    run = subprocess.run(
+        ["schtasks", "/Run", "/TN", task_name],
+        capture_output=True, text=True, timeout=10,
+    )
+    if run.returncode != 0:
+        raise HTTPException(500, f"run task failed: {(run.stdout + run.stderr).strip()}")
+    return {"ok": True}
