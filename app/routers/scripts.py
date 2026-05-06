@@ -87,26 +87,80 @@ def reset_path():
 
 
 @router.get("")
-def list_scripts():
+def list_scripts(include_archived: bool = False):
     base = _effective_scripts_path()
     if not base.exists():
         return {"scripts_path": str(base), "scripts": [], "exists": False}
+
+    with get_conn() as conn:
+        db_meta = {r["script_path"]: dict(r) for r in
+                   conn.execute("SELECT * FROM script_metadata").fetchall()}
+
     items = []
     for f in sorted(base.rglob("*")):
         if not f.is_file() or f.suffix.lower() not in ALLOWED_EXTS:
             continue
         rel = str(f.relative_to(base)).replace("\\", "/")
-        meta = _meta_for(f)
+        sidecar = _meta_for(f)
+        db = db_meta.get(rel, {})
+        archived = bool(db.get("archived", 0))
+        if archived and not include_archived:
+            continue
         items.append({
             "path": rel,
-            "name": meta.get("name") or f.stem,
-            "description": meta.get("description"),
-            "args_help": meta.get("args"),
+            "name": db.get("name") or sidecar.get("name") or f.stem,
+            "description": db.get("description") or sidecar.get("description"),
+            "args_help": db.get("args_help") or sidecar.get("args"),
+            "archived": archived,
+            "has_db_override": rel in db_meta,
             "language": f.suffix.lstrip(".").lower(),
             "size_bytes": f.stat().st_size,
             "modified_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(f.stat().st_mtime)),
         })
-    return {"scripts_path": str(base), "scripts": items, "exists": True}
+    archived_count = sum(1 for r in db_meta.values() if r.get("archived"))
+    return {"scripts_path": str(base), "scripts": items, "exists": True, "archived_count": archived_count}
+
+
+@router.patch("/metadata")
+def update_metadata(payload: dict):
+    """Set/clear DB-backed metadata for a script. Body: {path, name?, description?, args_help?, archived?}"""
+    rel = (payload.get("path") or "").strip()
+    if not rel:
+        raise HTTPException(400, "path required")
+    name = payload.get("name")
+    description = payload.get("description")
+    args_help = payload.get("args_help")
+    archived = payload.get("archived")
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT * FROM script_metadata WHERE script_path = ?", (rel,)
+        ).fetchone()
+        if existing:
+            fields = []
+            vals = []
+            for k, v in [("name", name), ("description", description),
+                         ("args_help", args_help), ("archived", 1 if archived else 0 if archived is False else None)]:
+                if v is not None:
+                    fields.append(f"{k} = ?")
+                    vals.append(v)
+            if fields:
+                fields.append("updated_at = datetime('now')")
+                vals.append(rel)
+                conn.execute(f"UPDATE script_metadata SET {', '.join(fields)} WHERE script_path = ?", vals)
+        else:
+            conn.execute(
+                "INSERT INTO script_metadata(script_path, name, description, args_help, archived) "
+                "VALUES(?, ?, ?, ?, ?)",
+                (rel, name, description, args_help, 1 if archived else 0),
+            )
+    return {"ok": True}
+
+
+@router.delete("/metadata/{path:path}")
+def clear_metadata(path: str):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM script_metadata WHERE script_path = ?", (path,))
+    return {"ok": True}
 
 
 @router.get("/runs")

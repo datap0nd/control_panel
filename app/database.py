@@ -68,6 +68,23 @@ CREATE TABLE IF NOT EXISTS metrics (
     unit TEXT,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS script_metadata (
+    script_path TEXT PRIMARY KEY,
+    name TEXT,
+    description TEXT,
+    args_help TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS pbi_metadata (
+    file_path TEXT PRIMARY KEY,
+    name TEXT,
+    description TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 

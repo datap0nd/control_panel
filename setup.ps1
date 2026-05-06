@@ -222,12 +222,19 @@ foreach ($d in @($BackupPath, $LogsPath, $ScriptsPath)) {
 & $NssmExe set $ServiceName Description "Personal control panel: scripts, tasks, notes"
 & $NssmExe set $ServiceName Start SERVICE_AUTO_START
 
-& $NssmExe set $ServiceName AppEnvironmentExtra `
-    "CP_DB_PATH=$DbPath" `
-    "CP_BACKUP_PATH=$BackupPath" `
-    "CP_LOGS_PATH=$LogsPath" `
-    "CP_SCRIPTS_PATH=$ScriptsPath" `
+# Build env list - include optional CP_PBI_PATH / CP_GOVERNANCE_URL / CP_GOVERNANCE_USER if set in current shell
+$envList = @(
+    "CP_DB_PATH=$DbPath",
+    "CP_BACKUP_PATH=$BackupPath",
+    "CP_LOGS_PATH=$LogsPath",
+    "CP_SCRIPTS_PATH=$ScriptsPath",
     "CP_PORT=$Port"
+)
+if ($env:CP_PBI_PATH)        { $envList += "CP_PBI_PATH=$env:CP_PBI_PATH" }
+if ($env:CP_GOVERNANCE_URL)  { $envList += "CP_GOVERNANCE_URL=$env:CP_GOVERNANCE_URL" }
+if ($env:CP_GOVERNANCE_USER) { $envList += "CP_GOVERNANCE_USER=$env:CP_GOVERNANCE_USER" }
+
+& $NssmExe set $ServiceName AppEnvironmentExtra @envList
 
 if ($env:CP_SVC_PASSWORD) {
     & $NssmExe set $ServiceName ObjectName "$env:USERDOMAIN\$env:USERNAME" $env:CP_SVC_PASSWORD

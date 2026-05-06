@@ -12,6 +12,7 @@ from .routers import (
     backup,
     dashboard,
     notes,
+    pbi,
     scripts,
     settings,
     tasks,
@@ -36,6 +37,7 @@ app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"]
 app.include_router(scripts.router, prefix="/api/scripts", tags=["scripts"])
 app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
 app.include_router(notes.router, prefix="/api/notes", tags=["notes"])
+app.include_router(pbi.router, prefix="/api/pbi", tags=["pbi"])
 app.include_router(update.router, prefix="/api/update", tags=["update"])
 app.include_router(backup.router, prefix="/api/backup", tags=["backup"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])

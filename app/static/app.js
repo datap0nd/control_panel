@@ -57,6 +57,7 @@ function closeModal() {
 const routes = {
   dashboard: renderDashboard,
   scripts: renderScripts,
+  pbi: renderPBI,
   tasks: renderTasks,
   notes: renderNotes,
   update: renderUpdate,
@@ -209,9 +210,12 @@ window.closeModal = closeModal;
 // Scripts
 // ============================================================
 
+let _showArchivedScripts = false;
+
 async function renderScripts() {
+  const qs = _showArchivedScripts ? "?include_archived=true" : "";
   const [data, runs, pathInfo] = await Promise.all([
-    api("/scripts"),
+    api("/scripts" + qs),
     api("/scripts/runs?limit=20"),
     api("/scripts/path"),
   ]);
@@ -224,32 +228,42 @@ async function renderScripts() {
       ${pathInfo.is_override ? `<span class="badge purple">override</span>` : ""}
       <button class="btn btn-sm" onclick="changeScriptsPath()">Change folder</button>
       ${pathInfo.is_override ? `<button class="btn btn-sm" onclick="resetScriptsPath()">Reset to default</button>` : ""}
+      <label class="row" style="margin:0;gap:6px;align-items:center;width:auto;font-size:12px;">
+        <input type="checkbox" ${_showArchivedScripts ? "checked" : ""} onchange="_showArchivedScripts = this.checked; navigate();" style="width:auto;">
+        Show archived${data.archived_count ? ` (${data.archived_count})` : ""}
+      </label>
     </div>
 
     ${!data.exists ? `
       <div class="card">
         <h3>Scripts folder not found</h3>
         <p class="muted">Path: <span class="mono">${esc(data.scripts_path)}</span></p>
-        <p class="muted">Click "Change folder" above to point to a folder with your <span class="mono">.ps1</span> / <span class="mono">.py</span> / <span class="mono">.bat</span> / <span class="mono">.sh</span> files. Sidecar <span class="mono">name.meta.json</span> with <span class="mono">{ "name": "...", "description": "...", "args": "..." }</span> is optional.</p>
+        <p class="muted">Click "Change folder" above to point to a folder with your <span class="mono">.ps1</span> / <span class="mono">.py</span> / <span class="mono">.bat</span> / <span class="mono">.sh</span> files.</p>
       </div>
     ` : data.scripts.length === 0 ? `
-      <div class="card empty">No scripts found in <span class="mono">${esc(data.scripts_path)}</span>.</div>
+      <div class="card empty">No ${_showArchivedScripts ? "" : "active "}scripts found in <span class="mono">${esc(data.scripts_path)}</span>.</div>
     ` : `
       <div class="card">
         <table>
-          <thead><tr><th>Name</th><th>Path</th><th>Lang</th><th>Modified</th><th>Run</th></tr></thead>
+          <thead><tr><th>Name</th><th>Description</th><th>Path</th><th>Lang</th><th>Modified</th><th></th></tr></thead>
           <tbody>
             ${data.scripts.map(s => `
-              <tr>
+              <tr ${s.archived ? `style="opacity:0.5;"` : ""}>
                 <td>
-                  <div style="font-weight:500;">${esc(s.name)}</div>
-                  ${s.description ? `<div class="muted" style="font-size:12px;">${esc(s.description)}</div>` : ""}
+                  <div style="font-weight:500;">${esc(s.name)}${s.archived ? ` <span class="badge">archived</span>` : ""}</div>
+                </td>
+                <td>
+                  <span class="editable-desc muted" style="font-size:12px;cursor:pointer;" title="Click to edit"
+                        onclick='editScriptDesc(${JSON.stringify(s.path)}, ${JSON.stringify(s.description || "")}, ${JSON.stringify(s.name)})'>
+                    ${s.description ? esc(s.description) : "<i>click to add</i>"}
+                  </span>
                 </td>
                 <td class="mono">${esc(s.path)}</td>
                 <td><span class="badge blue">${esc(s.language)}</span></td>
                 <td class="muted">${esc(s.modified_at)}</td>
                 <td>
                   <button class="btn btn-sm btn-primary" onclick='runScript(${JSON.stringify(s.path)}, ${JSON.stringify(s.args_help || "")})'>Run</button>
+                  <button class="btn btn-sm" onclick='toggleArchiveScript(${JSON.stringify(s.path)}, ${s.archived ? "false" : "true"})'>${s.archived ? "Unarchive" : "Archive"}</button>
                 </td>
               </tr>
             `).join("")}
@@ -279,6 +293,45 @@ async function renderScripts() {
     </div>
   `;
 }
+
+window.editScriptDesc = function(path, current, name) {
+  modal(`
+    <h3>Edit: <span class="mono">${esc(name)}</span></h3>
+    <p class="muted">Path: <span class="mono">${esc(path)}</span></p>
+    <label>Display name (overrides filename)</label>
+    <input id="sName" value="${esc(name)}">
+    <label>Description</label>
+    <textarea id="sDesc" rows="3" placeholder="What this script does, when to run it">${esc(current)}</textarea>
+    <p class="muted" style="font-size:11px;margin-top:8px;">Saved in DB. If a sidecar <span class="mono">.meta.json</span> exists it stays untouched - DB wins.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick='saveScriptDesc(${JSON.stringify(path)})'>Save</button>
+    </div>
+  `, () => $("#sDesc").focus());
+};
+
+window.saveScriptDesc = async function(path) {
+  await api("/scripts/metadata", {
+    method: "PATCH",
+    body: JSON.stringify({
+      path,
+      name: $("#sName").value.trim() || null,
+      description: $("#sDesc").value.trim() || null,
+    }),
+  });
+  closeModal();
+  toast("Saved", "success");
+  navigate();
+};
+
+window.toggleArchiveScript = async function(path, archive) {
+  await api("/scripts/metadata", {
+    method: "PATCH",
+    body: JSON.stringify({ path, archived: archive }),
+  });
+  toast(archive ? "Archived" : "Unarchived", "success");
+  navigate();
+};
 
 window.changeScriptsPath = async function() {
   const current = await api("/scripts/path");
@@ -370,13 +423,194 @@ window.viewRun = async function(id) {
 };
 
 // ============================================================
+// Power BI files
+// ============================================================
+
+let _showArchivedPBI = false;
+
+async function renderPBI() {
+  const qs = _showArchivedPBI ? "?include_archived=true" : "";
+  const [data, pathInfo] = await Promise.all([
+    api("/pbi" + qs),
+    api("/pbi/path"),
+  ]);
+
+  $("#content").innerHTML = `
+    <div class="toolbar">
+      <h2 style="margin:0">Power BI</h2>
+      <div class="spacer"></div>
+      <span class="muted mono">${esc(data.pbi_path)}</span>
+      ${pathInfo.is_override ? `<span class="badge purple">override</span>` : ""}
+      <button class="btn btn-sm" onclick="changePBIPath()">Change folder</button>
+      ${pathInfo.is_override ? `<button class="btn btn-sm" onclick="resetPBIPath()">Reset</button>` : ""}
+      <label class="row" style="margin:0;gap:6px;align-items:center;width:auto;font-size:12px;">
+        <input type="checkbox" ${_showArchivedPBI ? "checked" : ""} onchange="_showArchivedPBI = this.checked; navigate();" style="width:auto;">
+        Show archived${data.archived_count ? ` (${data.archived_count})` : ""}
+      </label>
+    </div>
+
+    ${!data.exists ? `
+      <div class="card">
+        <h3>PBI folder not found</h3>
+        <p class="muted">Path: <span class="mono">${esc(data.pbi_path)}</span></p>
+        <p class="muted">Set via env var <span class="mono">CP_PBI_PATH</span> or click "Change folder". Lists <span class="mono">.pbix</span>, <span class="mono">.pbip</span>, <span class="mono">.pbit</span> files recursively.</p>
+      </div>
+    ` : data.files.length === 0 ? `
+      <div class="card empty">No ${_showArchivedPBI ? "" : "active "}files in <span class="mono">${esc(data.pbi_path)}</span>.</div>
+    ` : `
+      <div class="card">
+        <table>
+          <thead><tr><th>Name</th><th>Description</th><th>Path</th><th>Kind</th><th>Modified</th><th></th></tr></thead>
+          <tbody>
+            ${data.files.map(f => `
+              <tr ${f.archived ? `style="opacity:0.5;"` : ""}>
+                <td><div style="font-weight:500;">${esc(f.name)}${f.archived ? ` <span class="badge">archived</span>` : ""}</div></td>
+                <td>
+                  <span class="muted" style="font-size:12px;cursor:pointer;" title="Click to edit"
+                        onclick='editPBIDesc(${JSON.stringify(f.path)}, ${JSON.stringify(f.description || "")}, ${JSON.stringify(f.name)})'>
+                    ${f.description ? esc(f.description) : "<i>click to add</i>"}
+                  </span>
+                </td>
+                <td class="mono">${esc(f.path)}</td>
+                <td><span class="badge ${f.kind === 'pbix' ? 'blue' : f.kind === 'pbip' ? 'purple' : ''}">${esc(f.kind)}</span></td>
+                <td class="muted">${esc(f.modified_at)}</td>
+                <td>
+                  <button class="btn btn-sm btn-primary" onclick='openPBI(${JSON.stringify(f.path)})'>Open</button>
+                  <button class="btn btn-sm" onclick='toggleArchivePBI(${JSON.stringify(f.path)}, ${f.archived ? "false" : "true"})'>${f.archived ? "Unarchive" : "Archive"}</button>
+                </td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    `}
+  `;
+}
+
+window.openPBI = async function(path) {
+  try {
+    const r = await api("/pbi/open", { method: "POST", body: JSON.stringify({ path }) });
+    if (r.ok) toast(r.message, "success");
+    else toast(r.error || "Failed", "error");
+  } catch (err) { toast(err.message, "error"); }
+};
+
+window.editPBIDesc = function(path, current, name) {
+  modal(`
+    <h3>Edit: <span class="mono">${esc(name)}</span></h3>
+    <p class="muted">Path: <span class="mono">${esc(path)}</span></p>
+    <label>Display name</label>
+    <input id="pName" value="${esc(name)}">
+    <label>Description</label>
+    <textarea id="pDesc" rows="3">${esc(current)}</textarea>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick='savePBIDesc(${JSON.stringify(path)})'>Save</button>
+    </div>
+  `, () => $("#pDesc").focus());
+};
+
+window.savePBIDesc = async function(path) {
+  await api("/pbi/metadata", {
+    method: "PATCH",
+    body: JSON.stringify({
+      path,
+      name: $("#pName").value.trim() || null,
+      description: $("#pDesc").value.trim() || null,
+    }),
+  });
+  closeModal();
+  toast("Saved", "success");
+  navigate();
+};
+
+window.toggleArchivePBI = async function(path, archive) {
+  await api("/pbi/metadata", {
+    method: "PATCH",
+    body: JSON.stringify({ path, archived: archive }),
+  });
+  toast(archive ? "Archived" : "Unarchived", "success");
+  navigate();
+};
+
+window.changePBIPath = async function() {
+  const cur = await api("/pbi/path");
+  modal(`
+    <h3>Change PBI folder</h3>
+    <p class="muted">Currently: <span class="mono">${esc(cur.path)}</span></p>
+    <label>New folder path</label>
+    <input id="newPbiPath" placeholder="C:\\Users\\...\\Reports" autofocus>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="savePBIPath()">Save</button>
+    </div>
+  `, () => $("#newPbiPath").focus());
+};
+
+window.savePBIPath = async function() {
+  const path = $("#newPbiPath").value.trim();
+  if (!path) { toast("Path required", "error"); return; }
+  try {
+    const r = await api("/pbi/path", { method: "PUT", body: JSON.stringify({ path }) });
+    closeModal();
+    toast(`Set to ${r.path}`, "success");
+    navigate();
+  } catch (err) { toast(err.message, "error"); }
+};
+
+window.resetPBIPath = async function() {
+  await api("/pbi/path", { method: "DELETE" });
+  toast("Reset", "success");
+  navigate();
+};
+
+// ============================================================
 // Tasks (kanban)
 // ============================================================
 
 async function renderTasks() {
-  const tasks = await api("/tasks");
+  const [tasks, gov] = await Promise.all([
+    api("/tasks"),
+    api("/tasks/governance").catch(() => ({ configured: false, tasks: [] })),
+  ]);
   const cols = { backlog: [], doing: [], done: [] };
   tasks.forEach(t => cols[t.status]?.push(t));
+
+  let govSection = "";
+  if (gov.configured && !gov.error) {
+    govSection = `
+      <div class="card" style="margin-top:24px;">
+        <div class="row" style="margin-bottom:12px;">
+          <h3 style="margin:0;">From Governance Tool</h3>
+          <span class="spacer"></span>
+          <span class="muted mono">${esc(gov.url)}</span>
+          ${gov.filter_user ? `<span class="badge purple">filter: ${esc(gov.filter_user)}</span>` : ""}
+          <span class="badge">${gov.count}</span>
+        </div>
+        ${gov.tasks.length === 0 ? `<div class="empty">No matching tasks.</div>` : `
+          <table>
+            <thead><tr><th>Title</th><th>Status</th><th>Priority</th><th>Assignee</th><th>Due</th></tr></thead>
+            <tbody>
+              ${gov.tasks.map(t => `
+                <tr>
+                  <td>
+                    <div style="font-weight:500;">${esc(t.title || "(untitled)")}</div>
+                    ${t.description ? `<div class="muted" style="font-size:12px;">${esc(String(t.description).slice(0, 200))}</div>` : ""}
+                  </td>
+                  <td><span class="badge ${t.status === 'done' ? 'green' : t.status === 'doing' || t.status === 'in_progress' ? 'yellow' : ''}">${esc(t.status || "")}</span></td>
+                  <td><span class="badge ${t.priority === 'high' ? 'red' : t.priority === 'low' ? 'blue' : ''}">${esc(t.priority || "")}</span></td>
+                  <td class="muted">${esc(t.assignee || "")}</td>
+                  <td class="muted">${esc(t.due_date || "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        `}
+      </div>
+    `;
+  } else if (gov.error) {
+    govSection = `<div class="card" style="margin-top:24px;"><h3>Governance Tool</h3><p class="muted">${esc(gov.error)}</p><p class="muted" style="font-size:11px;">Set <span class="mono">CP_GOVERNANCE_URL</span> and <span class="mono">CP_GOVERNANCE_USER</span> env vars on the service to enable sync.</p></div>`;
+  }
 
   $("#content").innerHTML = `
     <div class="toolbar">
@@ -405,6 +639,8 @@ async function renderTasks() {
         </div>
       `).join("")}
     </div>
+
+    ${govSection}
   `;
 }
 

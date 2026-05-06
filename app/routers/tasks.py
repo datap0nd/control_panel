@@ -1,9 +1,51 @@
+import json
+import urllib.error
+import urllib.request
+
 from fastapi import APIRouter, HTTPException
 
+from .. import config
 from ..database import get_conn, row_to_dict, rows_to_list
 from ..models import TaskIn, TaskMove, TaskUpdate
 
 router = APIRouter()
+
+
+@router.get("/governance")
+def governance_tasks():
+    """Live-fetch tasks from a Data Governance instance, filtered by assignee.
+
+    Configured via:
+      CP_GOVERNANCE_URL  e.g. http://192.168.1.50:8000
+      CP_GOVERNANCE_USER e.g. Rafael (case-insensitive contains match against task.assignee)
+    """
+    if not config.GOVERNANCE_URL:
+        return {"configured": False, "tasks": [], "error": "CP_GOVERNANCE_URL not set"}
+    url = f"{config.GOVERNANCE_URL}/api/tasks"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ControlPanel"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        return {"configured": True, "url": url, "tasks": [], "error": f"connection: {exc}"}
+    except Exception as exc:
+        return {"configured": True, "url": url, "tasks": [], "error": str(exc)}
+
+    # Governance returns either {tasks: [...]} or [...] depending on version
+    items = payload.get("tasks") if isinstance(payload, dict) else payload
+    items = items or []
+
+    user = (config.GOVERNANCE_USER or "").lower()
+    if user:
+        items = [t for t in items if user in (str(t.get("assignee") or "")).lower()]
+
+    return {
+        "configured": True,
+        "url": url,
+        "filter_user": config.GOVERNANCE_USER or None,
+        "count": len(items),
+        "tasks": items,
+    }
 
 
 @router.get("")
