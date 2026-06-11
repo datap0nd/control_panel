@@ -1,22 +1,3 @@
-import os
-import requests
+Before: Every scheduled refresh depended on a visible Microsoft sign-in. A PowerShell window opened on the server, the account picker popped up, and an auto-clicker tried to press the right button. With the PC locked or the RDP session disconnected, the click failed and the Power BI sync died, leaving refresh data stale and the nightly job stuck.
 
-api_key = os.environ["LLM_API_KEY"]
-base_url = "https://api.openai.com/v1"  # replace if needed
-
-res = requests.post(
-    f"{base_url}/chat/completions",
-    headers={
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    },
-    json={
-        "model": "gpt-oss-120b",
-        "messages": [
-            {"role": "user", "content": "hey how are you doing"}
-        ],
-        "max_tokens": 100,
-    },
-)
-
-print(res.json()["choices"][0]["message"]["content"])
+After: A one-time device-code sign-in stores an encrypted, self-renewing token. Every sync now runs headless inside the app, through the corporate proxy, with no window and no clicking, even on a locked PC. If the sign-in ever expires, the dashboard raises a clear reconnect alert instead of hanging.
