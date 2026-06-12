@@ -1,3 +1,99 @@
-Before: Every scheduled refresh depended on a visible Microsoft sign-in. A PowerShell window opened on the server, the account picker popped up, and an auto-clicker tried to press the right button. With the PC locked or the RDP session disconnected, the click failed and the Power BI sync died, leaving refresh data stale and the nightly job stuck.
+-- M-Tracker bridge: marketing name conformance diagnostics.
+--
+-- Problem:
+-- A-series marketing names carry a hyphen in the ASAP and GSCM sources
+-- (for example Galaxy A55-5G), item_mapping_mv stores them with the hyphen
+-- replaced by a space and uppercased (GALAXY A55 5G), and fbai_m_tracker has
+-- no hyphen at all. Joining the bridge on raw names drops every hyphenated
+-- A-series row. The legacy 5G/4G strip also fails on hyphenated names because
+-- its pattern requires whitespace before the suffix.
+--
+-- Canonical key rule (reuse the item_mapping_mv convention, do not invent a
+-- second one): hyphen to space, strip trailing 5G/4G, collapse whitespace,
+-- trim, uppercase:
+--
+--   upper(btrim(regexp_replace(
+--       regexp_replace(replace(name, '-', ' '), '\s+(5G|4G)$', '', 'i'),
+--       '\s+', ' ', 'g')))
+--
+-- Run one statement at a time.
 
-After: A one-time device-code sign-in stores an encrypted, self-renewing token. Every sync now runs headless inside the app, through the corporate proxy, with no window and no clicking, even on a locked PC. If the sign-in ever expires, the dashboard raises a clear reconnect alert instead of hanging.
+set statement_timeout = '5min';
+
+-- 11A: hyphenated names on the inflow/outflow side and the key they produce.
+-- Ordered by quantity so the biggest offenders surface first.
+select
+    f."MKT Name" as raw_name,
+    upper(btrim(regexp_replace(
+        regexp_replace(replace(f."MKT Name", '-', ' '), '\s+(5G|4G)$', '', 'i'),
+        '\s+', ' ', 'g'))) as name_key,
+    count(*) as rows,
+    sum(f."Active Qty") as active_qty
+from bi_reporting.io_final_mv f
+where f."MKT Name" like '%-%'
+group by f."MKT Name"
+order by active_qty desc;
+
+-- 11B: M-Tracker model names and their keys for the Samsung included scope.
+select distinct
+    m."Model" as raw_model,
+    upper(btrim(regexp_replace(
+        regexp_replace(replace(m."Model", '-', ' '), '\s+(5G|4G)$', '', 'i'),
+        '\s+', ' ', 'g'))) as name_key
+from bi_reporting.fbai_m_tracker m
+where m."Brand" = 'Samsung'
+  and m."incl./excl." = 'incl'
+order by raw_model;
+
+-- 11C: residual mismatches after normalization. These are inflow/outflow
+-- names whose key still has no M-Tracker counterpart, weighted by quantity.
+-- Anything left here needs either an alias row or a rule extension. Names
+-- missing only because M-Tracker excludes the model are expected.
+select
+    io.name_key,
+    io.rows,
+    io.active_qty
+from (
+    select
+        upper(btrim(regexp_replace(
+            regexp_replace(replace(f."MKT Name", '-', ' '), '\s+(5G|4G)$', '', 'i'),
+            '\s+', ' ', 'g'))) as name_key,
+        count(*) as rows,
+        sum(f."Active Qty") as active_qty
+    from bi_reporting.io_final_mv f
+    group by 1
+) io
+left join (
+    select distinct
+        upper(btrim(regexp_replace(
+            regexp_replace(replace(m."Model", '-', ' '), '\s+(5G|4G)$', '', 'i'),
+            '\s+', ' ', 'g'))) as name_key
+    from bi_reporting.fbai_m_tracker m
+    where m."Brand" = 'Samsung'
+      and m."incl./excl." = 'incl'
+) mt
+    on mt.name_key = io.name_key
+where mt.name_key is null
+order by io.active_qty desc;
+
+-- 11D: collision review. Keys produced by more than one distinct raw model on
+-- the M-Tracker side. Pairs like GALAXY A55 5G and GALAXY A55 merging into one
+-- key are intended; review the list to confirm no two genuinely different
+-- products collapse into the same key.
+select
+    name_key,
+    count(distinct raw_model) as variants,
+    string_agg(distinct raw_model, ' | ') as raw_models
+from (
+    select
+        m."Model" as raw_model,
+        upper(btrim(regexp_replace(
+            regexp_replace(replace(m."Model", '-', ' '), '\s+(5G|4G)$', '', 'i'),
+            '\s+', ' ', 'g'))) as name_key
+    from bi_reporting.fbai_m_tracker m
+    where m."Brand" = 'Samsung'
+      and m."incl./excl." = 'incl'
+) k
+group by name_key
+having count(distinct raw_model) > 1
+order by variants desc, name_key;
