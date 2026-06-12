@@ -1,10 +1,152 @@
+-- ASP before/after diagnostics: why amounts diverge while quantities match.
+--
+-- Before (Power BI):
+--   Series ASP came from the Series_ASP.xlsx file on the share
+--   (Biz Group, Series, Category, Total), DELTA filtered, with an internal
+--   fallback to Global ASP when Total > 1600 or Total <= 0, joined to the
+--   fact on (Series, Year). Global ASP came from
+--   "Zahab"."Sell-out Biz Plan Global_ASP" and filled rows with no series hit.
+--
+-- After (SQL step 2 / inflow_outflow_mv):
+--   Series ASP comes from bi_reporting.series_asp_mv, which is
+--   sum(amt)/sum(qty) of psi_combined Sell-In (Biz Plan) B2C rows. The Excel
+--   is not used at all. Same fallback shape, but resolved on the fact row's
+--   (Biz Grp, Year).
+--
+-- Since quantity already reconciles, every amount delta is an ASP delta.
+-- These checks identify which difference dominates. Run one at a time.
 
-    -- Cleaned matching key for cross-source grouping, e.g. the M-Tracker
-    -- bridge. Same convention as item_mapping_mv naming plus the legacy
-    -- 5G/4G strip: hyphen to space, drop trailing 5G/4G, collapse spaces,
-    -- trim, uppercase. Apply the identical expression to the other side
-    -- (fbai_m_tracker "Model") before grouping, or the keys will not line up.
-    -- "MKT Name" itself stays raw because the report displays and filters it.
-    upper(btrim(regexp_replace(
-        regexp_replace(replace(a."MKT Name", '-', ' '), '\s+(5G|4G)$', '', 'i'),
-        '\s+', ' ', 'g'))) as "MKT Name Clean",
+set statement_timeout = '5min';
+
+-- 12A: series join health between the fact and series_asp_mv.
+-- exact_match: the join the view actually performs.
+-- normalized_match: would it match after upper plus hyphen-to-space?
+-- A row with normalized_match = true and exact_match = false means the key
+-- spelling, not the source values, is throwing rows to the global fallback.
+select
+    f."Series" as fact_series,
+    f."Year" as fact_year,
+    count(*) as rows,
+    sum(f."Active Qty") as active_qty,
+    bool_or(sa.series is not null) as exact_match,
+    bool_or(sn.series is not null) as normalized_match
+from bi_reporting.inflow_outflow_mv f
+left join (
+    select distinct series, category
+    from bi_reporting.series_asp_mv
+) sa
+    on sa.series = f."Series"
+   and sa.category = f."Year"
+left join (
+    select distinct
+        upper(replace(series, '-', ' ')) as series,
+        category
+    from bi_reporting.series_asp_mv
+) sn
+    on sn.series = upper(replace(f."Series", '-', ' '))
+   and sn.category = f."Year"
+group by f."Series", f."Year"
+order by active_qty desc;
+
+-- 12B: which ASP branch each row takes, by year and business group.
+-- Recomputes the view's joins and classifies every fact row. If a year shows
+-- only global_fallback or null_asp, series_asp_mv has no category for it
+-- (it only contains 2025 and 2026).
+select
+    f."Year" as year,
+    f."Biz Grp" as biz_grp,
+    case
+        when sa.series_asp is not null
+         and sa.series_asp > 0
+         and sa.series_asp <= 1600 then 'series_asp'
+        when sa.series_asp is not null
+         and ga.global_asp is not null then 'series_out_of_range_to_global'
+        when sa.series_asp is null
+         and ga.global_asp is not null then 'no_series_match_to_global'
+        else 'null_asp'
+    end as asp_branch,
+    count(*) as rows,
+    sum(f."Active Qty") as active_qty,
+    sum(f."Active Qty" * f."ASP") as amount_at_current_asp
+from bi_reporting.inflow_outflow_mv f
+left join (
+    select
+        series,
+        category,
+        sum(amt) / nullif(sum(qty), 0) as series_asp
+    from bi_reporting.series_asp_mv
+    group by series, category
+) sa
+    on sa.series = f."Series"
+   and sa.category = f."Year"
+left join (
+    select
+        "Biz Group"::text as biz_grp,
+        "Category"::text as category,
+        avg(nullif(replace("Total"::text, ',', ''), '')::numeric) as global_asp
+    from "Zahab"."Sell-out Biz Plan Global_ASP"
+    where "Category" <> 'DELTA'
+    group by "Biz Group", "Category"
+) ga
+    on ga.biz_grp = f."Biz Grp"
+   and ga.category = f."Year"
+group by f."Year", f."Biz Grp", 3
+order by year, biz_grp, asp_branch;
+
+-- 12C: the actual ASP values the SQL side produces per series and year.
+-- Export this and put it next to the frozen Series_ASP_Year export from the
+-- Power BI model (see the DAX note at the bottom). Where the two columns
+-- disagree, the amount gap is value drift between series_asp_mv and the
+-- Excel, not join logic.
+select
+    sa.series,
+    sa.category,
+    round(sa.series_asp, 2) as sql_series_asp,
+    round(ga.global_asp, 2) as sql_global_asp_smart,
+    case
+        when sa.series_asp is null then 'falls to global'
+        when sa.series_asp > 1600 then 'falls to global'
+        when sa.series_asp <= 0 then 'falls to global'
+        else 'used as is'
+    end as fallback_state
+from (
+    select
+        series,
+        category,
+        sum(amt) / nullif(sum(qty), 0) as series_asp
+    from bi_reporting.series_asp_mv
+    group by series, category
+) sa
+left join (
+    select
+        "Biz Group"::text as biz_grp,
+        "Category"::text as category,
+        avg(nullif(replace("Total"::text, ',', ''), '')::numeric) as global_asp
+    from "Zahab"."Sell-out Biz Plan Global_ASP"
+    where "Category" <> 'DELTA'
+    group by "Biz Group", "Category"
+) ga
+    on ga.biz_grp = 'SMART'
+   and ga.category = sa.category
+order by sa.series, sa.category;
+
+-- 12D: rows whose final ASP is null. These produce blank amounts in both
+-- worlds only if Power BI also had no lookup hit for them, so compare this
+-- against the frozen blank-ASP count from the step 2 validate.dax baseline.
+select
+    f."Year" as year,
+    f."Biz Grp" as biz_grp,
+    count(*) as null_asp_rows,
+    sum(f."Active Qty") as active_qty
+from bi_reporting.inflow_outflow_mv f
+where f."ASP" is null
+group by f."Year", f."Biz Grp"
+order by year, biz_grp;
+
+-- Frozen-side export to compare against 12C, run in DAX Studio on the
+-- frozen pbix:
+--
+--   EVALUATE Series_ASP_Year
+--
+-- and save as series_asp_year_frozen.csv. That table already contains the
+-- post-fallback ASP per Biz Group, Series, Category that the dashboard used.
