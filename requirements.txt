@@ -520,14 +520,42 @@ from (
         )
     ) q
     left join (
+        -- Series ASP from the SQL copy of the Series_ASP excel. Reproduces
+        -- the Power BI Series_ASP_Year query: DELTA categories out, header
+        -- echo and Total rows out, values above 1600 or at or below zero
+        -- replaced by the series row's own Biz Group global ASP. avg()
+        -- guarantees one row per join key so the fact join can never fan
+        -- out; with the excel's unique keys it changes nothing.
+        -- Column names assume the excel shape (Biz Group, Series, Category,
+        -- Total). Adjust here if 12E shows different names.
         select
-            series,
-            category,
-            sum(amt) / nullif(sum(qty), 0) as series_asp
-        from bi_reporting.series_asp_mv
+            s."Series"::text as series,
+            s."Category"::text as category,
+            avg(
+                case
+                    when nullif(replace(s."Total"::text, ',', ''), '')::numeric > 1600 then g.global_asp
+                    when nullif(replace(s."Total"::text, ',', ''), '')::numeric <= 0 then g.global_asp
+                    else nullif(replace(s."Total"::text, ',', ''), '')::numeric
+                end
+            ) as series_asp
+        from "Zahab"."SIBP_CI_Series_ASP" s
+        left join (
+            select
+                "Biz Group"::text as biz_grp,
+                "Category"::text as category,
+                avg(nullif(replace("Total"::text, ',', ''), '')::numeric) as global_asp
+            from "Zahab"."Sell-out Biz Plan Global_ASP"
+            where "Category" <> 'DELTA'
+            group by "Biz Group", "Category"
+        ) g
+            on g.biz_grp = s."Biz Group"::text
+           and g.category = s."Category"::text
+        where s."Category"::text <> 'DELTA'
+          and s."Biz Group"::text not in ('Biz Group', 'Total')
+          and s."Series"::text not in ('Series', 'Total')
         group by
-            series,
-            category
+            s."Series"::text,
+            s."Category"::text
     ) sa
         on sa.series = q."Series"
        and sa.category = q."Year"
