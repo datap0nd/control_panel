@@ -1,336 +1,133 @@
-# Cadence - Setup & Update
-# Right-click > Run with PowerShell, or run from an elevated PowerShell window.
-#
-# This script can be used as a one-file bootstrapper. Put setup.ps1 in the
-# target Cadence folder and run it. It downloads the latest private repo zip
-# with a GitHub PAT, extracts the app, installs dependencies, and runs Cadence
-# as a Windows service. Run it again later to update.
-
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Start-Process powershell.exe "-NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
-    exit
-}
-
-$ErrorActionPreference = "Stop"
-trap {
-    Write-Host ""
-    Write-Host "SETUP FAILED: $_" -ForegroundColor Red
-    Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
-    pause
-    exit 1
-}
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-function First-EnvValue {
-    param([string[]]$Names)
-    foreach ($name in $Names) {
-        $value = [Environment]::GetEnvironmentVariable($name)
-        if ($value) { return $value }
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="x-apple-disable-message-reformatting">
+  <title>Announcing Cadence</title>
+  <style>
+    @media only screen and (max-width: 640px) {
+      .email-shell { width: 100% !important; }
+      .content-pad { padding-left: 22px !important; padding-right: 22px !important; }
+      .subject-line { font-size: 31px !important; line-height: 38px !important; }
+      .stack { display: block !important; width: 100% !important; }
+      .stack-pad { padding-left: 0 !important; padding-right: 0 !important; }
+      .button { display: block !important; text-align: center !important; }
     }
-    return ""
-}
+  </style>
+</head>
+<body style="margin:0; padding:0; background:#f4f1eb; color:#20252b; font-family:Arial, Helvetica, sans-serif;">
+  <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">
+    Cadence turns recurring CSV and Excel imports into scripts we can review, run, and schedule.
+  </div>
 
-function Convert-SecureStringToPlainText {
-    param([System.Security.SecureString]$SecureString)
-    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureString)
-    try {
-        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-    } finally {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-    }
-}
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f4f1eb;">
+    <tr>
+      <td align="center" style="padding:28px 12px;">
+        <table role="presentation" class="email-shell" width="660" cellspacing="0" cellpadding="0" border="0" style="width:660px; max-width:660px; background:#fffdf8; border:1px solid #ded7cc; border-collapse:separate;">
+          <tr>
+            <td class="content-pad" style="padding:36px 38px 18px 38px;">
+              <h1 class="subject-line" style="margin:0; color:#20252b; font-size:38px; line-height:46px; font-weight:700; letter-spacing:0;">
+                Announcing Cadence
+              </h1>
+              <p style="margin:16px 0 0 0; color:#3b424b; font-size:18px; line-height:28px;">
+                Some of our file imports are still too dependent on whoever remembers the steps.
+              </p>
+            </td>
+          </tr>
 
-function Get-GitHubToken {
-    $token = First-EnvValue @("CADENCE_GITHUB_TOKEN", "DG_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
-    if ($token) { return $token }
-    if ($env:CADENCE_UPDATE_ZIP_URL -and -not $env:CADENCE_UPDATE_ZIP_REQUIRES_TOKEN) { return "" }
+          <tr>
+            <td class="content-pad" style="padding:10px 38px 8px 38px;">
+              <p style="margin:0; color:#303841; font-size:16px; line-height:26px;">
+                Cadence is for those cases where a spreadsheet or CSV shows up again and again, and the answer today is still a mix of checking columns, picking the right table, rerunning a script, and remembering which views need a refresh.
+              </p>
+              <p style="margin:16px 0 0 0; color:#303841; font-size:16px; line-height:26px;">
+                With Cadence, we can preview the file, load it into Postgres, and save the import as a Python script that Prefect can run on a schedule. It handles append and replace imports, and it keeps the materialized-view refresh with the import instead of leaving it as a separate note in someone's head.
+              </p>
+              <p style="margin:16px 0 0 0; color:#303841; font-size:16px; line-height:26px;">
+                The first rollout should stay narrow: recurring files with a known owner, a known destination table, and not too much business logic hiding in the spreadsheet.
+              </p>
+            </td>
+          </tr>
 
-    Write-Host ""
-    Write-Host "Cadence is in a private GitHub repo." -ForegroundColor Yellow
-    Write-Host "Paste a GitHub PAT with read access to the repo. It will only be used for this setup run." -ForegroundColor Yellow
-    $secure = Read-Host "GitHub PAT" -AsSecureString
-    if (-not $secure -or $secure.Length -eq 0) {
-        Write-Host "ERROR: A GitHub PAT is required for the private Cadence repo." -ForegroundColor Red
-        pause
-        exit 1
-    }
-    return Convert-SecureStringToPlainText $secure
-}
+          <tr>
+            <td class="content-pad" style="padding:26px 38px 8px 38px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-top:2px solid #7b6f5e; border-bottom:1px solid #d8d0c4;">
+                <tr>
+                  <td class="stack" width="31%" valign="top" style="padding:18px 18px 16px 0; border-bottom:1px solid #e4ded4;">
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/6/60/Microsoft_Office_Excel_%282025%E2%80%93present%29.svg" width="34" height="34" alt="Excel" style="display:block; width:34px; height:34px; border:0; margin:0 0 9px 0;">
+                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase;">Excel input</div>
+                  </td>
+                  <td class="stack stack-pad" width="69%" valign="top" style="padding:18px 0 16px 18px; border-bottom:1px solid #e4ded4;">
+                    <div style="font-size:15px; line-height:24px; color:#303841;">CSV, XLSX, and XLS files, with a preview before anything is written.</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="stack" width="31%" valign="top" style="padding:16px 18px 16px 0; border-bottom:1px solid #e4ded4;">
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/2/29/Postgresql_elephant.svg" width="34" height="34" alt="PostgreSQL" style="display:block; width:34px; height:34px; border:0; margin:0 0 9px 0;">
+                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase;">Postgres table</div>
+                  </td>
+                  <td class="stack stack-pad" width="69%" valign="top" style="padding:16px 0 16px 18px; border-bottom:1px solid #e4ded4;">
+                    <div style="font-size:15px; line-height:24px; color:#303841;">Create a new table from the file or use an existing table for recurring loads.</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="stack" width="31%" valign="top" style="padding:16px 18px 16px 0; border-bottom:1px solid #e4ded4;">
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/c/c3/Python-logo-notext.svg" width="34" height="34" alt="Python" style="display:block; width:34px; height:34px; border:0; margin:0 0 9px 0;">
+                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase;">Python script</div>
+                  </td>
+                  <td class="stack stack-pad" width="69%" valign="top" style="padding:16px 0 16px 18px; border-bottom:1px solid #e4ded4;">
+                    <div style="font-size:15px; line-height:24px; color:#303841;">Generate a Prefect-ready Python import script with append or replace behavior.</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="stack" width="31%" valign="top" style="padding:16px 18px 18px 0;">
+                    <img src="https://cdn.simpleicons.org/prefect/024DFD" width="34" height="34" alt="Prefect" style="display:block; width:34px; height:34px; border:0; margin:0 0 9px 0;">
+                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase;">Prefect schedule</div>
+                  </td>
+                  <td class="stack stack-pad" width="69%" valign="top" style="padding:16px 0 18px 18px;">
+                    <div style="font-size:15px; line-height:24px; color:#303841;">Run manually, daily, weekly, or on a custom cron schedule.</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
 
-function New-ZipHeaders {
-    param([string]$Token)
-    $headers = @{
-        "Accept" = "application/vnd.github+json"
-        "User-Agent" = "Cadence-Setup"
-    }
-    if ($Token) {
-        $headers["Authorization"] = "Bearer $Token"
-    }
-    return $headers
-}
+          <tr>
+            <td class="content-pad" style="padding:28px 38px 6px 38px;">
+              <h2 style="margin:0 0 10px 0; color:#20252b; font-size:21px; line-height:28px; font-weight:700;">
+                First place to use it
+              </h2>
+              <p style="margin:0; color:#303841; font-size:16px; line-height:26px;">
+                Pick a recurring file where the current process depends on memory, hand edits, or someone rerunning the same script. That is the right first candidate.
+              </p>
+            </td>
+          </tr>
 
-function Download-RepoZip {
-    param(
-        [string]$ZipUrl,
-        [string]$ZipPath,
-        [hashtable]$Headers
-    )
-    try {
-        Invoke-WebRequest -Uri $ZipUrl -OutFile $ZipPath -UseBasicParsing -Headers $Headers
-        Write-Host "  Downloaded latest code." -ForegroundColor Green
-    } catch {
-        Write-Host "  Download failed: $_" -ForegroundColor Red
-        Write-Host "  Check that the PAT has read access to the private repo." -ForegroundColor Red
-        pause
-        exit 1
-    }
-}
+          <tr>
+            <td class="content-pad" style="padding:18px 38px 34px 38px;">
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td style="background:#2e4a4e;">
+                    <a class="button" href="mailto:?subject=Cadence%20first%20import%20nomination" style="display:inline-block; color:#ffffff; text-decoration:none; font-size:15px; line-height:20px; font-weight:bold; padding:13px 18px;">
+                      Send a candidate
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
 
-function Extract-RepoZip {
-    param(
-        [string]$ZipPath,
-        [string]$CodeDir,
-        [string]$TempExtract
-    )
-    if (Test-Path $TempExtract) { Remove-Item $TempExtract -Recurse -Force }
-    Expand-Archive -Path $ZipPath -DestinationPath $TempExtract -Force
-    $inner = Get-ChildItem $TempExtract -Directory | Select-Object -First 1
-    if (-not $inner) {
-        Write-Host "ERROR: GitHub zip did not contain a repo folder." -ForegroundColor Red
-        pause
-        exit 1
-    }
-    Copy-Item "$($inner.FullName)\*" $CodeDir -Recurse -Force
-    Remove-Item $TempExtract -Recurse -Force
-}
-
-function Get-NssmEnvironmentMap {
-    param(
-        [string]$NssmExe,
-        [string]$SourceServiceName
-    )
-    $map = @{}
-    try {
-        $lines = & $NssmExe get $SourceServiceName AppEnvironmentExtra 2>$null
-        foreach ($line in $lines) {
-            $text = [string]$line
-            if ($text -match '^([^=]+)=(.*)$') {
-                $map[$matches[1]] = $matches[2]
-            }
-        }
-    } catch {
-        return $map
-    }
-    return $map
-}
-
-function Get-EnvOrServiceValue {
-    param(
-        [string]$Name,
-        [hashtable]$ServiceEnv
-    )
-    $value = [Environment]::GetEnvironmentVariable($Name)
-    if ($value) { return $value }
-    if ($ServiceEnv.ContainsKey($Name)) { return $ServiceEnv[$Name] }
-    return ""
-}
-
-$ServiceName = "Cadence"
-$CodeDir = $PSScriptRoot
-$CodeLeaf = Split-Path $CodeDir -Leaf
-if ($env:CADENCE_HOME) {
-    $ProjectDir = $env:CADENCE_HOME
-} elseif ($CodeLeaf -like "*-main") {
-    $ProjectDir = Split-Path $CodeDir
-} else {
-    $ProjectDir = $CodeDir
-}
-$Port = if ($env:CADENCE_PORT) { [int]$env:CADENCE_PORT } else { 8010 }
-$GitHubOwner = if ($env:CADENCE_GITHUB_OWNER) { $env:CADENCE_GITHUB_OWNER } else { "datap0nd" }
-$GitHubRepo = if ($env:CADENCE_GITHUB_REPO) { $env:CADENCE_GITHUB_REPO } else { "cadence" }
-$GitHubToken = Get-GitHubToken
-$ZipUrl = if ($env:CADENCE_UPDATE_ZIP_URL) {
-    $env:CADENCE_UPDATE_ZIP_URL
-} else {
-    "https://api.github.com/repos/$GitHubOwner/$GitHubRepo/zipball/main"
-}
-$ZipHeaders = New-ZipHeaders $GitHubToken
-$ZipPath = "$ProjectDir\_cadence_update.zip"
-$TempExtract = "$ProjectDir\_cadence_extract_temp"
-$PyDir = "$ProjectDir\python313"
-$PyExe = "$PyDir\python.exe"
-$PyZipUrl = "https://www.python.org/ftp/python/3.13.2/python-3.13.2-embed-amd64.zip"
-$SettingsPath = if ($env:CADENCE_SETTINGS_PATH) { $env:CADENCE_SETTINGS_PATH } else { "$ProjectDir\cadence_settings.json" }
-$ScriptDir = if ($env:CADENCE_SCRIPT_DIR) {
-    $env:CADENCE_SCRIPT_DIR
-} elseif ($env:DG_IMPORT_SCRIPT_DIR) {
-    $env:DG_IMPORT_SCRIPT_DIR
-} else {
-    "$ProjectDir\generated_imports"
-}
-$MetronomeServiceName = if ($env:CADENCE_METRONOME_SERVICE_NAME) { $env:CADENCE_METRONOME_SERVICE_NAME } else { "MXAnalytics" }
-
-New-Item -ItemType Directory -Path $CodeDir -Force | Out-Null
-New-Item -ItemType Directory -Path $ProjectDir -Force | Out-Null
-
-if (-not (Test-Path "$CodeDir\app\main.py")) {
-    Write-Host ""
-    Write-Host "Cadence app files were not found in this folder." -ForegroundColor Yellow
-    Write-Host "Bootstrapping Cadence from the private GitHub repo..." -ForegroundColor Yellow
-    Download-RepoZip $ZipUrl $ZipPath $ZipHeaders
-    Extract-RepoZip $ZipPath $CodeDir $TempExtract
-    if (-not (Test-Path "$CodeDir\app\main.py")) {
-        Write-Host "ERROR: Bootstrap finished, but app\main.py is still missing." -ForegroundColor Red
-        pause
-        exit 1
-    }
-}
-
-Write-Host ""
-Write-Host "Cadence Setup" -ForegroundColor Cyan
-Write-Host "=============" -ForegroundColor Cyan
-Write-Host "  Code dir:     $CodeDir" -ForegroundColor DarkGray
-Write-Host "  Project dir:  $ProjectDir" -ForegroundColor DarkGray
-Write-Host "  Port:         $Port" -ForegroundColor DarkGray
-Write-Host "  Script dir:   $ScriptDir" -ForegroundColor DarkGray
-Write-Host "  Settings:     $SettingsPath" -ForegroundColor DarkGray
-
-if (-not (Test-Path $PyExe)) {
-    Write-Host "[1/5] Downloading portable Python 3.13..." -ForegroundColor Yellow
-    $PyZipPath = "$ProjectDir\_python.zip"
-    Invoke-WebRequest -Uri $PyZipUrl -OutFile $PyZipPath -UseBasicParsing
-    New-Item -ItemType Directory -Path $PyDir -Force | Out-Null
-    Expand-Archive -Path $PyZipPath -DestinationPath $PyDir -Force
-
-    $pthFile = Get-ChildItem $PyDir -Filter "python*._pth" | Select-Object -First 1
-    if ($pthFile) {
-        $content = Get-Content $pthFile.FullName
-        $content = $content -replace '^#\s*import site', 'import site'
-        Set-Content $pthFile.FullName $content
-    }
-
-    Write-Host "  Installing pip..." -ForegroundColor DarkGray
-    $getPipPath = "$PyDir\get-pip.py"
-    Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $getPipPath -UseBasicParsing
-    & $PyExe $getPipPath --no-warn-script-location -q
-    Write-Host "  Portable Python ready." -ForegroundColor Green
-} else {
-    Write-Host "[1/5] Portable Python already installed." -ForegroundColor DarkGray
-}
-
-$NssmExe = "$CodeDir\tools\nssm.exe"
-if (-not (Test-Path $NssmExe)) {
-    Write-Host "ERROR: Missing tools\nssm.exe. The private repo download may be incomplete." -ForegroundColor Red
-    pause
-    exit 1
-}
-
-$ErrorActionPreference = "Continue"
-$existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($existing) {
-    Write-Host "[2/5] Stopping existing service..." -ForegroundColor Yellow
-    & $NssmExe stop $ServiceName 2>&1 | Out-Null
-    Start-Sleep -Seconds 2
-    & $NssmExe remove $ServiceName confirm 2>&1 | Out-Null
-} else {
-    Write-Host "[2/5] No existing service." -ForegroundColor DarkGray
-}
-
-$portPid = (netstat -ano | Select-String ":$Port\s" | ForEach-Object {
-    ($_ -split '\s+')[-1]
-} | Where-Object { $_ -match '^\d+$' } | Select-Object -Unique)
-foreach ($p in $portPid) {
-    if ($p -and $p -ne "0") {
-        Write-Host "  Killing PID $p holding port $Port" -ForegroundColor Yellow
-        taskkill /PID $p /F 2>&1 | Out-Null
-    }
-}
-$ErrorActionPreference = "Stop"
-
-Write-Host "[3/5] Downloading latest version..." -ForegroundColor Yellow
-Download-RepoZip $ZipUrl $ZipPath $ZipHeaders
-
-Write-Host "[4/5] Extracting update over existing code..." -ForegroundColor Yellow
-Extract-RepoZip $ZipPath $CodeDir $TempExtract
-$ver = (Get-Date -Format "yyyyMMdd-HHmmss")
-Set-Content "$CodeDir\VERSION" $ver
-Write-Host "  Version: $ver" -ForegroundColor DarkGray
-
-Write-Host "[5/5] Installing dependencies..." -ForegroundColor Yellow
-Set-Location $CodeDir
-$PipExe = "$PyDir\Scripts\pip.exe"
-& $PipExe install -r requirements.txt -q
-
-Write-Host "Starting service..." -ForegroundColor Yellow
-& $NssmExe install $ServiceName $PyExe "-m uvicorn app.main:app --host 0.0.0.0 --port $Port"
-& $NssmExe set $ServiceName AppDirectory $CodeDir
-& $NssmExe set $ServiceName DisplayName "Cadence"
-& $NssmExe set $ServiceName Description "Scheduled PostgreSQL import platform"
-& $NssmExe set $ServiceName Start SERVICE_AUTO_START
-
-$MetronomeEnv = Get-NssmEnvironmentMap $NssmExe $MetronomeServiceName
-$AppEnv = @(
-    "CADENCE_SETTINGS_PATH=$SettingsPath",
-    "CADENCE_SCRIPT_DIR=$ScriptDir",
-    "CADENCE_PORT=$Port"
-)
-
-foreach ($name in @(
-    "CADENCE_PGHOST",
-    "CADENCE_PGPORT",
-    "CADENCE_PGDATABASE",
-    "CADENCE_PGUSER",
-    "CADENCE_PGPASSWORD",
-    "CADENCE_SCHEMA",
-    "DG_UPLOAD_PGHOST",
-    "DG_UPLOAD_PGPORT",
-    "DG_UPLOAD_PGDATABASE",
-    "DG_UPLOAD_PGUSER",
-    "DG_UPLOAD_PGPASSWORD",
-    "DG_UPLOAD_SCHEMA",
-    "DG_IMPORT_SCRIPT_DIR",
-    "PGHOST",
-    "PGPORT",
-    "PGDATABASE"
-)) {
-    $value = Get-EnvOrServiceValue $name $MetronomeEnv
-    if ($value) {
-        $AppEnv += "$name=$value"
-    }
-}
-
-if (-not (Get-EnvOrServiceValue "DG_UPLOAD_SCHEMA" $MetronomeEnv) -and -not (Get-EnvOrServiceValue "CADENCE_SCHEMA" $MetronomeEnv)) {
-    $AppEnv += "DG_UPLOAD_SCHEMA=bi_reporting"
-}
-
-& $NssmExe set $ServiceName AppEnvironmentExtra $AppEnv
-
-& $NssmExe set $ServiceName AppExit Default Restart
-& $NssmExe set $ServiceName AppRestartDelay 5000
-
-$LogDir = "$ProjectDir\logs"
-New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-New-Item -ItemType Directory -Path $ScriptDir -Force | Out-Null
-& $NssmExe set $ServiceName AppStdout "$LogDir\cadence.log"
-& $NssmExe set $ServiceName AppStderr "$LogDir\cadence_error.log"
-& $NssmExe set $ServiceName AppStdoutCreationDisposition 4
-& $NssmExe set $ServiceName AppStderrCreationDisposition 4
-& $NssmExe set $ServiceName AppRotateFiles 1
-& $NssmExe set $ServiceName AppRotateSeconds 86400
-& $NssmExe set $ServiceName AppRotateBytes 10485760
-
-& $NssmExe start $ServiceName
-Start-Sleep -Seconds 3
-
-$svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($svc -and $svc.Status -eq "Running") {
-    Write-Host ""
-    Write-Host "Done. Cadence running at http://localhost:$Port" -ForegroundColor Green
-    Start-Process "http://localhost:$Port"
-    Write-Host ""
-} else {
-    Write-Host ""
-    Write-Host "WARNING: Service not running. Check $LogDir\" -ForegroundColor Red
-    Write-Host ""
-}
-pause
+          <tr>
+            <td class="content-pad" style="padding:18px 38px 28px 38px; border-top:1px solid #d8d0c4;">
+              <p style="margin:0; color:#6f6a62; font-size:12px; line-height:19px;">
+                Cadence is being introduced for repeatable file imports. Reply with a candidate process, a concern, or anything we should check before rollout.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
