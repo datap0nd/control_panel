@@ -10,8 +10,6 @@
       .email-shell { width: 100% !important; }
       .content-pad { padding-left: 22px !important; padding-right: 22px !important; }
       .subject-line { font-size: 31px !important; line-height: 38px !important; }
-      .stack { display: block !important; width: 100% !important; }
-      .stack-pad { padding-left: 0 !important; padding-right: 0 !important; }
       .button { display: block !important; text-align: center !important; }
     }
   </style>
@@ -54,38 +52,38 @@
             <td class="content-pad" style="padding:26px 38px 8px 38px;">
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-top:2px solid #7b6f5e; border-bottom:1px solid #d8d0c4;">
                 <tr>
-                  <td class="stack" width="31%" valign="top" style="padding:18px 18px 16px 0; border-bottom:1px solid #e4ded4;">
+                  <td width="31%" valign="top" style="width:31%; min-width:170px; padding:18px 18px 16px 0; border-bottom:1px solid #e4ded4;">
                     <img src="https://upload.wikimedia.org/wikipedia/commons/6/60/Microsoft_Office_Excel_%282025%E2%80%93present%29.svg" width="34" height="34" alt="Excel" style="display:block; width:34px; height:34px; border:0; margin:0 0 9px 0;">
-                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase;">Excel input</div>
+                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase; white-space:nowrap;">Excel input</div>
                   </td>
-                  <td class="stack stack-pad" width="69%" valign="top" style="padding:18px 0 16px 18px; border-bottom:1px solid #e4ded4;">
+                  <td width="69%" valign="top" style="width:69%; padding:18px 0 16px 18px; border-bottom:1px solid #e4ded4;">
                     <div style="font-size:15px; line-height:24px; color:#303841;">CSV, XLSX, and XLS files, with a preview before anything is written.</div>
                   </td>
                 </tr>
                 <tr>
-                  <td class="stack" width="31%" valign="top" style="padding:16px 18px 16px 0; border-bottom:1px solid #e4ded4;">
+                  <td width="31%" valign="top" style="width:31%; min-width:170px; padding:16px 18px 16px 0; border-bottom:1px solid #e4ded4;">
                     <img src="https://upload.wikimedia.org/wikipedia/commons/2/29/Postgresql_elephant.svg" width="34" height="34" alt="PostgreSQL" style="display:block; width:34px; height:34px; border:0; margin:0 0 9px 0;">
-                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase;">Postgres table</div>
+                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase; white-space:nowrap;">Postgres table</div>
                   </td>
-                  <td class="stack stack-pad" width="69%" valign="top" style="padding:16px 0 16px 18px; border-bottom:1px solid #e4ded4;">
+                  <td width="69%" valign="top" style="width:69%; padding:16px 0 16px 18px; border-bottom:1px solid #e4ded4;">
                     <div style="font-size:15px; line-height:24px; color:#303841;">Create a new table from the file or use an existing table for recurring loads.</div>
                   </td>
                 </tr>
                 <tr>
-                  <td class="stack" width="31%" valign="top" style="padding:16px 18px 16px 0; border-bottom:1px solid #e4ded4;">
+                  <td width="31%" valign="top" style="width:31%; min-width:170px; padding:16px 18px 16px 0; border-bottom:1px solid #e4ded4;">
                     <img src="https://upload.wikimedia.org/wikipedia/commons/c/c3/Python-logo-notext.svg" width="34" height="34" alt="Python" style="display:block; width:34px; height:34px; border:0; margin:0 0 9px 0;">
-                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase;">Python script</div>
+                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase; white-space:nowrap;">Python script</div>
                   </td>
-                  <td class="stack stack-pad" width="69%" valign="top" style="padding:16px 0 16px 18px; border-bottom:1px solid #e4ded4;">
+                  <td width="69%" valign="top" style="width:69%; padding:16px 0 16px 18px; border-bottom:1px solid #e4ded4;">
                     <div style="font-size:15px; line-height:24px; color:#303841;">Generate a Prefect-ready Python import script with append or replace behavior.</div>
                   </td>
                 </tr>
                 <tr>
-                  <td class="stack" width="31%" valign="top" style="padding:16px 18px 18px 0;">
+                  <td width="31%" valign="top" style="width:31%; min-width:170px; padding:16px 18px 18px 0;">
                     <img src="https://cdn.simpleicons.org/prefect/024DFD" width="34" height="34" alt="Prefect" style="display:block; width:34px; height:34px; border:0; margin:0 0 9px 0;">
-                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase;">Prefect schedule</div>
+                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase; white-space:nowrap;">Prefect schedule</div>
                   </td>
-                  <td class="stack stack-pad" width="69%" valign="top" style="padding:16px 0 18px 18px;">
+                  <td width="69%" valign="top" style="width:69%; padding:16px 0 18px 18px;">
                     <div style="font-size:15px; line-height:24px; color:#303841;">Run manually, daily, weekly, or on a custom cron schedule.</div>
                   </td>
                 </tr>
