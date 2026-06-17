@@ -1,591 +1,195 @@
--- Step 5: Final standalone materialized view for Global_Inflow_Outflow.
---
--- Purpose:
--- Consolidate the validated Step 1 quantity logic, Step 2 ASP logic, and
--- Step 3 amount logic into one materialized view.
--- This is the final fact table replacement for the Power BI
--- Global_Inflow_Outflow query.
---
--- Grain:
--- One row per source activation row after the export and import sources are
--- normalized and appended. The view does not aggregate activation rows.
---
--- Main logic layers:
--- 1. Normalize export and import rows into one shared schema.
--- 2. Recreate the Power BI quantity columns for inflow, outflow, domestic
---    demand, second activation, CI, and parallel sell-out.
--- 3. Add ASP using series-level ASP first and global ASP as fallback.
--- 4. Calculate amount columns as quantity multiplied by final ASP.
---
--- The query intentionally uses nested subqueries instead of CTEs so it remains
--- consistent with the project SQL standard.
---
--- Materialized view created:
--- bi_reporting.inflow_outflow_mv
---
--- Dependency rule:
--- This view does not depend on io_1_quantity_mv, io_2_asp_mv, or
--- io_3_amount_mv. After Power BI is pointed to this view and validation
--- passes, those staging materialized views can be dropped.
---
--- Date rule:
--- Month Map remains separate as bi_reporting.io_4_date_mv.
+# Cadence - Setup & Update
+# Right-click > Run with PowerShell
+#
+# Installs portable Python, downloads the latest private repo zip, installs
+# dependencies, and runs Cadence as a Windows service. Run again to update.
+# This script does not delete user-generated scripts or settings.
 
-drop materialized view if exists bi_reporting.inflow_outflow_mv;
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Start-Process powershell.exe "-NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    exit
+}
 
-create materialized view bi_reporting.inflow_outflow_mv as
-select
-    -- Final projection. At this point each row already has the normalized
-    -- quantity columns and the selected ASP. This layer only exposes the final
-    -- columns and derives amount metrics.
-    a."Source Side",
-    a."Sell-in Region",
-    a."Sell-in Sub",
-    a."Sell-in AP1",
-    a."Sell-in Account",
-    a."Sell-out Region",
-    a."Sell-out Sub",
-    a."Sell-out Country",
-    a."Current Region",
-    a."Current Sub",
-    a."Current Country",
-    a."Biz Sub",
-    a."Series",
-    a."MKT Name",
+$ErrorActionPreference = "Stop"
+trap {
+    Write-Host ""
+    Write-Host "SETUP FAILED: $_" -ForegroundColor Red
+    Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
+    pause
+    exit 1
+}
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-    -- Cleaned matching key for cross-source grouping, e.g. the M-Tracker
-    -- bridge. Same convention as item_mapping_mv naming plus the legacy
-    -- 5G/4G strip: hyphen to space, drop trailing 5G/4G, collapse spaces,
-    -- trim, uppercase. Apply the identical expression to the other side
-    -- (fbai_m_tracker "Model") before grouping, or the keys will not line up.
-    -- "MKT Name" itself stays raw because the report displays and filters it.
-    upper(btrim(regexp_replace(
-        regexp_replace(replace(a."MKT Name", '-', ' '), '\s+(5G|4G)$', '', 'i'),
-        '\s+', ' ', 'g'))) as "MKT Name Clean",
-    a."Memory",
-    a."Storage",
-    a."Item Code",
-    a."Month",
-    a."Year",
-    a."ItemID",
-    a."Grand total",
-    a."ASP",
-    a."Biz Grp",
-    a."Sell-in Channel",
-    a."Sell-in Country",
-    a."SKU",
-    a."In/Out",
-    a."Region",
-    a."Subsidiary",
-    a."Across Sub",
-    a."Active Qty",
+$ServiceName = "Cadence"
+$CodeDir = $PSScriptRoot
+$ProjectDir = Split-Path $CodeDir
+$Port = if ($env:CADENCE_PORT) { [int]$env:CADENCE_PORT } else { 8010 }
+$GitHubOwner = if ($env:CADENCE_GITHUB_OWNER) { $env:CADENCE_GITHUB_OWNER } else { "datap0nd" }
+$GitHubRepo = if ($env:CADENCE_GITHUB_REPO) { $env:CADENCE_GITHUB_REPO } else { "cadence" }
+$GitHubToken = $env:CADENCE_GITHUB_TOKEN
+$ZipUrl = if ($env:CADENCE_UPDATE_ZIP_URL) {
+    $env:CADENCE_UPDATE_ZIP_URL
+} else {
+    "https://api.github.com/repos/$GitHubOwner/$GitHubRepo/zipball/main"
+}
+$ZipHeaders = @{
+    "Accept" = "application/vnd.github+json"
+    "User-Agent" = "Cadence-Setup"
+}
+if ($GitHubToken) {
+    $ZipHeaders["Authorization"] = "Bearer $GitHubToken"
+}
+$ZipPath = "$ProjectDir\_cadence_update.zip"
+$PyDir = "$ProjectDir\python313"
+$PyExe = "$PyDir\python.exe"
+$PyZipUrl = "https://www.python.org/ftp/python/3.13.2/python-3.13.2-embed-amd64.zip"
+$SettingsPath = if ($env:CADENCE_SETTINGS_PATH) { $env:CADENCE_SETTINGS_PATH } else { "$ProjectDir\cadence_settings.json" }
+$ScriptDir = if ($env:CADENCE_SCRIPT_DIR) { $env:CADENCE_SCRIPT_DIR } else { "$ProjectDir\generated_imports" }
 
-    -- Sell-out amount is active quantity valued at the selected ASP. Power BI
-    -- returns blank when ASP is blank, so the SQL keeps that behavior.
-    case
-        when a."ASP" is null then null
-        else a."ASP" * a."Active Qty"
-    end as "S/O Amt",
-    a."Total Inflow",
-    a."From MENA",
-    a."From Non-MENA",
-    a."Total Outflow",
-    a."To MENA Outflow",
-    a."To Non-MENA",
-    a."S/O SCM",
-    a."Domestic Demand",
-    a."S/O that Stays",
-    a."Domestic Demand" * a."ASP" as "Domestic Demand Amt",
-    a."From MENA" * a."ASP" as "From MENA Amt",
-    a."From Non-MENA" * a."ASP" as "From Non-MENA Amt",
-    a."S/O SCM" * a."ASP" as "S/O SCM Amt",
-    a."S/O that Stays" * a."ASP" as "S/O that Stays Amt",
-    a."To MENA Outflow" * a."ASP" as "To MENA Outflow Amt",
-    a."To Non-MENA" * a."ASP" as "To Non-MENA Amt",
-    a."Total Inflow" * a."ASP" as "Total Inflow Amt",
-    a."Total Outflow" * a."ASP" as "Total Outflow Amt",
-    a."2nd Activation In",
-    a."2nd Activation Out",
-    a."CI In",
-    a."CI Out",
-    a."2nd Activation In" * a."ASP" as "2nd Activation In Amt",
-    a."2nd Activation Out" * a."ASP" as "2nd Activation Out Amt",
-    a."CI In" * a."ASP" as "CI In Amt",
-    a."CI Out" * a."ASP" as "CI Out Amt",
-    a."Parallel S/O",
+if (-not (Test-Path "$CodeDir\app\main.py")) {
+    Write-Host "ERROR: Run this from inside the Cadence repo folder." -ForegroundColor Red
+    pause
+    exit 1
+}
 
-    -- Parallel S/O is directional:
-    -- - non-Middle East sell-in rows combine inflow and outflow
-    -- - Middle East sell-in rows moving outside the region use outflow
-    -- - remaining rows use inflow
-    -- The amount version applies the same rule to amount columns.
-    case
-        when a."Sell-in Region" <> 'MIDDLE EAST'
-         and a."Total Inflow" * a."ASP" is null
-         and a."Total Outflow" * a."ASP" is null then null
-        when a."Sell-in Region" <> 'MIDDLE EAST' then coalesce(a."Total Inflow" * a."ASP", 0) + coalesce(a."Total Outflow" * a."ASP", 0)
-        when a."Current Region" <> 'MIDDLE EAST'
-         and a."Sell-in Region" = 'MIDDLE EAST' then a."Total Outflow" * a."ASP"
-        else a."Total Inflow" * a."ASP"
-    end as "Parallel S/O Amt"
-from (
-    select
-        q."Source Side",
-        q."Sell-in Region",
-        q."Sell-in Sub",
-        q."Sell-in AP1",
-        q."Sell-in Account",
-        q."Sell-out Region",
-        q."Sell-out Sub",
-        q."Sell-out Country",
-        q."Current Region",
-        q."Current Sub",
-        q."Current Country",
-        q."Biz Sub",
-        q."Series",
-        q."MKT Name",
-        q."Memory",
-        q."Storage",
-        q."Item Code",
-        q."Month",
-        q."Year",
-        q."ItemID",
-        q."Grand total",
+Write-Host ""
+Write-Host "Cadence Setup" -ForegroundColor Cyan
+Write-Host "=============" -ForegroundColor Cyan
+Write-Host "  Code dir:     $CodeDir" -ForegroundColor DarkGray
+Write-Host "  Port:         $Port" -ForegroundColor DarkGray
+Write-Host "  Script dir:   $ScriptDir" -ForegroundColor DarkGray
+Write-Host "  Settings:     $SettingsPath" -ForegroundColor DarkGray
 
-        -- ASP selection follows the original Power BI ASP flow:
-        -- - first try the series-level ASP for the row's Series and Year
-        -- - if that value is missing, non-positive, or above 1600, use the
-        --   broader Global ASP for the row's business group and Year
-        --
-        -- The 1600 ceiling is inherited from the Power BI Series_ASP_Year
-        -- Power Query step:
-        --     if [Total] > 1600 then [Global ASP]
-        --     else if [Total] <= 0 then [Global ASP]
-        --     else [Total]
-        --
-        -- Treat this as a legacy ASP quality guardrail, not as a new pricing
-        -- assumption introduced by the SQL migration.
-        case
-            when sa.series_asp is null then ga.global_asp
-            when sa.series_asp > 1600 then ga.global_asp
-            when sa.series_asp <= 0 then ga.global_asp
-            else sa.series_asp
-        end as "ASP",
-        q."Biz Grp",
-        q."Sell-in Channel",
-        q."Sell-in Country",
-        q."SKU",
-        q."In/Out",
-        q."Region",
-        q."Subsidiary",
-        q."Across Sub",
-        q."Active Qty",
-        q."Total Inflow",
-        q."From MENA",
-        q."From Non-MENA",
-        q."Total Outflow",
-        q."To MENA Outflow",
-        q."To Non-MENA",
-        q."S/O SCM",
-        q."Domestic Demand",
-        q."S/O that Stays",
-        q."2nd Activation In",
-        q."2nd Activation Out",
-        q."CI In",
-        q."CI Out",
-        q."Parallel S/O"
-    from (
-        select
-            -- Quantity layer. This mirrors the Power BI append of MENA_Export
-            -- and MENA_Import before ASP and amount logic are added.
-            src.source_side as "Source Side",
-            src.sell_in_region as "Sell-in Region",
-            src.sell_in_sub as "Sell-in Sub",
-            src.sell_in_ap1 as "Sell-in AP1",
-            src.sell_in_account as "Sell-in Account",
-            src.sell_out_region as "Sell-out Region",
-            src.sell_out_sub as "Sell-out Sub",
-            src.sell_out_country as "Sell-out Country",
-            src.current_region as "Current Region",
-            src.current_sub as "Current Sub",
-            src.current_country as "Current Country",
-            src.biz_sub as "Biz Sub",
-            src.series as "Series",
-            src.mkt_name as "MKT Name",
-            src.memory as "Memory",
-            src.storage as "Storage",
-            src.item_code as "Item Code",
-            src.month as "Month",
-            src.year as "Year",
-            src.year || src.item_code as "ItemID",
-            null::text as "Grand total",
-            src.biz_grp as "Biz Grp",
-            src.sell_in_channel as "Sell-in Channel",
-            src.sell_in_country as "Sell-in Country",
-            src.sku as "SKU",
-            src.in_out as "In/Out",
+if (-not (Test-Path $PyExe)) {
+    Write-Host "[1/5] Downloading portable Python 3.13..." -ForegroundColor Yellow
+    $PyZipPath = "$ProjectDir\_python.zip"
+    Invoke-WebRequest -Uri $PyZipUrl -OutFile $PyZipPath -UseBasicParsing
+    New-Item -ItemType Directory -Path $PyDir -Force | Out-Null
+    Expand-Archive -Path $PyZipPath -DestinationPath $PyDir -Force
 
-            -- Reporting Region and Subsidiary are assigned from the side of
-            -- the transaction being analyzed. Export rows report by sell-in
-            -- side. Import rows report by current side.
-            case
-                when src.in_out in ('Domestic-E', 'Outflow') then src.sell_in_region
-                when src.in_out in ('Domestic-I', 'Inflow') then src.current_region
-                else null
-            end as "Region",
-            case
-                when src.in_out in ('Domestic-E', 'Outflow') then src.sell_in_sub
-                when src.in_out in ('Domestic-I', 'Inflow') then src.current_sub
-                else null
-            end as "Subsidiary",
+    $pthFile = Get-ChildItem $PyDir -Filter "python*._pth" | Select-Object -First 1
+    if ($pthFile) {
+        $content = Get-Content $pthFile.FullName
+        $content = $content -replace '^#\s*import site', 'import site'
+        Set-Content $pthFile.FullName $content
+    }
 
-            -- Across Sub classifies the movement type at subsidiary level:
-            -- - 2nd Activation: sell-in and sell-out subsidiaries match, but
-            --   current subsidiary is different
-            -- - CI: sell-in differs from sell-out and current subsidiary
-            -- - Domestic: sell-in and current subsidiaries match
-            -- Power BI can still keep its calculated column to avoid duplicate
-            -- column binding issues during the migration.
-            case
-                when src.sell_in_sub = src.sell_out_sub
-                 and src.sell_out_sub <> src.current_sub then '2nd Activation'
-                when src.sell_in_sub <> src.sell_out_sub
-                 and src.sell_in_sub <> src.current_sub then 'CI'
-                when src.sell_in_sub = src.current_sub then 'Domestic'
-                else null
-            end as "Across Sub",
+    Write-Host "  Installing pip..." -ForegroundColor DarkGray
+    $getPipPath = "$PyDir\get-pip.py"
+    Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $getPipPath -UseBasicParsing
+    & $PyExe $getPipPath --no-warn-script-location -q
+    Write-Host "  Portable Python ready." -ForegroundColor Green
+} else {
+    Write-Host "[1/5] Portable Python already installed." -ForegroundColor DarkGray
+}
 
-            src.active_qty as "Active Qty",
-            src.total_inflow as "Total Inflow",
-            src.from_mena as "From MENA",
-            src.from_non_mena as "From Non-MENA",
-            src.total_outflow as "Total Outflow",
-            src.to_mena_outflow as "To MENA Outflow",
-            src.to_non_mena as "To Non-MENA",
+$NssmExe = "$CodeDir\tools\nssm.exe"
+if (-not (Test-Path $NssmExe)) {
+    Write-Host "ERROR: Missing tools\nssm.exe. Restore it from the Cadence repo." -ForegroundColor Red
+    pause
+    exit 1
+}
 
-            -- S/O SCM is the sell-out quantity from the sell-in perspective:
-            -- domestic export rows plus outflow rows.
-            case
-                when src.in_out in ('Domestic-E', 'Outflow') then src.active_qty
-                else 0
-            end as "S/O SCM",
+$ErrorActionPreference = "Continue"
+$existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+if ($existing) {
+    Write-Host "[2/5] Stopping existing service..." -ForegroundColor Yellow
+    & $NssmExe stop $ServiceName 2>&1 | Out-Null
+    Start-Sleep -Seconds 2
+    & $NssmExe remove $ServiceName confirm 2>&1 | Out-Null
+} else {
+    Write-Host "[2/5] No existing service." -ForegroundColor DarkGray
+}
 
-            -- Domestic Demand is the demand quantity from the current market
-            -- perspective: domestic import rows plus inflow rows.
-            case
-                when src.in_out in ('Domestic-I', 'Inflow') then src.active_qty
-                else 0
-            end as "Domestic Demand",
+$portPid = (netstat -ano | Select-String ":$Port\s" | ForEach-Object {
+    ($_ -split '\s+')[-1]
+} | Where-Object { $_ -match '^\d+$' } | Select-Object -Unique)
+foreach ($p in $portPid) {
+    if ($p -and $p -ne "0") {
+        Write-Host "  Killing PID $p holding port $Port" -ForegroundColor Yellow
+        taskkill /PID $p /F 2>&1 | Out-Null
+    }
+}
+$ErrorActionPreference = "Stop"
 
-            -- S/O that Stays is the subset of sell-out that remains domestic
-            -- on the export side.
-            case
-                when src.in_out = 'Domestic-E' then src.active_qty
-                else 0
-            end as "S/O that Stays",
+Write-Host "[3/5] Downloading latest version..." -ForegroundColor Yellow
+if (-not $GitHubToken -and -not $env:CADENCE_UPDATE_ZIP_URL) {
+    Write-Host "  CADENCE_GITHUB_TOKEN is recommended because this repo is private." -ForegroundColor Yellow
+}
+try {
+    Invoke-WebRequest -Uri $ZipUrl -OutFile $ZipPath -UseBasicParsing -Headers $ZipHeaders
+    Write-Host "  Downloaded latest code." -ForegroundColor Green
+} catch {
+    Write-Host "  Download failed: $_" -ForegroundColor Red
+    Write-Host "  For private repos, set CADENCE_GITHUB_TOKEN with repo read access." -ForegroundColor Red
+    pause
+    exit 1
+}
 
-            src.second_activation_in as "2nd Activation In",
-            src.second_activation_out as "2nd Activation Out",
-            src.ci_in as "CI In",
-            src.ci_out as "CI Out",
+Write-Host "[4/5] Extracting update over existing code..." -ForegroundColor Yellow
+$TempExtract = "$ProjectDir\_cadence_extract_temp"
+if (Test-Path $TempExtract) { Remove-Item $TempExtract -Recurse -Force }
+Expand-Archive -Path $ZipPath -DestinationPath $TempExtract -Force
+$Inner = Get-ChildItem $TempExtract -Directory | Select-Object -First 1
+if ($Inner) {
+    Copy-Item "$($Inner.FullName)\*" $CodeDir -Recurse -Force
+    Remove-Item $TempExtract -Recurse -Force
+}
+$ver = (Get-Date -Format "yyyyMMdd-HHmmss")
+Set-Content "$CodeDir\VERSION" $ver
+Write-Host "  Version: $ver" -ForegroundColor DarkGray
 
-            -- Parallel S/O is the quantity used for the parallel sell-out
-            -- view. It chooses inflow, outflow, or both depending on whether
-            -- the movement starts inside or outside the Middle East scope.
-            case
-                when src.sell_in_region <> 'MIDDLE EAST' then coalesce(src.total_inflow, 0) + coalesce(src.total_outflow, 0)
-                when src.current_region <> 'MIDDLE EAST'
-                 and src.sell_in_region = 'MIDDLE EAST' then src.total_outflow
-                else src.total_inflow
-            end as "Parallel S/O"
-        from (
-            -- Export side mirrors Power BI MENA_Export.
-            -- Export rows are scoped by Sell-in Region because the question is
-            -- what sold out from the Middle East sell-in population.
-            select
-                'export'::text as source_side,
-                e."Sell-in Region"::text as sell_in_region,
-                e."Sell-in Sub"::text as sell_in_sub,
-                e."Sell-in AP1"::text as sell_in_ap1,
-                e."Sell-in Account"::text as sell_in_account,
-                e."Sell-out Region"::text as sell_out_region,
-                e."Sell-out Sub"::text as sell_out_sub,
-                e."Sell-out Country"::text as sell_out_country,
-                e."Current Region"::text as current_region,
-                e."Current Sub"::text as current_sub,
-                e."Current Country"::text as current_country,
-                e."Biz Sub"::text as biz_sub,
-                e."Series"::text as series,
-                e."MKT Name"::text as mkt_name,
-                e."Memory"::text as memory,
-                e."Storage"::text as storage,
-                e."Item Code"::text as item_code,
+Write-Host "[5/5] Installing dependencies..." -ForegroundColor Yellow
+Set-Location $CodeDir
+$PipExe = "$PyDir\Scripts\pip.exe"
+& $PipExe install -r requirements.txt -q
 
-                -- Source month and quantity can arrive as text with thousands
-                -- separators. The migration keeps the same numeric shape that
-                -- Power BI used after type conversion.
-                nullif(replace(e."Sell-out Month"::text, ',', ''), '')::bigint as month,
-                left(replace(e."Sell-out Month"::text, ',', ''), 4) as year,
-                nullif(replace(e."Active"::text, ',', ''), '')::numeric as active_qty,
+Write-Host "Starting service..." -ForegroundColor Yellow
+& $NssmExe install $ServiceName $PyExe "-m uvicorn app.main:app --host 0.0.0.0 --port $Port"
+& $NssmExe set $ServiceName AppDirectory $CodeDir
+& $NssmExe set $ServiceName DisplayName "Cadence"
+& $NssmExe set $ServiceName Description "Scheduled PostgreSQL import platform"
+& $NssmExe set $ServiceName Start SERVICE_AUTO_START
 
-                -- Business group is the report's higher-level product grouping.
-                case
-                    when e."Biz Sub" in ('A', 'S', 'Z', 'Others(SMART)') then 'SMART'
-                    when e."Biz Sub" = 'Tablet' then 'TABLET'
-                    else 'WEARABLE'
-                end as biz_grp,
+$AppEnv = @(
+    "CADENCE_SETTINGS_PATH=$SettingsPath",
+    "CADENCE_SCRIPT_DIR=$ScriptDir",
+    "CADENCE_PORT=$Port"
+)
+foreach ($name in @("CADENCE_PGHOST", "CADENCE_PGPORT", "CADENCE_PGDATABASE", "CADENCE_PGUSER", "CADENCE_PGPASSWORD", "CADENCE_SCHEMA")) {
+    $value = [Environment]::GetEnvironmentVariable($name)
+    if ($value) {
+        $AppEnv += "$name=$value"
+    }
+}
+& $NssmExe set $ServiceName AppEnvironmentExtra $AppEnv
 
-                -- Domestic-E means the unit stayed in the same subsidiary.
-                -- Outflow means the current subsidiary differs from sell-in.
-                case
-                    when e."Sell-in Sub" = e."Current Sub" then 'Domestic-E'
-                    else 'Outflow'
-                end as in_out,
+& $NssmExe set $ServiceName AppExit Default Restart
+& $NssmExe set $ServiceName AppRestartDelay 5000
 
-                -- Account mapping enriches Middle East sell-in accounts with
-                -- channel and country. It should not change row count.
-                am."Channel"::text as sell_in_channel,
-                am."Country"::text as sell_in_country,
+$LogDir = "$ProjectDir\logs"
+New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+New-Item -ItemType Directory -Path $ScriptDir -Force | Out-Null
+& $NssmExe set $ServiceName AppStdout "$LogDir\cadence.log"
+& $NssmExe set $ServiceName AppStderr "$LogDir\cadence_error.log"
+& $NssmExe set $ServiceName AppStdoutCreationDisposition 4
+& $NssmExe set $ServiceName AppStderrCreationDisposition 4
+& $NssmExe set $ServiceName AppRotateFiles 1
+& $NssmExe set $ServiceName AppRotateSeconds 86400
+& $NssmExe set $ServiceName AppRotateBytes 10485760
 
-                -- SKU follows the Power BI construction: phones and tablets
-                -- include memory and storage, wearables use marketing name.
-                case
-                    when e."Biz Sub" in ('Tablet') then e."MKT Name"::text || '-' || e."Memory"::text || '-' || e."Storage"::text
-                    when e."Biz Sub" in ('A', 'S', 'Z', 'Others(SMART)') then e."MKT Name"::text || '-' || e."Memory"::text || '-' || e."Storage"::text
-                    else e."MKT Name"::text
-                end as sku,
-                null::numeric as total_inflow,
-                null::numeric as from_mena,
-                null::numeric as from_non_mena,
+& $NssmExe start $ServiceName
+Start-Sleep -Seconds 3
 
-                -- Total Outflow is active quantity where the unit moved from
-                -- sell-in subsidiary to a different current subsidiary.
-                case
-                    when e."Sell-in Sub" <> e."Current Sub" then nullif(replace(e."Active"::text, ',', ''), '')::numeric
-                    else 0
-                end as total_outflow,
-
-                -- Outflow split by destination region.
-                case
-                    when e."Sell-in Sub" <> e."Current Sub"
-                     and e."Current Region" = 'MIDDLE EAST' then nullif(replace(e."Active"::text, ',', ''), '')::numeric
-                    else 0
-                end as to_mena_outflow,
-                case
-                    when e."Sell-in Sub" <> e."Current Sub"
-                     and e."Current Region" <> 'MIDDLE EAST' then nullif(replace(e."Active"::text, ',', ''), '')::numeric
-                    else 0
-                end as to_non_mena,
-                null::numeric as second_activation_in,
-                null::numeric as ci_in,
-
-                -- 2nd Activation Out: the unit sold out in the same subsidiary
-                -- where it was sold in, but its current subsidiary differs.
-                case
-                    when e."Sell-in Sub" <> e."Current Sub"
-                     and e."Sell-in Sub" = e."Sell-out Sub" then nullif(replace(e."Active"::text, ',', ''), '')::numeric
-                    else 0
-                end as second_activation_out,
-
-                -- CI Out: sell-in subsidiary differs from both sell-out and
-                -- current subsidiary.
-                case
-                    when e."Sell-in Sub" <> e."Sell-out Sub"
-                     and e."Sell-in Sub" <> e."Current Sub" then nullif(replace(e."Active"::text, ',', ''), '')::numeric
-                    else 0
-                end as ci_out
-            from "Zahab"."ASAP Export_1st and 2nd Activation" e
-            left join bi_reporting.account_mapping am
-                on am."Subsidiary" = e."Sell-in Sub"
-               and am."OrgSales" = e."Sell-in Account"
-            where e."Sell-in Region" = 'MIDDLE EAST'
-
-            union all
-
-            -- Import side mirrors Power BI MENA_Import.
-            -- Import rows are analyzed from the current market perspective:
-            -- what flowed into the Middle East current population.
-            select
-                'import'::text as source_side,
-                i."Sell-in Region"::text as sell_in_region,
-                i."Sell-in Sub"::text as sell_in_sub,
-                i."Sell-in AP1"::text as sell_in_ap1,
-                i."Sell-in Account"::text as sell_in_account,
-                i."Sell-out Region"::text as sell_out_region,
-                i."Sell-out Sub"::text as sell_out_sub,
-                i."Sell-out Country"::text as sell_out_country,
-                i."Current Region"::text as current_region,
-                i."Current Sub"::text as current_sub,
-                i."Current Country"::text as current_country,
-                i."Biz Sub"::text as biz_sub,
-                i."Series"::text as series,
-                i."MKT Name"::text as mkt_name,
-                i."Memory"::text as memory,
-                i."Storage"::text as storage,
-                i."Item Code"::text as item_code,
-
-                -- Source month and quantity are normalized to match the Power
-                -- BI type conversion step.
-                nullif(replace(i."Sell-out Month"::text, ',', ''), '')::bigint as month,
-                left(replace(i."Sell-out Month"::text, ',', ''), 4) as year,
-                nullif(replace(i."Active"::text, ',', ''), '')::numeric as active_qty,
-
-                -- Business group uses the same product grouping as export.
-                case
-                    when i."Biz Sub" in ('A', 'S', 'Z', 'Others(SMART)') then 'SMART'
-                    when i."Biz Sub" = 'Tablet' then 'TABLET'
-                    else 'WEARABLE'
-                end as biz_grp,
-
-                -- Domestic-I means the unit's sell-in and current subsidiary
-                -- are the same. Inflow means the current subsidiary differs.
-                case
-                    when i."Sell-in Sub" = i."Current Sub" then 'Domestic-I'
-                    else 'Inflow'
-                end as in_out,
-
-                -- Non-Middle East sell-in rows get the Non-Domestic channel
-                -- and country labels, same as the Power BI conditional.
-                case
-                    when i."Sell-in Region" = 'MIDDLE EAST' then am."Channel"::text
-                    else 'Non-Domestic'
-                end as sell_in_channel,
-                case
-                    when i."Sell-in Region" = 'MIDDLE EAST' then am."Country"::text
-                    else 'Non-Domestic'
-                end as sell_in_country,
-
-                -- SKU construction matches the export side and the original
-                -- Power BI query.
-                case
-                    when i."Biz Sub" in ('Tablet') then i."MKT Name"::text || '-' || i."Memory"::text || '-' || i."Storage"::text
-                    when i."Biz Sub" in ('A', 'S', 'Z', 'Others(SMART)') then i."MKT Name"::text || '-' || i."Memory"::text || '-' || i."Storage"::text
-                    else i."MKT Name"::text
-                end as sku,
-
-                -- Total Inflow is active quantity where the unit moved into a
-                -- different current subsidiary.
-                case
-                    when i."Sell-in Sub" <> i."Current Sub" then nullif(replace(i."Active"::text, ',', ''), '')::numeric
-                    else 0
-                end as total_inflow,
-
-                -- Inflow split by origin region.
-                case
-                    when i."Sell-in Sub" <> i."Current Sub"
-                     and i."Sell-in Region" = 'MIDDLE EAST' then nullif(replace(i."Active"::text, ',', ''), '')::numeric
-                    else 0
-                end as from_mena,
-                case
-                    when i."Sell-in Sub" <> i."Current Sub"
-                     and i."Sell-in Region" <> 'MIDDLE EAST' then nullif(replace(i."Active"::text, ',', ''), '')::numeric
-                    else 0
-                end as from_non_mena,
-                null::numeric as total_outflow,
-                null::numeric as to_mena_outflow,
-                null::numeric as to_non_mena,
-
-                -- 2nd Activation In: the unit sold out in the same subsidiary
-                -- where it was sold in, but its current subsidiary differs.
-                case
-                    when i."Sell-in Sub" <> i."Current Sub"
-                     and i."Sell-in Sub" = i."Sell-out Sub" then nullif(replace(i."Active"::text, ',', ''), '')::numeric
-                    else 0
-                end as second_activation_in,
-
-                -- CI In: sell-in subsidiary differs from both sell-out and
-                -- current subsidiary.
-                case
-                    when i."Sell-in Sub" <> i."Sell-out Sub"
-                     and i."Sell-in Sub" <> i."Current Sub" then nullif(replace(i."Active"::text, ',', ''), '')::numeric
-                    else 0
-                end as ci_in,
-                null::numeric as second_activation_out,
-                null::numeric as ci_out
-            from "Zahab"."ASAP Import_1st and 2nd Activation" i
-            left join bi_reporting.account_mapping am
-                on am."Subsidiary" = i."Sell-in Sub"
-               and am."OrgSales" = i."Sell-in Account"
-            -- Power BI import scope: drop the Grand total row, keep every
-            -- sell-in origin worldwide, and require the unit to currently sit
-            -- in MIDDLE EAST. Do not narrow sell-in to MIDDLE EAST here: that
-            -- zeroes From Non-MENA and undercounts Total Inflow and Domestic
-            -- Demand.
-            where i."Sell-in Region" <> 'Grand total'
-              and i."Current Region" = 'MIDDLE EAST'
-        ) src
-        where (
-            src.mkt_name is null
-            or src.mkt_name not in ('Galaxy Z Fold Special Edition', 'W25', 'W25 Flip')
-        )
-    ) q
-    left join (
-        -- Series ASP from the SQL copy of the Series_ASP excel. Reproduces
-        -- the Power BI Series_ASP_Year query: DELTA categories out, header
-        -- echo and Total rows out, values above 1600 or at or below zero
-        -- replaced by the series row's own Biz Group global ASP. avg()
-        -- guarantees one row per join key so the fact join can never fan
-        -- out; with the excel's unique keys it changes nothing.
-        -- Column names assume the excel shape (Biz Group, Series, Category,
-        -- Total). Adjust here if 12E shows different names.
-        select
-            s."Series"::text as series,
-            s."Category"::text as category,
-            avg(
-                case
-                    when nullif(replace(s."Total"::text, ',', ''), '')::numeric > 1600 then g.global_asp
-                    when nullif(replace(s."Total"::text, ',', ''), '')::numeric <= 0 then g.global_asp
-                    else nullif(replace(s."Total"::text, ',', ''), '')::numeric
-                end
-            ) as series_asp
-        from "Zahab"."SIBP_CI_Series_ASP" s
-        left join (
-            select
-                "Biz Group"::text as biz_grp,
-                "Category"::text as category,
-                avg(nullif(replace("Total"::text, ',', ''), '')::numeric) as global_asp
-            from "Zahab"."Sell-out Biz Plan Global_ASP"
-            where "Category" <> 'DELTA'
-            group by "Biz Group", "Category"
-        ) g
-            on g.biz_grp = s."Biz Group"::text
-           and g.category = s."Category"::text
-        where s."Category"::text <> 'DELTA'
-          and s."Biz Group"::text not in ('Biz Group', 'Total')
-          and s."Series"::text not in ('Series', 'Total')
-        group by
-            s."Series"::text,
-            s."Category"::text
-    ) sa
-        on sa.series = q."Series"
-       and sa.category = q."Year"
-    left join (
-        select
-            "Biz Group"::text as biz_grp,
-            "Category"::text as category,
-            avg(nullif(replace("Total"::text, ',', ''), '')::numeric) as global_asp
-        from "Zahab"."Sell-out Biz Plan Global_ASP"
-        where "Category" <> 'DELTA'
-        group by
-            "Biz Group",
-            "Category"
-    ) ga
-        on ga.biz_grp = q."Biz Grp"
-       and ga.category = q."Year"
-) a
-with data;
-
-create index inflow_outflow_mv_month_idx
-on bi_reporting.inflow_outflow_mv ("Month");
-
-create index inflow_outflow_mv_itemid_idx
-on bi_reporting.inflow_outflow_mv ("ItemID");
-
-create index inflow_outflow_mv_inout_idx
-on bi_reporting.inflow_outflow_mv ("In/Out");
-
-create index inflow_outflow_mv_source_side_idx
-on bi_reporting.inflow_outflow_mv ("Source Side");
-
--- After source data changes, refresh with:
--- refresh materialized view bi_reporting.inflow_outflow_mv;
+$svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+if ($svc -and $svc.Status -eq "Running") {
+    Write-Host ""
+    Write-Host "Done. Cadence running at http://localhost:$Port" -ForegroundColor Green
+    Start-Process "http://localhost:$Port"
+    Write-Host ""
+} else {
+    Write-Host ""
+    Write-Host "WARNING: Service not running. Check $LogDir\" -ForegroundColor Red
+    Write-Host ""
+}
+pause
