@@ -1,131 +1,26 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="x-apple-disable-message-reformatting">
-  <title>Announcing Cadence</title>
-  <style>
-    @media only screen and (max-width: 640px) {
-      .email-shell { width: 100% !important; }
-      .content-pad { padding-left: 22px !important; padding-right: 22px !important; }
-      .subject-line { font-size: 31px !important; line-height: 38px !important; }
-      .button { display: block !important; text-align: center !important; }
-    }
-  </style>
-</head>
-<body style="margin:0; padding:0; background:#f4f1eb; color:#20252b; font-family:Arial, Helvetica, sans-serif;">
-  <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">
-    Cadence turns recurring CSV and Excel imports into scripts we can review, run, and schedule.
-  </div>
-
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f4f1eb;">
-    <tr>
-      <td align="center" style="padding:28px 12px;">
-        <table role="presentation" class="email-shell" width="660" cellspacing="0" cellpadding="0" border="0" style="width:660px; max-width:660px; background:#fffdf8; border:1px solid #ded7cc; border-collapse:separate;">
-          <tr>
-            <td class="content-pad" style="padding:36px 38px 18px 38px;">
-              <h1 class="subject-line" style="margin:0; color:#20252b; font-size:38px; line-height:46px; font-weight:700; letter-spacing:0;">
-                Announcing Cadence
-              </h1>
-              <p style="margin:16px 0 0 0; color:#3b424b; font-size:18px; line-height:28px;">
-                Some of our file imports are still too dependent on whoever remembers the steps.
-              </p>
-            </td>
-          </tr>
-
-          <tr>
-            <td class="content-pad" style="padding:10px 38px 8px 38px;">
-              <p style="margin:0; color:#303841; font-size:16px; line-height:26px;">
-                Cadence is for those cases where a spreadsheet or CSV shows up again and again, and the answer today is still a mix of checking columns, picking the right table, rerunning a script, and remembering which views need a refresh.
-              </p>
-              <p style="margin:16px 0 0 0; color:#303841; font-size:16px; line-height:26px;">
-                With Cadence, we can preview the file, load it into Postgres, and save the import as a Python script that Prefect can run on a schedule. It handles append and replace imports, and it keeps the materialized-view refresh with the import instead of leaving it as a separate note in someone's head.
-              </p>
-              <p style="margin:16px 0 0 0; color:#303841; font-size:16px; line-height:26px;">
-                The first rollout should stay narrow: recurring files with a known owner, a known destination table, and not too much business logic hiding in the spreadsheet.
-              </p>
-            </td>
-          </tr>
-
-          <tr>
-            <td class="content-pad" style="padding:26px 38px 8px 38px;">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-top:2px solid #7b6f5e; border-bottom:1px solid #d8d0c4;">
-                <tr>
-                  <td width="31%" valign="top" style="width:31%; min-width:170px; padding:18px 18px 16px 0; border-bottom:1px solid #e4ded4;">
-                    <img src="https://upload.wikimedia.org/wikipedia/commons/6/60/Microsoft_Office_Excel_%282025%E2%80%93present%29.svg" width="34" height="34" alt="Excel" style="display:block; width:34px; height:34px; border:0; margin:0 0 9px 0;">
-                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase; white-space:nowrap;">Excel input</div>
-                  </td>
-                  <td width="69%" valign="top" style="width:69%; padding:18px 0 16px 18px; border-bottom:1px solid #e4ded4;">
-                    <div style="font-size:15px; line-height:24px; color:#303841;">CSV, XLSX, and XLS files, with a preview before anything is written.</div>
-                  </td>
-                </tr>
-                <tr>
-                  <td width="31%" valign="top" style="width:31%; min-width:170px; padding:16px 18px 16px 0; border-bottom:1px solid #e4ded4;">
-                    <img src="https://upload.wikimedia.org/wikipedia/commons/2/29/Postgresql_elephant.svg" width="34" height="34" alt="PostgreSQL" style="display:block; width:34px; height:34px; border:0; margin:0 0 9px 0;">
-                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase; white-space:nowrap;">Postgres table</div>
-                  </td>
-                  <td width="69%" valign="top" style="width:69%; padding:16px 0 16px 18px; border-bottom:1px solid #e4ded4;">
-                    <div style="font-size:15px; line-height:24px; color:#303841;">Create a new table from the file or use an existing table for recurring loads.</div>
-                  </td>
-                </tr>
-                <tr>
-                  <td width="31%" valign="top" style="width:31%; min-width:170px; padding:16px 18px 16px 0; border-bottom:1px solid #e4ded4;">
-                    <img src="https://upload.wikimedia.org/wikipedia/commons/c/c3/Python-logo-notext.svg" width="34" height="34" alt="Python" style="display:block; width:34px; height:34px; border:0; margin:0 0 9px 0;">
-                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase; white-space:nowrap;">Python script</div>
-                  </td>
-                  <td width="69%" valign="top" style="width:69%; padding:16px 0 16px 18px; border-bottom:1px solid #e4ded4;">
-                    <div style="font-size:15px; line-height:24px; color:#303841;">Generate a Prefect-ready Python import script with append or replace behavior.</div>
-                  </td>
-                </tr>
-                <tr>
-                  <td width="31%" valign="top" style="width:31%; min-width:170px; padding:16px 18px 18px 0;">
-                    <img src="https://cdn.simpleicons.org/prefect/024DFD" width="34" height="34" alt="Prefect" style="display:block; width:34px; height:34px; border:0; margin:0 0 9px 0;">
-                    <div style="font-size:12px; line-height:18px; color:#7b5d2b; font-weight:bold; letter-spacing:0.7px; text-transform:uppercase; white-space:nowrap;">Prefect schedule</div>
-                  </td>
-                  <td width="69%" valign="top" style="width:69%; padding:16px 0 18px 18px;">
-                    <div style="font-size:15px; line-height:24px; color:#303841;">Run manually, daily, weekly, or on a custom cron schedule.</div>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <tr>
-            <td class="content-pad" style="padding:28px 38px 6px 38px;">
-              <h2 style="margin:0 0 10px 0; color:#20252b; font-size:21px; line-height:28px; font-weight:700;">
-                First place to use it
-              </h2>
-              <p style="margin:0; color:#303841; font-size:16px; line-height:26px;">
-                Pick a recurring file where the current process depends on memory, hand edits, or someone rerunning the same script. That is the right first candidate.
-              </p>
-            </td>
-          </tr>
-
-          <tr>
-            <td class="content-pad" style="padding:18px 38px 34px 38px;">
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
-                <tr>
-                  <td style="background:#2e4a4e;">
-                    <a class="button" href="mailto:?subject=Cadence%20first%20import%20nomination" style="display:inline-block; color:#ffffff; text-decoration:none; font-size:15px; line-height:20px; font-weight:bold; padding:13px 18px;">
-                      Send a candidate
-                    </a>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <tr>
-            <td class="content-pad" style="padding:18px 38px 28px 38px; border-top:1px solid #d8d0c4;">
-              <p style="margin:0; color:#6f6a62; font-size:12px; line-height:19px;">
-                Cadence is being introduced for repeatable file imports. Reply with a candidate process, a concern, or anything we should check before rollout.
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
+measure 'Selected Benchmark' =
+    VAR _name = SELECTEDVALUE('Metric'[Name], "Net Sales")
+    RETURN
+    SWITCH(
+        _name,
+        "Net Sales", [MP Plan Total],
+        VAR _peerSubs =
+            CALCULATETABLE(
+                VALUES(dim_subsidiary[Subsidiary]),
+                REMOVEFILTERS(Subsidiaries),
+                REMOVEFILTERS(dim_subsidiary)
+            )
+        RETURN
+            AVERAGEX(
+                _peerSubs,
+                CALCULATE(
+                    [Selected Metric],
+                    REMOVEFILTERS(Subsidiaries),
+                    REMOVEFILTERS(dim_subsidiary),
+                    TREATAS(
+                        VALUES(dim_subsidiary[Subsidiary]),
+                        dim_subsidiary[Subsidiary]
+                    )
+                )
+            )
+    )
