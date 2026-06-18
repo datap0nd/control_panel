@@ -1,26 +1,25 @@
 measure 'Selected Benchmark' =
     VAR _name = SELECTEDVALUE('Metric'[Name], "Net Sales")
     RETURN
-    SWITCH(
-        _name,
-        "Net Sales", [MP Plan Total],
-        VAR _peerSubs =
-            CALCULATETABLE(
-                VALUES(dim_subsidiary[Subsidiary]),
-                REMOVEFILTERS(Subsidiaries),
-                REMOVEFILTERS(dim_subsidiary)
-            )
-        RETURN
-            AVERAGEX(
-                _peerSubs,
-                CALCULATE(
-                    [Selected Metric],
-                    REMOVEFILTERS(Subsidiaries),
-                    REMOVEFILTERS(dim_subsidiary),
-                    TREATAS(
-                        VALUES(dim_subsidiary[Subsidiary]),
-                        dim_subsidiary[Subsidiary]
-                    )
+        SWITCH(
+            _name,
+            "Net Sales", [MP Plan Total],
+            VAR _peerSubs =
+                CALCULATETABLE(
+                    ALL(dim_subsidiary[Subsidiary]),
+                    REMOVEFILTERS(Subsidiaries[Subsidiary]),
+                    REMOVEFILTERS(dim_subsidiary[Subsidiary])
                 )
-            )
-    )
+            RETURN
+                AVERAGEX(
+                    _peerSubs,
+                    VAR _peerSub = dim_subsidiary[Subsidiary]
+                    RETURN
+                        CALCULATE(
+                            [Selected Metric],
+                            REMOVEFILTERS(Subsidiaries[Subsidiary]),
+                            REMOVEFILTERS(dim_subsidiary[Subsidiary]),
+                            dim_subsidiary[Subsidiary] = _peerSub
+                        )
+                )
+        )
