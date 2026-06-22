@@ -1,25 +1,132 @@
-measure 'Selected Benchmark' =
-    VAR _name = SELECTEDVALUE('Metric'[Name], "Net Sales")
-    RETURN
-        SWITCH(
-            _name,
-            "Net Sales", [MP Plan Total],
-            VAR _peerSubs =
-                CALCULATETABLE(
-                    ALL(dim_subsidiary[Subsidiary]),
-                    REMOVEFILTERS(Subsidiaries[Subsidiary]),
-                    REMOVEFILTERS(dim_subsidiary[Subsidiary])
-                )
-            RETURN
-                AVERAGEX(
-                    _peerSubs,
-                    VAR _peerSub = dim_subsidiary[Subsidiary]
-                    RETURN
-                        CALCULATE(
-                            [Selected Metric],
-                            REMOVEFILTERS(Subsidiaries[Subsidiary]),
-                            REMOVEFILTERS(dim_subsidiary[Subsidiary]),
-                            dim_subsidiary[Subsidiary] = _peerSub
-                        )
-                )
-        )
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="x-apple-disable-message-reformatting">
+  <title>eStore Dashboard Announcement</title>
+  <style>
+    @media only screen and (max-width: 640px) {
+      .email-shell { width: 100% !important; }
+      .content-pad { padding-left: 22px !important; padding-right: 22px !important; }
+      .subject-line { font-size: 28px !important; line-height: 35px !important; }
+      .button { display: block !important; text-align: center !important; }
+      .label-cell { display: block !important; width: 100% !important; min-width: 0 !important; padding-right: 0 !important; }
+      .copy-cell { display: block !important; width: 100% !important; padding-left: 0 !important; padding-top: 0 !important; }
+    }
+  </style>
+</head>
+<body style="margin:0; padding:0; background:#f5f8fc; color:#242b33; font-family:Aptos, Calibri, Arial, Helvetica, sans-serif;">
+  <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">
+    A weekly dashboard for sales, share of business, plan comparisons, pricing, attach, and AI notes.
+  </div>
+
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f5f8fc;">
+    <tr>
+      <td align="center" style="padding:28px 12px;">
+        <table role="presentation" class="email-shell" width="660" cellspacing="0" cellpadding="0" border="0" style="width:660px; max-width:660px; background:#ffffff; border:1px solid #d7e1ee; border-collapse:separate;">
+          <tr>
+            <td class="content-pad" style="padding:30px 38px 22px 38px; background:#edf4fd; border-bottom:1px solid #d7e1ee;">
+              <h1 class="subject-line" style="margin:0; color:#173b66; font-size:32px; line-height:40px; font-weight:600; letter-spacing:0;">
+                eStore dashboard announcement
+              </h1>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="content-pad" style="padding:18px 38px 8px 38px;">
+              <p style="margin:0; color:#2f3b48; font-size:16px; line-height:25px;">
+                The eStore dashboard is ready for the weekly business reviews. It pulls the usual questions into one place: sales, share of business, plan comparisons, pricing, trade-in, and attached services.
+              </p>
+              <p style="margin:15px 0 0 0; color:#2f3b48; font-size:16px; line-height:25px;">
+                Use it before the meeting, not after. Start with the total view, then filter by market, product, customer type, payment method, or source app when something needs a closer look.
+              </p>
+              <p style="margin:15px 0 0 0; color:#2f3b48; font-size:16px; line-height:25px;">
+                The report refreshes weekly. The header and information page show the latest refresh date and business owner.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="content-pad" style="padding:26px 38px 8px 38px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-top:1px solid #b8cbe3; border-bottom:1px solid #d7e1ee;">
+                <tr>
+                  <td class="label-cell" width="31%" valign="top" style="width:31%; min-width:170px; padding:17px 18px 15px 0; border-bottom:1px solid #e2e9f2;">
+                    <div style="font-size:14px; line-height:20px; color:#173b66; font-weight:bold; letter-spacing:0; white-space:nowrap;">Business mix</div>
+                  </td>
+                  <td class="copy-cell" width="69%" valign="top" style="width:69%; padding:17px 0 15px 18px; border-bottom:1px solid #e2e9f2;">
+                    <div style="font-size:15px; line-height:23px; color:#344253;">Which markets, product classes, apps, customer groups, or channels are driving the number.</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="label-cell" width="31%" valign="top" style="width:31%; min-width:170px; padding:15px 18px 15px 0; border-bottom:1px solid #e2e9f2;">
+                    <div style="font-size:14px; line-height:20px; color:#173b66; font-weight:bold; letter-spacing:0; white-space:nowrap;">Plan comparisons</div>
+                  </td>
+                  <td class="copy-cell" width="69%" valign="top" style="width:69%; padding:15px 0 15px 18px; border-bottom:1px solid #e2e9f2;">
+                    <div style="font-size:15px; line-height:23px; color:#344253;">Sales against MP and SP plan, with filters to find where the gap is sitting.</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="label-cell" width="31%" valign="top" style="width:31%; min-width:170px; padding:15px 18px 15px 0; border-bottom:1px solid #e2e9f2;">
+                    <div style="font-size:14px; line-height:20px; color:#173b66; font-weight:bold; letter-spacing:0; white-space:nowrap;">Pricing read</div>
+                  </td>
+                  <td class="copy-cell" width="69%" valign="top" style="width:69%; padding:15px 0 15px 18px; border-bottom:1px solid #e2e9f2;">
+                    <div style="font-size:15px; line-height:23px; color:#344253;">ASP, RRP, base price, discount rate, TMV index, and price realization in the same view.</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="label-cell" width="31%" valign="top" style="width:31%; min-width:170px; padding:15px 18px 15px 0; border-bottom:1px solid #e2e9f2;">
+                    <div style="font-size:14px; line-height:20px; color:#173b66; font-weight:bold; letter-spacing:0; white-space:nowrap;">Attach and trade-in</div>
+                  </td>
+                  <td class="copy-cell" width="69%" valign="top" style="width:69%; padding:15px 0 15px 18px; border-bottom:1px solid #e2e9f2;">
+                    <div style="font-size:15px; line-height:23px; color:#344253;">Trade-in, service, and warranty attach by product, market, and customer segment.</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="content-pad" style="padding:26px 38px 8px 38px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f3f8ff; border-left:4px solid #2e5d95; border-collapse:separate;">
+                <tr>
+                  <td style="padding:18px 20px;">
+                    <div style="font-size:15px; line-height:21px; color:#173b66; font-weight:bold; letter-spacing:0; margin:0 0 7px 0;">
+                      AI KPI notes
+                    </div>
+                    <p style="margin:0; color:#2f3b48; font-size:15px; line-height:24px;">
+                      The AI part is intentionally lightweight. Gemma4 uses the filters already on the page, checks the breakdown behind a KPI drop, and writes a short first pass on what may be driving it. It is not the final answer. It is a pointer to the product, channel, segment, or timing issue the owner should check first.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="content-pad" style="padding:18px 38px 34px 38px;">
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td style="background:#2e5d95;">
+                    <a class="button" href="https://app.powerbi.com/" style="display:inline-block; color:#ffffff; text-decoration:none; font-size:15px; line-height:20px; font-weight:bold; padding:13px 18px;">
+                      Open the dashboard
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="content-pad" style="padding:18px 38px 28px 38px; border-top:1px solid #d7e1ee; background:#fbfdff;">
+              <p style="margin:0; color:#667386; font-size:12px; line-height:19px;">
+                The dashboard is updated weekly. Reply with access issues, metric questions, or anything that should be fixed before this becomes part of the regular business reviews.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
