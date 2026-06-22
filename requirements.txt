@@ -11,8 +11,8 @@
       .content-pad { padding-left: 22px !important; padding-right: 22px !important; }
       .subject-line { font-size: 28px !important; line-height: 35px !important; }
       .button { display: block !important; text-align: center !important; }
-      .label-cell { display: block !important; width: 100% !important; min-width: 0 !important; padding-right: 0 !important; }
-      .copy-cell { display: block !important; width: 100% !important; padding-left: 0 !important; padding-top: 0 !important; }
+      .label-cell { display: table-cell !important; width: 132px !important; min-width: 132px !important; padding-right: 12px !important; }
+      .copy-cell { display: table-cell !important; width: auto !important; padding-left: 12px !important; padding-top: 15px !important; }
     }
   </style>
 </head>
@@ -51,34 +51,34 @@
             <td class="content-pad" style="padding:26px 38px 8px 38px;">
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-top:1px solid #b8cbe3; border-bottom:1px solid #d7e1ee;">
                 <tr>
-                  <td class="label-cell" width="31%" valign="top" style="width:31%; min-width:170px; padding:17px 18px 15px 0; border-bottom:1px solid #e2e9f2;">
+                  <td class="label-cell" width="30%" valign="top" style="width:30%; min-width:150px; padding:17px 16px 15px 0; border-bottom:1px solid #e2e9f2;">
                     <div style="font-size:14px; line-height:20px; color:#173b66; font-weight:bold; letter-spacing:0; white-space:nowrap;">Business mix</div>
                   </td>
-                  <td class="copy-cell" width="69%" valign="top" style="width:69%; padding:17px 0 15px 18px; border-bottom:1px solid #e2e9f2;">
+                  <td class="copy-cell" width="70%" valign="top" style="width:70%; padding:17px 0 15px 16px; border-bottom:1px solid #e2e9f2;">
                     <div style="font-size:15px; line-height:23px; color:#344253;">Which markets, product classes, apps, customer groups, or channels are driving the number.</div>
                   </td>
                 </tr>
                 <tr>
-                  <td class="label-cell" width="31%" valign="top" style="width:31%; min-width:170px; padding:15px 18px 15px 0; border-bottom:1px solid #e2e9f2;">
+                  <td class="label-cell" width="30%" valign="top" style="width:30%; min-width:150px; padding:15px 16px 15px 0; border-bottom:1px solid #e2e9f2;">
                     <div style="font-size:14px; line-height:20px; color:#173b66; font-weight:bold; letter-spacing:0; white-space:nowrap;">Plan comparisons</div>
                   </td>
-                  <td class="copy-cell" width="69%" valign="top" style="width:69%; padding:15px 0 15px 18px; border-bottom:1px solid #e2e9f2;">
+                  <td class="copy-cell" width="70%" valign="top" style="width:70%; padding:15px 0 15px 16px; border-bottom:1px solid #e2e9f2;">
                     <div style="font-size:15px; line-height:23px; color:#344253;">Sales against MP and SP plan, with filters to find where the gap is sitting.</div>
                   </td>
                 </tr>
                 <tr>
-                  <td class="label-cell" width="31%" valign="top" style="width:31%; min-width:170px; padding:15px 18px 15px 0; border-bottom:1px solid #e2e9f2;">
+                  <td class="label-cell" width="30%" valign="top" style="width:30%; min-width:150px; padding:15px 16px 15px 0; border-bottom:1px solid #e2e9f2;">
                     <div style="font-size:14px; line-height:20px; color:#173b66; font-weight:bold; letter-spacing:0; white-space:nowrap;">Pricing read</div>
                   </td>
-                  <td class="copy-cell" width="69%" valign="top" style="width:69%; padding:15px 0 15px 18px; border-bottom:1px solid #e2e9f2;">
+                  <td class="copy-cell" width="70%" valign="top" style="width:70%; padding:15px 0 15px 16px; border-bottom:1px solid #e2e9f2;">
                     <div style="font-size:15px; line-height:23px; color:#344253;">ASP, RRP, base price, discount rate, TMV index, and price realization in the same view.</div>
                   </td>
                 </tr>
                 <tr>
-                  <td class="label-cell" width="31%" valign="top" style="width:31%; min-width:170px; padding:15px 18px 15px 0; border-bottom:1px solid #e2e9f2;">
+                  <td class="label-cell" width="30%" valign="top" style="width:30%; min-width:150px; padding:15px 16px 15px 0; border-bottom:1px solid #e2e9f2;">
                     <div style="font-size:14px; line-height:20px; color:#173b66; font-weight:bold; letter-spacing:0; white-space:nowrap;">Attach and trade-in</div>
                   </td>
-                  <td class="copy-cell" width="69%" valign="top" style="width:69%; padding:15px 0 15px 18px; border-bottom:1px solid #e2e9f2;">
+                  <td class="copy-cell" width="70%" valign="top" style="width:70%; padding:15px 0 15px 16px; border-bottom:1px solid #e2e9f2;">
                     <div style="font-size:15px; line-height:23px; color:#344253;">Trade-in, service, and warranty attach by product, market, and customer segment.</div>
                   </td>
                 </tr>
