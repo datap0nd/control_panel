@@ -251,8 +251,9 @@ def unique_column_names(columns: Iterable[object]) -> list[str]:
     seen: dict[str, int] = {}
     for position, value in enumerate(columns, start=1):
         base = "City" if position == 1 else clean_column_name(value, position)
-        count = seen.get(base, 0) + 1
-        seen[base] = count
+        key = base.casefold()
+        count = seen.get(key, 0) + 1
+        seen[key] = count
         names.append(base if count == 1 else f"{base}_{count}")
     return names
 
@@ -594,6 +595,80 @@ def execute_values_sql(insert_prefix: str) -> str:
     return insert_prefix.replace("%", "%%") + "%s"
 
 
+def postgres_column_type(column_name: str) -> str:
+    normalized = column_name.strip().lower()
+    if normalized == "upload_date":
+        return "date"
+    if normalized == "last_modified_date":
+        return "timestamp"
+    return "text"
+
+
+def fetch_existing_columns(cursor, schema_name: str, table_name: str) -> list[str]:
+    cursor.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = %s
+          AND table_name = %s
+        ORDER BY ordinal_position
+        """,
+        (schema_name, table_name),
+    )
+    return [row[0] for row in cursor.fetchall()]
+
+
+def resolve_existing_column(column_name: str, existing_columns: list[str]) -> str | None:
+    if column_name in existing_columns:
+        return column_name
+    matches = [
+        existing
+        for existing in existing_columns
+        if existing.casefold() == column_name.casefold()
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def ensure_destination_table(cursor, sql, schema_name: str, table_name: str, columns: list[str]) -> list[str]:
+    cursor.execute(
+        sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema_name))
+    )
+    create_columns = sql.SQL(", ").join(
+        sql.SQL("{} {}").format(
+            sql.Identifier(column),
+            sql.SQL(postgres_column_type(column)),
+        )
+        for column in columns
+    )
+    cursor.execute(
+        sql.SQL("CREATE TABLE IF NOT EXISTS {}.{} ({})").format(
+            sql.Identifier(schema_name),
+            sql.Identifier(table_name),
+            create_columns,
+        )
+    )
+
+    existing_columns = fetch_existing_columns(cursor, schema_name, table_name)
+    insert_columns: list[str] = []
+    for column in columns:
+        resolved = resolve_existing_column(column, existing_columns)
+        if resolved is None:
+            column_type = postgres_column_type(column)
+            print(f"Adding missing column {column} {column_type}", flush=True)
+            cursor.execute(
+                sql.SQL("ALTER TABLE {}.{} ADD COLUMN {} {}").format(
+                    sql.Identifier(schema_name),
+                    sql.Identifier(table_name),
+                    sql.Identifier(column),
+                    sql.SQL(column_type),
+                )
+            )
+            existing_columns.append(column)
+            resolved = column
+        insert_columns.append(resolved)
+    return insert_columns
+
+
 def insert_dataframe(frame: pd.DataFrame, schema_name: str, table_name: str, batch_size: int) -> int:
     if frame.empty:
         print("No rows to insert.")
@@ -607,10 +682,17 @@ def insert_dataframe(frame: pd.DataFrame, schema_name: str, table_name: str, bat
 
     with _psycopg2.connect(**connect_kwargs) as connection:
         with connection.cursor() as cursor:
+            insert_columns = ensure_destination_table(
+                cursor,
+                sql,
+                schema_name,
+                table_name,
+                columns,
+            )
             insert_prefix = sql.SQL("INSERT INTO {}.{} ({}) VALUES ").format(
                 sql.Identifier(schema_name),
                 sql.Identifier(table_name),
-                sql.SQL(", ").join(sql.Identifier(column) for column in columns),
+                sql.SQL(", ").join(sql.Identifier(column) for column in insert_columns),
             )
             insert_sql_string = execute_values_sql(insert_prefix.as_string(connection))
             print(
