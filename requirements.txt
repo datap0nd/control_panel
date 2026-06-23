@@ -28,6 +28,16 @@ SHEET_NAME = None  # None means first worksheet.
 CSV_ENCODING = None  # None tries utf-8-sig, utf-8, cp1252, then latin1.
 CSV_SEPARATOR = None  # None tries auto-detect, comma, semicolon, tab, then pipe.
 
+# Optional fixed source schema. Leave empty to use the first file's detected
+# header row. When filled, the file's detected header row is still dropped,
+# but these names are used for every file and all files append by position.
+# Keep metadata columns out of this list; they are added automatically.
+USER_DEFINED_COLUMNS: list[str] = [
+    # "City",
+    # "Column 2",
+    # "Column 3",
+]
+
 # Optional password for normal workbook-password protection.
 # For Microsoft Information Protection / corporate identity encryption,
 # leave this blank and let Excel open the file under your signed-in account.
@@ -61,6 +71,7 @@ class RunConfig:
     sheet_name: str | None
     csv_encoding: str | None
     csv_separator: str | None
+    user_defined_columns: list[str]
     excel_password: str | None
     dry_run: bool
     output_csv: Path | None
@@ -260,10 +271,24 @@ def unique_column_names(columns: Iterable[object]) -> list[str]:
     return names
 
 
+def normalize_user_defined_columns(columns: Iterable[object]) -> list[str]:
+    normalized = unique_column_names(columns)
+    metadata_names = {column.casefold() for column in METADATA_COLUMNS}
+    conflicts = [column for column in normalized if column.casefold() in metadata_names]
+    if conflicts:
+        raise RuntimeError(
+            "USER_DEFINED_COLUMNS must not include metadata columns: "
+            + ", ".join(conflicts)
+        )
+    validate_column_count(normalized + list(METADATA_COLUMNS), "USER_DEFINED_COLUMNS")
+    return normalized
+
+
 def read_transformed_excel_file(
     transformed_path: Path,
     source_path: Path,
     sheet_name: str | None,
+    user_defined_columns: list[str],
 ) -> pd.DataFrame:
     print(f"Reading decrypted copy of {source_path.name}", flush=True)
     rows = read_excel_rows_streaming(transformed_path, sheet_name, source_path.name)
@@ -271,6 +296,7 @@ def read_transformed_excel_file(
         rows=rows,
         source_path=source_path,
         read_label="Excel temp copy",
+        user_defined_columns=user_defined_columns,
     )
     return add_metadata_columns(frame, source_path)
 
@@ -365,6 +391,7 @@ def build_frame_from_filtered_rows(
     rows: list[list[object]],
     source_path: Path,
     read_label: str,
+    user_defined_columns: list[str],
 ) -> pd.DataFrame:
     pandas = require_pandas()
     filtered_rows = [row for row in rows if row_has_cde_info(row)]
@@ -374,7 +401,16 @@ def build_frame_from_filtered_rows(
             "columns C, D, and E are all blank."
         )
 
-    header_width = len(trim_trailing_blanks(filtered_rows[0]))
+    if user_defined_columns:
+        headers = user_defined_columns
+        header_width = len(headers)
+        header_source = "USER_DEFINED_COLUMNS"
+        width_source = "configured schema"
+    else:
+        header_width = len(trim_trailing_blanks(filtered_rows[0]))
+        headers = unique_column_names(filtered_rows[0][:header_width])
+        header_source = "detected header row"
+        width_source = "detected header"
     max_source_columns = POSTGRES_MAX_COLUMNS - len(METADATA_COLUMNS)
     if header_width > max_source_columns:
         raise RuntimeError(
@@ -382,23 +418,23 @@ def build_frame_from_filtered_rows(
             f"but PostgreSQL can store at most {POSTGRES_MAX_COLUMNS} total columns "
             f"including metadata. Check that the correct header row was detected."
         )
-    truncated_rows = sum(1 for row in filtered_rows[1:] if len(row) > header_width)
+    data_rows = filtered_rows[1:]
+    truncated_rows = sum(1 for row in data_rows if len(row) > header_width)
     if truncated_rows:
         print(
             f"Warning: {source_path.name} has {truncated_rows} data rows wider than "
-            f"the detected {header_width}-column header. Extra cells were ignored.",
+            f"the {header_width}-column {width_source}. Extra cells were ignored.",
             flush=True,
         )
     padded_rows = [
         row[:header_width] + [""] * max(0, header_width - len(row))
-        for row in filtered_rows
+        for row in data_rows
     ]
-    headers = unique_column_names(padded_rows[0])
 
-    frame = pandas.DataFrame(padded_rows[1:], columns=headers)
+    frame = pandas.DataFrame(padded_rows, columns=headers)
     print(
         f"Read {source_path.name} using {read_label}; "
-        f"{len(frame)} rows, {len(frame.columns)} source columns",
+        f"{len(frame)} rows, {len(frame.columns)} source columns from {header_source}",
         flush=True,
     )
     return frame
@@ -408,6 +444,7 @@ def read_csv_file(
     source_path: Path,
     csv_encoding: str | None,
     csv_separator: str | None,
+    user_defined_columns: list[str],
 ) -> pd.DataFrame:
     last_error: UnicodeDecodeError | None = None
     csv_errors: list[Exception] = []
@@ -433,6 +470,7 @@ def read_csv_file(
                         f"CSV encoding {encoding}, "
                         f"separator {csv_separator_label(separator)}"
                     ),
+                    user_defined_columns=user_defined_columns,
                 )
                 return add_metadata_columns(frame, source_path)
             except csv.Error as exc:
@@ -525,6 +563,7 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
                         source_path,
                         config.csv_encoding,
                         config.csv_separator,
+                        config.user_defined_columns,
                     )
                 else:
                     transformed_path = transform_workbook_with_excel(
@@ -538,15 +577,17 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
                         transformed_path,
                         source_path,
                         config.sheet_name,
+                        config.user_defined_columns,
                     )
                 if canonical_columns is None:
-                    canonical_columns = source_columns(frame)
+                    canonical_columns = config.user_defined_columns or source_columns(frame)
                     validate_column_count(
                         canonical_columns + list(METADATA_COLUMNS),
                         "canonical transformed data",
                     )
                     print(
-                        f"Using {source_path.name} as canonical schema with "
+                        f"Using {'USER_DEFINED_COLUMNS' if config.user_defined_columns else source_path.name} "
+                        f"as canonical schema with "
                         f"{len(canonical_columns)} source columns",
                         flush=True,
                     )
@@ -870,6 +911,7 @@ def build_config(argv: list[str] | None = None) -> RunConfig:
         sheet_name=args.sheet,
         csv_encoding=args.csv_encoding,
         csv_separator=args.csv_sep,
+        user_defined_columns=normalize_user_defined_columns(USER_DEFINED_COLUMNS),
         excel_password=args.password,
         dry_run=bool(args.dry_run),
         output_csv=output_csv,
