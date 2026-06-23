@@ -36,6 +36,7 @@ EXCEL_PASSWORD = None
 # Insert tuning.
 BATCH_SIZE = 1000
 EXCEL_BLANK_ROW_STOP = 1000
+POSTGRES_MAX_COLUMNS = 1600
 
 # Excel SaveAs file format for .xlsx.
 XL_OPENXML_WORKBOOK = 51
@@ -49,6 +50,7 @@ EXCEL_EXTENSIONS = {".xlsx", ".xlsm", ".xlsb", ".xls"}
 CSV_EXTENSIONS = {".csv"}
 SOURCE_EXTENSIONS = EXCEL_EXTENSIONS | CSV_EXTENSIONS
 CDE_INDEXES = (2, 3, 4)
+METADATA_COLUMNS = ("upload_date", "last_modified_date", "source_file")
 
 
 @dataclass(frozen=True)
@@ -233,9 +235,9 @@ def find_source_files(folder: Path) -> list[Path]:
 def add_metadata_columns(frame: pd.DataFrame, source_path: Path) -> pd.DataFrame:
     last_modified = datetime.fromtimestamp(source_path.stat().st_mtime).replace(microsecond=0)
 
-    frame["upload_date"] = date.today()
-    frame["last_modified_date"] = last_modified
-    frame["source_file"] = source_path.name
+    frame[METADATA_COLUMNS[0]] = date.today()
+    frame[METADATA_COLUMNS[1]] = last_modified
+    frame[METADATA_COLUMNS[2]] = source_path.name
     return frame
 
 
@@ -372,12 +374,33 @@ def build_frame_from_filtered_rows(
             "columns C, D, and E are all blank."
         )
 
-    width = max(len(row) for row in filtered_rows)
-    padded_rows = [row + [""] * (width - len(row)) for row in filtered_rows]
+    header_width = len(trim_trailing_blanks(filtered_rows[0]))
+    max_source_columns = POSTGRES_MAX_COLUMNS - len(METADATA_COLUMNS)
+    if header_width > max_source_columns:
+        raise RuntimeError(
+            f"Detected {header_width} source columns in '{source_path.name}', "
+            f"but PostgreSQL can store at most {POSTGRES_MAX_COLUMNS} total columns "
+            f"including metadata. Check that the correct header row was detected."
+        )
+    truncated_rows = sum(1 for row in filtered_rows[1:] if len(row) > header_width)
+    if truncated_rows:
+        print(
+            f"Warning: {source_path.name} has {truncated_rows} data rows wider than "
+            f"the detected {header_width}-column header. Extra cells were ignored.",
+            flush=True,
+        )
+    padded_rows = [
+        row[:header_width] + [""] * max(0, header_width - len(row))
+        for row in filtered_rows
+    ]
     headers = unique_column_names(padded_rows[0])
 
     frame = pandas.DataFrame(padded_rows[1:], columns=headers)
-    print(f"Read {source_path.name} using {read_label}", flush=True)
+    print(
+        f"Read {source_path.name} using {read_label}; "
+        f"{len(frame)} rows, {len(frame.columns)} source columns",
+        flush=True,
+    )
     return frame
 
 
@@ -478,6 +501,7 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
 
     print(f"Combining {len(frames)} transformed files", flush=True)
     combined = pandas.concat(frames, ignore_index=True, sort=False)
+    validate_column_count(list(combined.columns), "combined transformed data")
     print(
         f"Combined {len(combined)} rows and {len(combined.columns)} columns",
         flush=True,
@@ -595,6 +619,18 @@ def execute_values_sql(insert_prefix: str) -> str:
     return insert_prefix.replace("%", "%%") + "%s"
 
 
+def validate_column_count(columns: list[str], context: str) -> None:
+    if len(columns) <= POSTGRES_MAX_COLUMNS:
+        return
+    preview = ", ".join(columns[:20])
+    raise RuntimeError(
+        f"{context} has {len(columns)} columns, which exceeds PostgreSQL's "
+        f"{POSTGRES_MAX_COLUMNS}-column table limit. This usually means one file "
+        "had the wrong header row, the files do not share one schema, or a row was "
+        f"parsed as thousands of columns. First columns: {preview}"
+    )
+
+
 def postgres_column_type(column_name: str) -> str:
     normalized = column_name.strip().lower()
     if normalized == "upload_date":
@@ -630,6 +666,7 @@ def resolve_existing_column(column_name: str, existing_columns: list[str]) -> st
 
 
 def ensure_destination_table(cursor, sql, schema_name: str, table_name: str, columns: list[str]) -> list[str]:
+    validate_column_count(columns, "insert data")
     cursor.execute(
         sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema_name))
     )
@@ -649,6 +686,17 @@ def ensure_destination_table(cursor, sql, schema_name: str, table_name: str, col
     )
 
     existing_columns = fetch_existing_columns(cursor, schema_name, table_name)
+    missing_count = sum(
+        1
+        for column in columns
+        if resolve_existing_column(column, existing_columns) is None
+    )
+    if len(existing_columns) + missing_count > POSTGRES_MAX_COLUMNS:
+        raise RuntimeError(
+            f"Adding {missing_count} missing columns to {schema_name}.{table_name} "
+            f"would exceed PostgreSQL's {POSTGRES_MAX_COLUMNS}-column table limit. "
+            "Use a fresh table or fix the detected headers before inserting."
+        )
     insert_columns: list[str] = []
     for column in columns:
         resolved = resolve_existing_column(column, existing_columns)
