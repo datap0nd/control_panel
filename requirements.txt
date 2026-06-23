@@ -45,11 +45,11 @@ EXCEL_PASSWORD = None
 
 # Insert tuning.
 BATCH_SIZE = 1000
-EXCEL_BLANK_ROW_STOP = 1000
 POSTGRES_MAX_COLUMNS = 1600
 
-# Excel SaveAs file format for .xlsx.
-XL_OPENXML_WORKBOOK = 51
+# Excel SaveAs file formats.
+XL_CSV = 6
+XL_CSV_UTF8 = 62
 
 # This decoy makes password-protected files fail instead of showing a hidden
 # password dialog. Excel ignores it for unprotected workbooks.
@@ -106,16 +106,8 @@ def import_pywin32():
 
 def require_pandas():
     if pd is None:
-        raise RuntimeError("pandas is required. Install it with: pip install pandas openpyxl")
+        raise RuntimeError("pandas is required. Install it with: pip install pandas")
     return pd
-
-
-def import_openpyxl():
-    try:
-        import openpyxl
-    except ImportError as exc:
-        raise RuntimeError("openpyxl is required. Install it with: pip install openpyxl") from exc
-    return openpyxl
 
 
 @contextmanager
@@ -182,29 +174,34 @@ def open_workbook(excel, file_path: Path, password: str | None):
         raise RuntimeError(f"Excel could not open '{file_path.name}': {message}") from exc
 
 
-def transform_workbook_with_excel(
+def export_workbook_to_csv_with_excel(
     excel,
     source_path: Path,
     temp_dir: Path,
     sheet_name: str | None,
     password: str | None,
 ) -> Path:
-    output_path = temp_dir / f"{source_path.stem}__{uuid.uuid4().hex}.xlsx"
+    output_path = temp_dir / f"{source_path.stem}__{uuid.uuid4().hex}.csv"
     workbook = None
+    csv_workbook = None
     try:
         print(f"Opening {source_path.name} with Excel", flush=True)
         workbook = open_workbook(excel, source_path, password)
-        if sheet_name:
-            workbook.Worksheets(sheet_name).Activate()
-        print(f"Saving decrypted copy of {source_path.name}", flush=True)
-        workbook.SaveAs(
-            str(output_path),
-            FileFormat=XL_OPENXML_WORKBOOK,
-            Password="",
-            WriteResPassword="",
-        )
+        worksheet = workbook.Worksheets(sheet_name) if sheet_name else workbook.Worksheets(1)
+        print(f"Exporting visible values from {source_path.name} to CSV", flush=True)
+        worksheet.Copy()
+        csv_workbook = excel.ActiveWorkbook
+        try:
+            csv_workbook.SaveAs(str(output_path), FileFormat=XL_CSV_UTF8, Local=True)
+        except Exception:
+            csv_workbook.SaveAs(str(output_path), FileFormat=XL_CSV, Local=True)
         return output_path
     finally:
+        if csv_workbook is not None:
+            try:
+                csv_workbook.Close(SaveChanges=False)
+            except Exception:
+                pass
         if workbook is not None:
             try:
                 workbook.Close(SaveChanges=False)
@@ -282,67 +279,6 @@ def normalize_user_defined_columns(columns: Iterable[object]) -> list[str]:
         )
     validate_column_count(normalized + list(METADATA_COLUMNS), "USER_DEFINED_COLUMNS")
     return normalized
-
-
-def read_transformed_excel_file(
-    transformed_path: Path,
-    source_path: Path,
-    sheet_name: str | None,
-    user_defined_columns: list[str],
-) -> pd.DataFrame:
-    print(f"Reading decrypted copy of {source_path.name}", flush=True)
-    rows = read_excel_rows_streaming(transformed_path, sheet_name, source_path.name)
-    frame = build_frame_from_filtered_rows(
-        rows=rows,
-        source_path=source_path,
-        read_label="Excel temp copy",
-        user_defined_columns=user_defined_columns,
-    )
-    return add_metadata_columns(frame, source_path)
-
-
-def read_excel_rows_streaming(
-    transformed_path: Path,
-    sheet_name: str | None,
-    display_name: str,
-) -> list[list[object]]:
-    openpyxl = import_openpyxl()
-    workbook = openpyxl.load_workbook(
-        transformed_path,
-        read_only=True,
-        data_only=True,
-        keep_links=False,
-    )
-    try:
-        worksheet = workbook[sheet_name] if sheet_name else workbook.worksheets[0]
-        rows: list[list[object]] = []
-        seen_cde_row = False
-        blank_streak = 0
-        scanned_rows = 0
-        for raw_row in worksheet.iter_rows(values_only=True):
-            scanned_rows += 1
-            row = trim_trailing_blanks(raw_row)
-            if row_has_cde_info(row):
-                rows.append(row)
-                seen_cde_row = True
-                blank_streak = 0
-                continue
-            if seen_cde_row:
-                blank_streak += 1
-                if blank_streak >= EXCEL_BLANK_ROW_STOP:
-                    print(
-                        f"Stopped scanning {display_name} after {blank_streak} blank C/D/E rows",
-                        flush=True,
-                    )
-                    break
-        print(
-            f"Scanned {scanned_rows} Excel rows from {display_name}; "
-            f"kept {len(rows)} rows with data in C/D/E",
-            flush=True,
-        )
-        return rows
-    finally:
-        workbook.close()
 
 
 def csv_encoding_candidates(csv_encoding: str | None) -> list[str | None]:
@@ -445,7 +381,10 @@ def read_csv_file(
     csv_encoding: str | None,
     csv_separator: str | None,
     user_defined_columns: list[str],
+    metadata_source_path: Path | None = None,
 ) -> pd.DataFrame:
+    metadata_path = metadata_source_path or source_path
+    display_name = metadata_path.name
     last_error: UnicodeDecodeError | None = None
     csv_errors: list[Exception] = []
     no_cde_attempts: list[tuple[str, str]] = []
@@ -465,32 +404,32 @@ def read_csv_file(
                     continue
                 frame = build_frame_from_filtered_rows(
                     rows=rows,
-                    source_path=source_path,
+                    source_path=metadata_path,
                     read_label=(
                         f"CSV encoding {encoding}, "
                         f"separator {csv_separator_label(separator)}"
                     ),
                     user_defined_columns=user_defined_columns,
                 )
-                return add_metadata_columns(frame, source_path)
+                return add_metadata_columns(frame, metadata_path)
             except csv.Error as exc:
                 csv_errors.append(exc)
                 continue
     if no_cde_attempts:
         encoding, separator = no_cde_attempts[-1]
         raise RuntimeError(
-            f"No rows remained in '{source_path.name}' after dropping rows where "
+            f"No rows remained in '{display_name}' after dropping rows where "
             "columns C, D, and E are all blank. "
             f"Last tried encoding {encoding}, separator {csv_separator_label(separator)}. "
             "Try passing the real delimiter, for example --csv-sep ';' or --csv-sep '\\t'."
         )
     if csv_errors:
         raise RuntimeError(
-            f"Could not parse CSV file '{source_path.name}'. "
+            f"Could not parse CSV file '{display_name}'. "
             "Try passing the real delimiter, for example --csv-sep ';' or --csv-sep '\\t'."
         ) from csv_errors[-1]
     raise RuntimeError(
-        f"Could not decode CSV file '{source_path.name}'. "
+        f"Could not decode CSV file '{display_name}'. "
         "Try passing --csv-encoding cp1252 or --csv-encoding latin1."
     ) from last_error
 
@@ -566,18 +505,19 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
                         config.user_defined_columns,
                     )
                 else:
-                    transformed_path = transform_workbook_with_excel(
+                    exported_csv_path = export_workbook_to_csv_with_excel(
                         excel=excel,
                         source_path=source_path,
                         temp_dir=temp_dir,
                         sheet_name=config.sheet_name,
                         password=config.excel_password,
                     )
-                    frame = read_transformed_excel_file(
-                        transformed_path,
-                        source_path,
-                        config.sheet_name,
+                    frame = read_csv_file(
+                        exported_csv_path,
+                        config.csv_encoding,
+                        config.csv_separator,
                         config.user_defined_columns,
+                        source_path,
                     )
                 if canonical_columns is None:
                     canonical_columns = config.user_defined_columns or source_columns(frame)
