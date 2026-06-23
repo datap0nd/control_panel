@@ -4,6 +4,7 @@ import argparse
 import math
 import os
 import platform
+import re
 import tempfile
 import uuid
 from contextlib import contextmanager, nullcontext
@@ -25,6 +26,7 @@ SCHEMA_NAME = "public"
 TABLE_NAME = "FILL_ME_IN"
 SHEET_NAME = None  # None means first worksheet.
 CSV_ENCODING = None  # None tries utf-8-sig, utf-8, cp1252, then latin1.
+CSV_SEPARATOR = None  # None tries auto-detect, comma, semicolon, tab, then pipe.
 
 # Optional password for normal workbook-password protection.
 # For Microsoft Information Protection / corporate identity encryption,
@@ -54,6 +56,7 @@ class RunConfig:
     table_name: str
     sheet_name: str | None
     csv_encoding: str | None
+    csv_separator: str | None
     excel_password: str | None
     dry_run: bool
     output_csv: Path | None
@@ -220,20 +223,94 @@ def csv_encoding_candidates(csv_encoding: str | None) -> list[str | None]:
     return ["utf-8-sig", "utf-8", "cp1252", "latin1"]
 
 
-def read_csv_file(source_path: Path, csv_encoding: str | None) -> pd.DataFrame:
+def csv_separator_candidates(csv_separator: str | None) -> list[str | None]:
+    if csv_separator:
+        return [csv_separator.replace("\\t", "\t")]
+    return [None, ",", ";", "\t", "|"]
+
+
+def csv_separator_label(csv_separator: str | None) -> str:
+    if csv_separator is None:
+        return "auto"
+    if csv_separator == "\t":
+        return "\\t"
+    return csv_separator
+
+
+def parser_line_number(message: str) -> int | None:
+    match = re.search(r"line\s+(\d+)", message, flags=re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def csv_line_preview(source_path: Path, line_number: int | None, encoding: str | None) -> str:
+    if not line_number:
+        return ""
+    try:
+        with source_path.open("r", encoding=encoding or "utf-8", errors="replace") as handle:
+            for current_line, text in enumerate(handle, start=1):
+                if current_line == line_number:
+                    return text.rstrip("\r\n")
+    except OSError:
+        return ""
+    return ""
+
+
+def read_csv_file(
+    source_path: Path,
+    csv_encoding: str | None,
+    csv_separator: str | None,
+) -> pd.DataFrame:
     pandas = require_pandas()
     last_error: UnicodeDecodeError | None = None
+    parse_errors: list[tuple[str | None, str | None, Exception]] = []
+    fallback_frame = None
+    fallback_label = ""
     for encoding in csv_encoding_candidates(csv_encoding):
-        read_kwargs = {"skiprows": 2, "dtype": object, "encoding": encoding}
-        try:
-            frame = pandas.read_csv(source_path, **read_kwargs)
-            if encoding:
-                print(f"Read {source_path.name} using CSV encoding {encoding}")
-            return add_metadata_columns(frame, source_path)
-        except UnicodeDecodeError as exc:
-            last_error = exc
-            if csv_encoding:
+        for separator in csv_separator_candidates(csv_separator):
+            read_kwargs = {
+                "skiprows": 2,
+                "dtype": object,
+                "encoding": encoding,
+                "engine": "python",
+                "sep": separator,
+            }
+            try:
+                frame = pandas.read_csv(source_path, **read_kwargs)
+            except UnicodeDecodeError as exc:
+                last_error = exc
+                if csv_encoding:
+                    raise
                 break
+            except pandas.errors.ParserError as exc:
+                parse_errors.append((encoding, separator, exc))
+                continue
+            label = f"encoding {encoding}, separator {csv_separator_label(separator)}"
+            if len(frame.columns) > 1 or csv_separator:
+                print(f"Read {source_path.name} using CSV {label}")
+                return add_metadata_columns(frame, source_path)
+            fallback_frame = frame
+            fallback_label = label
+    if fallback_frame is not None and not parse_errors:
+        print(f"Read {source_path.name} using CSV {fallback_label}")
+        return add_metadata_columns(fallback_frame, source_path)
+    if parse_errors:
+        encoding, separator, error = parse_errors[-1]
+        line_number = parser_line_number(str(error))
+        preview = csv_line_preview(source_path, line_number, encoding)
+        preview_message = f" Offending line preview: {preview}" if preview else ""
+        raise RuntimeError(
+            f"Could not parse CSV file '{source_path.name}'. "
+            f"Last tried encoding {encoding} and separator {csv_separator_label(separator)}. "
+            "The file appears to have inconsistent columns after the first two rows. "
+            "Try passing the real delimiter, for example --csv-sep ';' or --csv-sep '\\t'. "
+            "If the delimiter is comma, inspect the reported line for unquoted commas inside values."
+            f"{preview_message}"
+        ) from error
     raise RuntimeError(
         f"Could not decode CSV file '{source_path.name}'. "
         "Try passing --csv-encoding cp1252 or --csv-encoding latin1."
@@ -253,7 +330,13 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
             for source_path in files:
                 print(f"Transforming {source_path.name}")
                 if source_path.suffix.lower() in CSV_EXTENSIONS:
-                    frames.append(read_csv_file(source_path, config.csv_encoding))
+                    frames.append(
+                        read_csv_file(
+                            source_path,
+                            config.csv_encoding,
+                            config.csv_separator,
+                        )
+                    )
                     continue
                 transformed_path = transform_workbook_with_excel(
                     excel=excel,
@@ -420,6 +503,11 @@ def build_config(argv: list[str] | None = None) -> RunConfig:
         default=globals().get("CSV_ENCODING"),
         help="Optional CSV encoding, for example utf-8-sig.",
     )
+    parser.add_argument(
+        "--csv-sep",
+        default=globals().get("CSV_SEPARATOR"),
+        help="Optional CSV delimiter, for example ',' ';' '|' or '\\t'.",
+    )
     parser.add_argument("--password", default=EXCEL_PASSWORD, help="Optional workbook password.")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Insert batch size.")
     parser.add_argument(
@@ -443,6 +531,7 @@ def build_config(argv: list[str] | None = None) -> RunConfig:
         table_name=str(args.table),
         sheet_name=args.sheet,
         csv_encoding=args.csv_encoding,
+        csv_separator=args.csv_sep,
         excel_password=args.password,
         dry_run=bool(args.dry_run),
         output_csv=output_csv,
