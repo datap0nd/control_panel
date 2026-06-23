@@ -35,6 +35,7 @@ EXCEL_PASSWORD = None
 
 # Insert tuning.
 BATCH_SIZE = 1000
+EXCEL_BLANK_ROW_STOP = 1000
 
 # Excel SaveAs file format for .xlsx.
 XL_OPENXML_WORKBOOK = 51
@@ -94,6 +95,14 @@ def require_pandas():
     if pd is None:
         raise RuntimeError("pandas is required. Install it with: pip install pandas openpyxl")
     return pd
+
+
+def import_openpyxl():
+    try:
+        import openpyxl
+    except ImportError as exc:
+        raise RuntimeError("openpyxl is required. Install it with: pip install openpyxl") from exc
+    return openpyxl
 
 
 @contextmanager
@@ -199,6 +208,13 @@ def has_text(value: object) -> bool:
     return value is not None and str(value).strip() != ""
 
 
+def trim_trailing_blanks(row: Iterable[object]) -> list[object]:
+    values = list(row)
+    while values and not has_text(values[-1]):
+        values.pop()
+    return values
+
+
 def find_source_files(folder: Path) -> list[Path]:
     if not folder.exists() or not folder.is_dir():
         raise ValueError(f"Folder does not exist or is not a directory: {folder}")
@@ -246,21 +262,58 @@ def read_transformed_excel_file(
     source_path: Path,
     sheet_name: str | None,
 ) -> pd.DataFrame:
-    pandas = require_pandas()
-    raw_frame = pandas.read_excel(
-        transformed_path,
-        engine="openpyxl",
-        dtype=object,
-        header=None,
-        sheet_name=sheet_name or 0,
-    )
-    rows = raw_frame.where(pandas.notna(raw_frame), "").values.tolist()
+    print(f"Reading decrypted copy of {source_path.name}", flush=True)
+    rows = read_excel_rows_streaming(transformed_path, sheet_name, source_path.name)
     frame = build_frame_from_filtered_rows(
         rows=rows,
         source_path=source_path,
         read_label="Excel temp copy",
     )
     return add_metadata_columns(frame, source_path)
+
+
+def read_excel_rows_streaming(
+    transformed_path: Path,
+    sheet_name: str | None,
+    display_name: str,
+) -> list[list[object]]:
+    openpyxl = import_openpyxl()
+    workbook = openpyxl.load_workbook(
+        transformed_path,
+        read_only=True,
+        data_only=True,
+        keep_links=False,
+    )
+    try:
+        worksheet = workbook[sheet_name] if sheet_name else workbook.worksheets[0]
+        rows: list[list[object]] = []
+        seen_cde_row = False
+        blank_streak = 0
+        scanned_rows = 0
+        for raw_row in worksheet.iter_rows(values_only=True):
+            scanned_rows += 1
+            row = trim_trailing_blanks(raw_row)
+            if row_has_cde_info(row):
+                rows.append(row)
+                seen_cde_row = True
+                blank_streak = 0
+                continue
+            if seen_cde_row:
+                blank_streak += 1
+                if blank_streak >= EXCEL_BLANK_ROW_STOP:
+                    print(
+                        f"Stopped scanning {display_name} after {blank_streak} blank C/D/E rows",
+                        flush=True,
+                    )
+                    break
+        print(
+            f"Scanned {scanned_rows} Excel rows from {display_name}; "
+            f"kept {len(rows)} rows with data in C/D/E",
+            flush=True,
+        )
+        return rows
+    finally:
+        workbook.close()
 
 
 def csv_encoding_candidates(csv_encoding: str | None) -> list[str | None]:
@@ -302,7 +355,7 @@ def ordered_csv_separators(csv_separator: str | None, sample: str) -> list[str]:
 
 def read_csv_rows(source_path: Path, encoding: str, separator: str) -> list[list[str]]:
     with source_path.open("r", encoding=encoding, newline="") as handle:
-        return [list(row) for row in csv.reader(handle, delimiter=separator)]
+        return [trim_trailing_blanks(row) for row in csv.reader(handle, delimiter=separator)]
 
 
 def build_frame_from_filtered_rows(
@@ -422,7 +475,12 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
                     )
                 )
 
+    print(f"Combining {len(frames)} transformed files", flush=True)
     combined = pandas.concat(frames, ignore_index=True, sort=False)
+    print(
+        f"Combined {len(combined)} rows and {len(combined.columns)} columns",
+        flush=True,
+    )
     return combined
 
 
