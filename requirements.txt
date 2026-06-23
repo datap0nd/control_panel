@@ -24,7 +24,7 @@ INPUT_FOLDER = r""
 SCHEMA_NAME = "public"
 TABLE_NAME = "FILL_ME_IN"
 SHEET_NAME = None  # None means first worksheet.
-CSV_ENCODING = None  # Example: "utf-8-sig" if your CSV has a BOM.
+CSV_ENCODING = None  # None tries utf-8-sig, utf-8, cp1252, then latin1.
 
 # Optional password for normal workbook-password protection.
 # For Microsoft Information Protection / corporate identity encryption,
@@ -214,13 +214,30 @@ def read_transformed_excel_file(transformed_path: Path, source_path: Path) -> pd
     return add_metadata_columns(frame, source_path)
 
 
+def csv_encoding_candidates(csv_encoding: str | None) -> list[str | None]:
+    if csv_encoding:
+        return [csv_encoding]
+    return ["utf-8-sig", "utf-8", "cp1252", "latin1"]
+
+
 def read_csv_file(source_path: Path, csv_encoding: str | None) -> pd.DataFrame:
     pandas = require_pandas()
-    read_kwargs = {"skiprows": 2, "dtype": object}
-    if csv_encoding:
-        read_kwargs["encoding"] = csv_encoding
-    frame = pandas.read_csv(source_path, **read_kwargs)
-    return add_metadata_columns(frame, source_path)
+    last_error: UnicodeDecodeError | None = None
+    for encoding in csv_encoding_candidates(csv_encoding):
+        read_kwargs = {"skiprows": 2, "dtype": object, "encoding": encoding}
+        try:
+            frame = pandas.read_csv(source_path, **read_kwargs)
+            if encoding:
+                print(f"Read {source_path.name} using CSV encoding {encoding}")
+            return add_metadata_columns(frame, source_path)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            if csv_encoding:
+                break
+    raise RuntimeError(
+        f"Could not decode CSV file '{source_path.name}'. "
+        "Try passing --csv-encoding cp1252 or --csv-encoding latin1."
+    ) from last_error
 
 
 def transform_folder(config: RunConfig) -> pd.DataFrame:
@@ -398,7 +415,11 @@ def build_config(argv: list[str] | None = None) -> RunConfig:
     parser.add_argument("--schema", default=SCHEMA_NAME, help="Destination schema name.")
     parser.add_argument("--table", default=TABLE_NAME, help="Destination table name.")
     parser.add_argument("--sheet", default=SHEET_NAME, help="Worksheet name. Defaults to the first worksheet.")
-    parser.add_argument("--csv-encoding", default=CSV_ENCODING, help="Optional CSV encoding, for example utf-8-sig.")
+    parser.add_argument(
+        "--csv-encoding",
+        default=globals().get("CSV_ENCODING"),
+        help="Optional CSV encoding, for example utf-8-sig.",
+    )
     parser.add_argument("--password", default=EXCEL_PASSWORD, help="Optional workbook password.")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Insert batch size.")
     parser.add_argument(
