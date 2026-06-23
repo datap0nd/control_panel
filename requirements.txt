@@ -1,16 +1,23 @@
 -- Recurrent SMP amount feed view.
 --
--- Run once after bi_reporting.inflow_outflow_mv exists:
+-- Run after bi_reporting.inflow_outflow_mv exists, and rerun whenever this
+-- report shape changes:
 --   psql "$DATABASE_URL" -f queries_ran/smp_amount_feed_view.sql
 --
--- Then export when needed with:
---   psql "$DATABASE_URL" -f queries_ran/smp_amount_feed_export.sql > smp_amount_feed.csv
+-- To download the recurrent report, export from:
+--   bi_reporting.smp_amount_feed_v
 --
 -- This is a normal view, not a materialized view. The final inflow/outflow
 -- source is already materialized, so this view stays current after the final
 -- MV is refreshed without adding another refresh dependency.
+--
+-- Time grain:
+--   One row per calendar quarter from 2025 onward, exposed as time_period
+--   values such as Q1 2025 and Q2 2025.
 
-create or replace view bi_reporting.smp_amount_feed_v as
+drop view if exists bi_reporting.smp_amount_feed_v;
+
+create view bi_reporting.smp_amount_feed_v as
 with item_map as (
     select
         "Item ID"::text as item_id,
@@ -23,6 +30,12 @@ with item_map as (
 ),
 base as (
     select
+        (f."Month"::bigint / 100)::integer as period_year,
+        (((f."Month"::bigint % 100)::integer - 1) / 3 + 1)::integer as period_quarter,
+        'Q'
+            || (((f."Month"::bigint % 100)::integer - 1) / 3 + 1)::text
+            || ' '
+            || (f."Month"::bigint / 100)::text as time_period,
         f."Subsidiary"::text as subsidiary,
         'Smartphone'::text as device_type,
         case
@@ -36,11 +49,15 @@ base as (
     join item_map im
         on im.item_id = f."ItemID"
     where f."Biz Grp" = 'SMART'
+      and f."Month" >= 202501
       and f."Subsidiary" is not null
       and f."Subsidiary" <> ''
 ),
 feed_rows as (
     select
+        period_year,
+        period_quarter,
+        time_period,
         subsidiary,
         device_type,
         'SMP Total'::text as aggregation_level,
@@ -50,12 +67,18 @@ feed_rows as (
         sum(outflow_amount) as outflow_amount
     from base
     group by
+        period_year,
+        period_quarter,
+        time_period,
         subsidiary,
         device_type
 
     union all
 
     select
+        period_year,
+        period_quarter,
+        time_period,
         subsidiary,
         device_type,
         'Segment'::text as aggregation_level,
@@ -65,6 +88,9 @@ feed_rows as (
         sum(outflow_amount) as outflow_amount
     from base
     group by
+        period_year,
+        period_quarter,
+        time_period,
         subsidiary,
         device_type,
         segment
@@ -72,6 +98,9 @@ feed_rows as (
     union all
 
     select
+        period_year,
+        period_quarter,
+        time_period,
         subsidiary,
         device_type,
         'Device'::text as aggregation_level,
@@ -81,12 +110,18 @@ feed_rows as (
         sum(outflow_amount) as outflow_amount
     from base
     group by
+        period_year,
+        period_quarter,
+        time_period,
         subsidiary,
         device_type,
         segment,
         device
 )
 select
+    period_year,
+    period_quarter,
+    time_period,
     subsidiary,
     device_type,
     aggregation_level,
