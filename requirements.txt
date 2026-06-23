@@ -1,981 +1,131 @@
-from __future__ import annotations
-
-import argparse
-import csv
-import math
-import os
-import platform
-import tempfile
-import uuid
-from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass
-from datetime import date, datetime
-from pathlib import Path
-from typing import Iterable
-from urllib.parse import parse_qs, unquote, urlsplit
-
-try:
-    import pandas as pd
-except ImportError:
-    pd = None  # type: ignore[assignment]
-
-
-# Fill these in, or pass them through CLI flags.
-INPUT_FOLDER = r""
-SCHEMA_NAME = "public"
-TABLE_NAME = "FILL_ME_IN"
-SHEET_NAME = None  # None means first worksheet.
-CSV_ENCODING = None  # None tries utf-8-sig, utf-8, cp1252, then latin1.
-CSV_SEPARATOR = None  # None tries auto-detect, comma, semicolon, tab, then pipe.
-USE_EXCEL_FOR_CSV = True  # True lets Excel/NASCA decrypt CSV files before parsing.
-SKIP_FILE_ERRORS = False  # True skips files Excel/Python cannot process.
-
-# Optional fixed source schema. Leave empty to use the first file's detected
-# header row. When filled, the file's detected header row is still dropped,
-# but these names are used for every file and all files append by position.
-# Keep metadata columns out of this list; they are added automatically.
-USER_DEFINED_COLUMNS: list[str] = [
-    # "City",
-    # "Column 2",
-    # "Column 3",
-]
-
-# Optional password for normal workbook-password protection.
-# For Microsoft Information Protection / corporate identity encryption,
-# leave this blank and let Excel open the file under your signed-in account.
-EXCEL_PASSWORD = None
-
-# Insert tuning.
-BATCH_SIZE = 1000
-POSTGRES_MAX_COLUMNS = 1600
-
-# Excel SaveAs file formats.
-XL_CSV = 6
-XL_CSV_UTF8 = 62
-
-# This decoy makes password-protected files fail instead of showing a hidden
-# password dialog. Excel ignores it for unprotected workbooks.
-DECOY_PASSWORD = "no-password-provided"
-
-
-EXCEL_EXTENSIONS = {".xlsx", ".xlsm", ".xlsb", ".xls"}
-CSV_EXTENSIONS = {".csv"}
-SOURCE_EXTENSIONS = EXCEL_EXTENSIONS | CSV_EXTENSIONS
-CDE_INDEXES = (2, 3, 4)
-METADATA_COLUMNS = ("upload_date", "last_modified_date", "source_file")
-
-
-@dataclass(frozen=True)
-class RunConfig:
-    folder: Path
-    schema_name: str
-    table_name: str
-    sheet_name: str | None
-    csv_encoding: str | None
-    csv_separator: str | None
-    use_excel_for_csv: bool
-    user_defined_columns: list[str]
-    excel_password: str | None
-    dry_run: bool
-    output_csv: Path | None
-    batch_size: int
-    skip_file_errors: bool
-
-
-def get_env(name: str) -> str:
-    value = os.environ.get(name)
-    if value is None:
-        value = os.environ.get(name.upper())
-    return (value or "").strip()
-
-
-def require_windows_excel() -> None:
-    if platform.system() != "Windows":
-        raise RuntimeError(
-            "This script must run on Windows with desktop Microsoft Excel installed. "
-            "pywin32 cannot automate Excel on macOS or Linux."
-        )
-
-
-def import_pywin32():
-    try:
-        import pythoncom
-        import win32com.client
-    except ImportError as exc:
-        raise RuntimeError(
-            "pywin32 is required. Install it with: pip install pywin32"
-        ) from exc
-    return pythoncom, win32com.client
-
-
-def require_pandas():
-    if pd is None:
-        raise RuntimeError("pandas is required. Install it with: pip install pandas")
-    return pd
-
-
-@contextmanager
-def excel_application():
-    require_windows_excel()
-    pythoncom, win32_client = import_pywin32()
-    pythoncom.CoInitialize()
-    excel = None
-    try:
-        # DispatchEx starts a private Excel process instead of attaching to
-        # whatever workbook the user already has open.
-        excel = win32_client.DispatchEx("Excel.Application")
-        silence_excel(excel)
-        yield excel
-    finally:
-        if excel is not None:
-            try:
-                excel.DisplayAlerts = False
-            except Exception:
-                pass
-            try:
-                excel.Quit()
-            except Exception:
-                pass
-        pythoncom.CoUninitialize()
-
-
-def silence_excel(excel) -> None:
-    # msoAutomationSecurityForceDisable = 3. Prevents macro prompts/runs.
-    for attribute, value in (
-        ("Visible", False),
-        ("DisplayAlerts", False),
-        ("ScreenUpdating", False),
-        ("EnableEvents", False),
-        ("AskToUpdateLinks", False),
-        ("AutomationSecurity", 3),
-    ):
-        try:
-            setattr(excel, attribute, value)
-        except Exception:
-            pass
-
-
-def open_workbook(excel, file_path: Path, password: str | None):
-    open_password = password if password else DECOY_PASSWORD
-    path_text = str(file_path.resolve())
-    attempts = []
-    if file_path.suffix.lower() in CSV_EXTENSIONS and not password:
-        attempts.extend(
-            [
-                (
-                    "CSV open without password arguments",
-                    lambda: excel.Workbooks.Open(
-                        path_text,
-                        UpdateLinks=0,
-                        ReadOnly=True,
-                        IgnoreReadOnlyRecommended=True,
-                        AddToMru=False,
-                        Notify=False,
-                        Local=True,
-                    ),
-                ),
-                ("minimal CSV open", lambda: excel.Workbooks.Open(path_text)),
-            ]
-        )
-    attempts.append(
-        (
-            "workbook open with password guard",
-            lambda: excel.Workbooks.Open(
-                path_text,
-                UpdateLinks=0,
-                ReadOnly=True,
-                IgnoreReadOnlyRecommended=True,
-                AddToMru=False,
-                Notify=False,
-                Password=open_password,
-                WriteResPassword=open_password,
-            ),
-        )
-    )
-    if not password:
-        attempts.append(
-            (
-                "workbook open without password arguments",
-                lambda: excel.Workbooks.Open(
-                    path_text,
-                    UpdateLinks=0,
-                    ReadOnly=True,
-                    IgnoreReadOnlyRecommended=True,
-                    AddToMru=False,
-                    Notify=False,
-                ),
-            )
-        )
-
-    errors: list[str] = []
-    last_exception: Exception | None = None
-    for label, opener in attempts:
-        try:
-            return opener()
-        except Exception as exc:
-            last_exception = exc
-            errors.append(f"{label}: {exc}")
-
-    joined_errors = " | ".join(errors)
-    if "password" in joined_errors.lower():
-        raise RuntimeError(
-            f"Excel reported that '{file_path.name}' needs a workbook password. "
-            "Set EXCEL_PASSWORD in this script or pass --password."
-        ) from last_exception
-    raise RuntimeError(
-        f"Excel could not open '{file_path.name}'. Tried {len(attempts)} open method(s). "
-        f"Errors: {joined_errors}"
-    ) from last_exception
-
-
-def export_workbook_to_csv_with_excel(
-    excel,
-    source_path: Path,
-    temp_dir: Path,
-    sheet_name: str | None,
-    password: str | None,
-) -> Path:
-    output_path = temp_dir / f"{source_path.stem}__{uuid.uuid4().hex}.csv"
-    workbook = None
-    csv_workbook = None
-    try:
-        print(f"Opening {source_path.name} with Excel", flush=True)
-        workbook = open_workbook(excel, source_path, password)
-        worksheet = workbook.Worksheets(sheet_name) if sheet_name else workbook.Worksheets(1)
-        print(f"Exporting visible values from {source_path.name} to CSV", flush=True)
-        worksheet.Copy()
-        csv_workbook = excel.ActiveWorkbook
-        try:
-            csv_workbook.SaveAs(str(output_path), FileFormat=XL_CSV_UTF8, Local=True)
-        except Exception:
-            csv_workbook.SaveAs(str(output_path), FileFormat=XL_CSV, Local=True)
-        return output_path
-    finally:
-        if csv_workbook is not None:
-            try:
-                csv_workbook.Close(SaveChanges=False)
-            except Exception:
-                pass
-        if workbook is not None:
-            try:
-                workbook.Close(SaveChanges=False)
-            except Exception:
-                pass
-
-
-def has_text(value: object) -> bool:
-    try:
-        if pd is not None and pd.isna(value):
-            return False
-    except (TypeError, ValueError):
-        pass
-    return value is not None and str(value).strip() != ""
-
-
-def trim_trailing_blanks(row: Iterable[object]) -> list[object]:
-    values = list(row)
-    while values and not has_text(values[-1]):
-        values.pop()
-    return values
-
-
-def find_source_files(folder: Path) -> list[Path]:
-    if not folder.exists() or not folder.is_dir():
-        raise ValueError(f"Folder does not exist or is not a directory: {folder}")
-    files = [
-        path
-        for path in sorted(folder.iterdir())
-        if path.is_file()
-        and path.suffix.lower() in SOURCE_EXTENSIONS
-        and not path.name.startswith("~$")
-    ]
-    if not files:
-        raise ValueError(f"No Excel or CSV files found in: {folder}")
-    return files
-
-
-def add_metadata_columns(frame: pd.DataFrame, source_path: Path) -> pd.DataFrame:
-    last_modified = datetime.fromtimestamp(source_path.stat().st_mtime).replace(microsecond=0)
-
-    frame[METADATA_COLUMNS[0]] = date.today()
-    frame[METADATA_COLUMNS[1]] = last_modified
-    frame[METADATA_COLUMNS[2]] = source_path.name
-    return frame
-
-
-def clean_column_name(value: object, position: int) -> str:
-    text = "" if value is None else str(value).replace("\x00", "").strip()
-    if not text or text.lower().startswith("unnamed:"):
-        return f"column_{position}"
-    return text
-
-
-def unique_column_names(columns: Iterable[object]) -> list[str]:
-    names: list[str] = []
-    seen: dict[str, int] = {}
-    for position, value in enumerate(columns, start=1):
-        base = "City" if position == 1 else clean_column_name(value, position)
-        key = base.casefold()
-        count = seen.get(key, 0) + 1
-        seen[key] = count
-        names.append(base if count == 1 else f"{base}_{count}")
-    return names
-
-
-def normalize_user_defined_columns(columns: Iterable[object]) -> list[str]:
-    normalized = unique_column_names(columns)
-    metadata_names = {column.casefold() for column in METADATA_COLUMNS}
-    conflicts = [column for column in normalized if column.casefold() in metadata_names]
-    if conflicts:
-        raise RuntimeError(
-            "USER_DEFINED_COLUMNS must not include metadata columns: "
-            + ", ".join(conflicts)
-        )
-    validate_column_count(normalized + list(METADATA_COLUMNS), "USER_DEFINED_COLUMNS")
-    return normalized
-
-
-def csv_encoding_candidates(csv_encoding: str | None) -> list[str | None]:
-    if csv_encoding:
-        return [csv_encoding]
-    return ["utf-8-sig", "utf-8", "cp1252", "latin1"]
-
-
-def csv_separator_label(csv_separator: str | None) -> str:
-    if csv_separator is None:
-        return "auto"
-    if csv_separator == "\t":
-        return "\\t"
-    return csv_separator
-
-
-def row_has_cde_info(row: list[object]) -> bool:
-    return any(index < len(row) and has_text(row[index]) for index in CDE_INDEXES)
-
-
-def sniff_csv_separator(sample: str) -> str | None:
-    try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-    except csv.Error:
-        return None
-    return dialect.delimiter
-
-
-def ordered_csv_separators(csv_separator: str | None, sample: str) -> list[str]:
-    if csv_separator:
-        return [csv_separator.replace("\\t", "\t")]
-    candidates: list[str] = []
-    sniffed = sniff_csv_separator(sample)
-    for separator in (sniffed, ",", ";", "\t", "|"):
-        if separator and separator not in candidates:
-            candidates.append(separator)
-    return candidates
-
-
-def read_csv_rows(source_path: Path, encoding: str, separator: str) -> list[list[str]]:
-    with source_path.open("r", encoding=encoding, newline="") as handle:
-        return [trim_trailing_blanks(row) for row in csv.reader(handle, delimiter=separator)]
-
-
-def build_frame_from_filtered_rows(
-    rows: list[list[object]],
-    source_path: Path,
-    read_label: str,
-    user_defined_columns: list[str],
-) -> pd.DataFrame:
-    pandas = require_pandas()
-    filtered_rows = [row for row in rows if row_has_cde_info(row)]
-    if not filtered_rows:
-        raise RuntimeError(
-            f"No rows remained in '{source_path.name}' after dropping rows where "
-            "columns C, D, and E are all blank."
-        )
-
-    if user_defined_columns:
-        headers = user_defined_columns
-        header_width = len(headers)
-        header_source = "USER_DEFINED_COLUMNS"
-        width_source = "configured schema"
-    else:
-        header_width = len(trim_trailing_blanks(filtered_rows[0]))
-        headers = unique_column_names(filtered_rows[0][:header_width])
-        header_source = "detected header row"
-        width_source = "detected header"
-    max_source_columns = POSTGRES_MAX_COLUMNS - len(METADATA_COLUMNS)
-    if header_width > max_source_columns:
-        raise RuntimeError(
-            f"Detected {header_width} source columns in '{source_path.name}', "
-            f"but PostgreSQL can store at most {POSTGRES_MAX_COLUMNS} total columns "
-            f"including metadata. Check that the correct header row was detected."
-        )
-    data_rows = filtered_rows[1:]
-    truncated_rows = sum(1 for row in data_rows if len(row) > header_width)
-    if truncated_rows:
-        print(
-            f"Warning: {source_path.name} has {truncated_rows} data rows wider than "
-            f"the {header_width}-column {width_source}. Extra cells were ignored.",
-            flush=True,
-        )
-    padded_rows = [
-        row[:header_width] + [""] * max(0, header_width - len(row))
-        for row in data_rows
-    ]
-
-    frame = pandas.DataFrame(padded_rows, columns=headers)
-    print(
-        f"Read {source_path.name} using {read_label}; "
-        f"{len(frame)} rows, {len(frame.columns)} source columns from {header_source}",
-        flush=True,
-    )
-    return frame
-
-
-def read_csv_file(
-    source_path: Path,
-    csv_encoding: str | None,
-    csv_separator: str | None,
-    user_defined_columns: list[str],
-    metadata_source_path: Path | None = None,
-) -> pd.DataFrame:
-    metadata_path = metadata_source_path or source_path
-    display_name = metadata_path.name
-    last_error: UnicodeDecodeError | None = None
-    csv_errors: list[Exception] = []
-    no_cde_attempts: list[tuple[str, str]] = []
-    for encoding in csv_encoding_candidates(csv_encoding):
-        try:
-            sample = source_path.read_text(encoding=encoding, errors="strict")[:8192]
-        except UnicodeDecodeError as exc:
-            last_error = exc
-            if csv_encoding:
-                break
-            continue
-        for separator in ordered_csv_separators(csv_separator, sample):
-            try:
-                rows = read_csv_rows(source_path, encoding, separator)
-                if not any(row_has_cde_info(row) for row in rows):
-                    no_cde_attempts.append((encoding, separator))
-                    continue
-                frame = build_frame_from_filtered_rows(
-                    rows=rows,
-                    source_path=metadata_path,
-                    read_label=(
-                        f"CSV encoding {encoding}, "
-                        f"separator {csv_separator_label(separator)}"
-                    ),
-                    user_defined_columns=user_defined_columns,
-                )
-                return add_metadata_columns(frame, metadata_path)
-            except csv.Error as exc:
-                csv_errors.append(exc)
-                continue
-    if no_cde_attempts:
-        encoding, separator = no_cde_attempts[-1]
-        raise RuntimeError(
-            f"No rows remained in '{display_name}' after dropping rows where "
-            "columns C, D, and E are all blank. "
-            f"Last tried encoding {encoding}, separator {csv_separator_label(separator)}. "
-            "Try passing the real delimiter, for example --csv-sep ';' or --csv-sep '\\t'."
-        )
-    if csv_errors:
-        raise RuntimeError(
-            f"Could not parse CSV file '{display_name}'. "
-            "Try passing the real delimiter, for example --csv-sep ';' or --csv-sep '\\t'."
-        ) from csv_errors[-1]
-    raise RuntimeError(
-        f"Could not decode CSV file '{display_name}'. "
-        "Try passing --csv-encoding cp1252 or --csv-encoding latin1."
-    ) from last_error
-
-
-def source_columns(frame: pd.DataFrame) -> list[str]:
-    return [
-        str(column)
-        for column in frame.columns
-        if str(column) not in METADATA_COLUMNS
-    ]
-
-
-def align_to_canonical_schema(
-    frame: pd.DataFrame,
-    canonical_columns: list[str],
-    source_path: Path,
-) -> pd.DataFrame:
-    pandas = require_pandas()
-    current_columns = source_columns(frame)
-    if current_columns != canonical_columns:
-        print(
-            f"Warning: {source_path.name} headers differ from the first file. "
-            "Appending by column position.",
-            flush=True,
-        )
-    target_width = len(canonical_columns)
-    current_width = len(current_columns)
-    source_part = frame[current_columns].copy()
-    if current_width > target_width:
-        print(
-            f"Warning: {source_path.name} has {current_width} source columns; "
-            f"only the first {target_width} will be used.",
-            flush=True,
-        )
-        source_part = source_part.iloc[:, :target_width]
-    elif current_width < target_width:
-        print(
-            f"Warning: {source_path.name} has {current_width} source columns; "
-            f"padding to {target_width}.",
-            flush=True,
-        )
-        for index in range(current_width, target_width):
-            source_part[f"__missing_column_{index + 1}"] = ""
-    source_part.columns = canonical_columns
-    metadata_part = frame[list(METADATA_COLUMNS)].copy()
-    return pandas.concat([source_part, metadata_part], axis=1)
-
-
-def transform_folder(config: RunConfig) -> pd.DataFrame:
-    pandas = require_pandas()
-    files = find_source_files(config.folder)
-    if config.output_csv:
-        output_csv_path = config.output_csv.resolve()
-        files = [path for path in files if path.resolve() != output_csv_path]
-    if not files:
-        raise ValueError(f"No input Excel or CSV files found in: {config.folder}")
-    frames: list[pd.DataFrame] = []
-    file_errors: list[tuple[str, str]] = []
-    canonical_columns: list[str] | None = None
-    excel_needed = any(
-        path.suffix.lower() in EXCEL_EXTENSIONS
-        or (config.use_excel_for_csv and path.suffix.lower() in CSV_EXTENSIONS)
-        for path in files
-    )
-
-    with tempfile.TemporaryDirectory(prefix="excel_sql_load_") as temp_root:
-        temp_dir = Path(temp_root)
-        excel_context = excel_application() if excel_needed else nullcontext(None)
-        with excel_context as excel:
-            for source_path in files:
-                try:
-                    size_mb = source_path.stat().st_size / (1024 * 1024)
-                    print(f"Transforming {source_path.name} ({size_mb:.2f} MB)", flush=True)
-                    if source_path.suffix.lower() in CSV_EXTENSIONS and not config.use_excel_for_csv:
-                        frame = read_csv_file(
-                            source_path,
-                            config.csv_encoding,
-                            config.csv_separator,
-                            config.user_defined_columns,
-                        )
-                    else:
-                        if source_path.suffix.lower() in CSV_EXTENSIONS:
-                            print(
-                                f"Opening CSV {source_path.name} through Excel because USE_EXCEL_FOR_CSV=True",
-                                flush=True,
-                            )
-                        exported_csv_path = export_workbook_to_csv_with_excel(
-                            excel=excel,
-                            source_path=source_path,
-                            temp_dir=temp_dir,
-                            sheet_name=config.sheet_name,
-                            password=config.excel_password,
-                        )
-                        frame = read_csv_file(
-                            exported_csv_path,
-                            config.csv_encoding,
-                            config.csv_separator,
-                            config.user_defined_columns,
-                            source_path,
-                        )
-                    if canonical_columns is None:
-                        canonical_columns = config.user_defined_columns or source_columns(frame)
-                        validate_column_count(
-                            canonical_columns + list(METADATA_COLUMNS),
-                            "canonical transformed data",
-                        )
-                        print(
-                            f"Using {'USER_DEFINED_COLUMNS' if config.user_defined_columns else source_path.name} "
-                            f"as canonical schema with "
-                            f"{len(canonical_columns)} source columns",
-                            flush=True,
-                        )
-                    frame = align_to_canonical_schema(frame, canonical_columns, source_path)
-                    frames.append(frame)
-                except Exception as exc:
-                    message = f"{type(exc).__name__}: {exc}"
-                    if not config.skip_file_errors:
-                        raise RuntimeError(f"Failed while processing '{source_path.name}': {message}") from exc
-                    print(f"Skipping {source_path.name}: {message}", flush=True)
-                    file_errors.append((source_path.name, message))
-
-    if not frames:
-        raise RuntimeError("No files were successfully transformed.")
-    if file_errors:
-        print(f"Skipped {len(file_errors)} file(s):", flush=True)
-        for name, message in file_errors:
-            print(f"  {name}: {message}", flush=True)
-    print(f"Combining {len(frames)} transformed files", flush=True)
-    combined = pandas.concat(frames, ignore_index=True, sort=False)
-    validate_column_count(list(combined.columns), "combined transformed data")
-    print(
-        f"Combined {len(combined)} rows and {len(combined.columns)} columns",
-        flush=True,
-    )
-    return combined
-
-
-def parse_pgurl(pgurl: str) -> dict[str, object]:
-    if not pgurl:
-        raise ValueError("Environment variable pgurl is required.")
-
-    if "=" in pgurl and " " in pgurl:
-        return {"dsn": pgurl}
-
-    if pgurl.startswith(("postgres://", "postgresql://")):
-        parts = urlsplit(pgurl)
-        database = unquote(parts.path.lstrip("/"))
-        if not parts.hostname or not database:
-            raise ValueError("pgurl must include host and database.")
-        params: dict[str, object] = {
-            "host": unquote(parts.hostname),
-            "port": parts.port or 5432,
-            "dbname": database,
-        }
-        query = parse_qs(parts.query or "")
-        sslmode = (query.get("sslmode") or [""])[0].strip()
-        if sslmode:
-            params["sslmode"] = sslmode
-        return params
-
-    if "/" not in pgurl:
-        raise ValueError(
-            "pgurl must be a PostgreSQL URL like postgresql://host:5432/dbname "
-            "or a compact value like host:5432/dbname."
-        )
-
-    host_port, database = pgurl.rsplit("/", 1)
-    if not host_port or not database:
-        raise ValueError("pgurl must include host and database.")
-
-    host = host_port
-    port = 5432
-    if ":" in host_port:
-        host, raw_port = host_port.rsplit(":", 1)
-        port = int(raw_port)
-
-    return {"host": host, "port": port, "dbname": database}
-
-
-def postgres_connect_kwargs() -> dict[str, object]:
-    user = get_env("pgusr")
-    password = get_env("pgpw")
-    pgurl = get_env("pgurl")
-
-    missing = [name for name, value in (("pgusr", user), ("pgpw", password), ("pgurl", pgurl)) if not value]
-    if missing:
-        raise ValueError(f"Missing required environment variable(s): {', '.join(missing)}")
-
-    kwargs = parse_pgurl(pgurl)
-    kwargs["user"] = user
-    kwargs["password"] = password
-    kwargs.setdefault("connect_timeout", 30)
-    kwargs.setdefault("application_name", "excel_folder_to_postgres")
-    return kwargs
-
-
-def import_postgres_driver():
-    try:
-        import psycopg2
-        from psycopg2 import sql
-        from psycopg2.extras import execute_values
-    except ImportError as exc:
-        raise RuntimeError(
-            "psycopg2-binary is required. Install it with: pip install psycopg2-binary"
-        ) from exc
-    return psycopg2, sql, execute_values
-
-
-def database_value(value):
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value.replace("\x00", "")
-    pandas = require_pandas()
-    if isinstance(value, float) and math.isnan(value):
-        return None
-    try:
-        if pandas.isna(value):
-            return None
-    except (TypeError, ValueError):
-        pass
-    if isinstance(value, pandas.Timestamp):
-        return value.to_pydatetime().replace(microsecond=0)
-    if isinstance(value, datetime):
-        return value.replace(microsecond=0)
-    if hasattr(value, "item"):
-        try:
-            item = value.item()
-            if item is not value:
-                return database_value(item)
-        except Exception:
-            return value
-    return value
-
-
-def iter_database_rows(frame: pd.DataFrame) -> Iterable[tuple[object, ...]]:
-    for row in frame.itertuples(index=False, name=None):
-        yield tuple(database_value(value) for value in row)
-
-
-def execute_values_sql(insert_prefix: str) -> str:
-    # psycopg2.extras.execute_values treats every percent sign specially while
-    # searching for its VALUES placeholder. Escape literal percent signs that
-    # can appear in quoted identifiers such as "Margin %".
-    return insert_prefix.replace("%", "%%") + "%s"
-
-
-def validate_column_count(columns: list[str], context: str) -> None:
-    if len(columns) <= POSTGRES_MAX_COLUMNS:
-        return
-    preview = ", ".join(columns[:20])
-    raise RuntimeError(
-        f"{context} has {len(columns)} columns, which exceeds PostgreSQL's "
-        f"{POSTGRES_MAX_COLUMNS}-column table limit. This usually means one file "
-        "had the wrong header row, the files do not share one schema, or a row was "
-        f"parsed as thousands of columns. First columns: {preview}"
-    )
-
-
-def postgres_column_type(column_name: str) -> str:
-    normalized = column_name.strip().lower()
-    if normalized == "upload_date":
-        return "date"
-    if normalized == "last_modified_date":
-        return "timestamp"
-    return "text"
-
-
-def fetch_existing_columns(cursor, schema_name: str, table_name: str) -> list[str]:
-    cursor.execute(
-        """
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_schema = %s
-          AND table_name = %s
-        ORDER BY ordinal_position
-        """,
-        (schema_name, table_name),
-    )
-    return [row[0] for row in cursor.fetchall()]
-
-
-def resolve_existing_column(column_name: str, existing_columns: list[str]) -> str | None:
-    if column_name in existing_columns:
-        return column_name
-    matches = [
-        existing
-        for existing in existing_columns
-        if existing.casefold() == column_name.casefold()
-    ]
-    return matches[0] if len(matches) == 1 else None
-
-
-def ensure_destination_table(cursor, sql, schema_name: str, table_name: str, columns: list[str]) -> list[str]:
-    validate_column_count(columns, "insert data")
-    cursor.execute(
-        sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema_name))
-    )
-    create_columns = sql.SQL(", ").join(
-        sql.SQL("{} {}").format(
-            sql.Identifier(column),
-            sql.SQL(postgres_column_type(column)),
-        )
-        for column in columns
-    )
-    cursor.execute(
-        sql.SQL("CREATE TABLE IF NOT EXISTS {}.{} ({})").format(
-            sql.Identifier(schema_name),
-            sql.Identifier(table_name),
-            create_columns,
-        )
-    )
-
-    existing_columns = fetch_existing_columns(cursor, schema_name, table_name)
-    missing_count = sum(
-        1
-        for column in columns
-        if resolve_existing_column(column, existing_columns) is None
-    )
-    if len(existing_columns) + missing_count > POSTGRES_MAX_COLUMNS:
-        raise RuntimeError(
-            f"Adding {missing_count} missing columns to {schema_name}.{table_name} "
-            f"would exceed PostgreSQL's {POSTGRES_MAX_COLUMNS}-column table limit. "
-            "Use a fresh table or fix the detected headers before inserting."
-        )
-    insert_columns: list[str] = []
-    for column in columns:
-        resolved = resolve_existing_column(column, existing_columns)
-        if resolved is None:
-            column_type = postgres_column_type(column)
-            print(f"Adding missing column {column} {column_type}", flush=True)
-            cursor.execute(
-                sql.SQL("ALTER TABLE {}.{} ADD COLUMN {} {}").format(
-                    sql.Identifier(schema_name),
-                    sql.Identifier(table_name),
-                    sql.Identifier(column),
-                    sql.SQL(column_type),
-                )
-            )
-            existing_columns.append(column)
-            resolved = column
-        insert_columns.append(resolved)
-    return insert_columns
-
-
-def insert_dataframe(frame: pd.DataFrame, schema_name: str, table_name: str, batch_size: int) -> int:
-    if frame.empty:
-        print("No rows to insert.")
-        return 0
-    if not schema_name or not table_name or table_name == "FILL_ME_IN":
-        raise ValueError("Set SCHEMA_NAME and TABLE_NAME before inserting.")
-
-    _psycopg2, sql, execute_values = import_postgres_driver()
-    connect_kwargs = postgres_connect_kwargs()
-    columns = [str(column) for column in frame.columns]
-
-    with _psycopg2.connect(**connect_kwargs) as connection:
-        with connection.cursor() as cursor:
-            insert_columns = ensure_destination_table(
-                cursor,
-                sql,
-                schema_name,
-                table_name,
-                columns,
-            )
-            insert_prefix = sql.SQL("INSERT INTO {}.{} ({}) VALUES ").format(
-                sql.Identifier(schema_name),
-                sql.Identifier(table_name),
-                sql.SQL(", ").join(sql.Identifier(column) for column in insert_columns),
-            )
-            insert_sql_string = execute_values_sql(insert_prefix.as_string(connection))
-            print(
-                f"Inserting {len(frame)} rows into {schema_name}.{table_name} "
-                f"in batches of {batch_size}",
-                flush=True,
-            )
-            batch: list[tuple[object, ...]] = []
-            inserted = 0
-            for row in iter_database_rows(frame):
-                batch.append(row)
-                if len(batch) >= batch_size:
-                    execute_values(cursor, insert_sql_string, batch, page_size=batch_size)
-                    inserted += len(batch)
-                    print(f"Inserted {inserted}/{len(frame)} rows", flush=True)
-                    batch.clear()
-            if batch:
-                execute_values(cursor, insert_sql_string, batch, page_size=batch_size)
-                inserted += len(batch)
-                print(f"Inserted {inserted}/{len(frame)} rows", flush=True)
-        connection.commit()
-
-    return len(frame)
-
-
-def build_config(argv: list[str] | None = None) -> RunConfig:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Transform all Excel or CSV files in a folder, append them, "
-            "and insert the result into a PostgreSQL table."
-        )
-    )
-    parser.add_argument(
-        "folder",
-        nargs="?",
-        default=INPUT_FOLDER,
-        help="Folder containing Excel or CSV files. Defaults to INPUT_FOLDER in the script.",
-    )
-    parser.add_argument("--schema", default=SCHEMA_NAME, help="Destination schema name.")
-    parser.add_argument("--table", default=TABLE_NAME, help="Destination table name.")
-    parser.add_argument("--sheet", default=SHEET_NAME, help="Worksheet name. Defaults to the first worksheet.")
-    parser.add_argument(
-        "--csv-encoding",
-        default=globals().get("CSV_ENCODING"),
-        help="Optional CSV encoding, for example utf-8-sig.",
-    )
-    parser.add_argument(
-        "--csv-sep",
-        default=globals().get("CSV_SEPARATOR"),
-        help="Optional CSV delimiter, for example ',' ';' '|' or '\\t'.",
-    )
-    parser.add_argument(
-        "--direct-csv",
-        action="store_true",
-        help="Read CSV files directly with Python instead of opening/exporting them through Excel.",
-    )
-    parser.add_argument(
-        "--skip-file-errors",
-        action="store_true",
-        default=bool(globals().get("SKIP_FILE_ERRORS", False)),
-        help="Skip files that fail to open or parse, then continue with the rest.",
-    )
-    parser.add_argument("--password", default=EXCEL_PASSWORD, help="Optional workbook password.")
-    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Insert batch size.")
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Transform and append files, but do not insert into PostgreSQL.",
-    )
-    parser.add_argument(
-        "--output-csv",
-        default="",
-        help="Optional CSV path for the appended transformed data.",
-    )
-    args = parser.parse_args(argv)
-
-    folder = Path(args.folder).expanduser()
-    output_csv = Path(args.output_csv).expanduser() if args.output_csv else None
-
-    return RunConfig(
-        folder=folder,
-        schema_name=str(args.schema),
-        table_name=str(args.table),
-        sheet_name=args.sheet,
-        csv_encoding=args.csv_encoding,
-        csv_separator=args.csv_sep,
-        use_excel_for_csv=not args.direct_csv and bool(globals().get("USE_EXCEL_FOR_CSV", True)),
-        user_defined_columns=normalize_user_defined_columns(USER_DEFINED_COLUMNS),
-        excel_password=args.password,
-        dry_run=bool(args.dry_run),
-        output_csv=output_csv,
-        batch_size=max(1, int(args.batch_size)),
-        skip_file_errors=bool(args.skip_file_errors),
-    )
-
-
-def main(argv: list[str] | None = None) -> int:
-    config = build_config(argv)
-    print(
-        f"CSV handling mode: {'Excel export' if config.use_excel_for_csv else 'direct Python read'}",
-        flush=True,
-    )
-    combined = transform_folder(config)
-    print(f"Appended {len(combined)} rows from {config.folder}")
-
-    if config.output_csv:
-        config.output_csv.parent.mkdir(parents=True, exist_ok=True)
-        combined.to_csv(config.output_csv, index=False)
-        print(f"Wrote transformed CSV: {config.output_csv}")
-
-    if config.dry_run:
-        print("Dry run complete. No SQL insert performed.")
-        return 0
-
-    inserted = insert_dataframe(
-        frame=combined,
-        schema_name=config.schema_name,
-        table_name=config.table_name,
-        batch_size=config.batch_size,
-    )
-    print(f"Inserted {inserted} rows into {config.schema_name}.{config.table_name}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+-- SMP amount feed by subsidiary, segment, and device.
+--
+-- Source:
+--   bi_reporting.inflow_outflow_mv
+--
+-- Product mapping:
+--   bi_reporting.item_mapping_mv
+--
+-- Output:
+--   CSV to stdout. Run with psql and redirect stdout to a file, for example:
+--     psql "$DATABASE_URL" -f queries_ran/smp_amount_feed.sql > smp_amount_feed.csv
+--
+-- Grain:
+--   One row per subsidiary, device_type, aggregation_level, segment, and device.
+--
+-- aggregation_level prevents double counting:
+--   - SMP Total: one total smartphone row per subsidiary
+--   - Segment: one Flagship and one Mass row per subsidiary
+--   - Device: one row per mapped device per subsidiary, including S25F when
+--     item_mapping_mv exposes it as the Series value
+--
+-- Segment rule:
+--   - Flagship: item_mapping_mv."Seg1" = 'FLAGSHIP'
+--   - Mass: every other SMART item. This keeps SMP Total equal to Flagship
+--     plus Mass instead of silently dropping other smartphone Seg1 values.
+--
+-- Amount definitions come directly from the final MV:
+--   inflow_amount  = sum("Total Inflow Amt")
+--   outflow_amount = sum("Total Outflow Amt")
+
+copy (
+with item_map as (
+    select
+        "Item ID"::text as item_id,
+        max("Seg1"::text) as seg1,
+        min(nullif(nullif("Series"::text, ''), 'NAN')) as series
+    from bi_reporting.item_mapping_mv
+    where "Biz Group" = 'SMART'
+    group by
+        "Item ID"::text
+),
+base as (
+    select
+        f."Subsidiary"::text as subsidiary,
+        'Smartphone'::text as device_type,
+        case
+            when im.seg1 = 'FLAGSHIP' then 'Flagship'
+            else 'Mass'
+        end as segment,
+        coalesce(im.series, nullif(nullif(f."Series"::text, ''), 'NAN'), 'Unmapped') as device,
+        coalesce(f."Total Inflow Amt", 0) as inflow_amount,
+        coalesce(f."Total Outflow Amt", 0) as outflow_amount
+    from bi_reporting.inflow_outflow_mv f
+    join item_map im
+        on im.item_id = f."ItemID"
+    where f."Biz Grp" = 'SMART'
+      and f."Subsidiary" is not null
+      and f."Subsidiary" <> ''
+),
+feed_rows as (
+    select
+        subsidiary,
+        device_type,
+        'SMP Total'::text as aggregation_level,
+        'SMP Total'::text as segment,
+        'All Smartphones'::text as device,
+        sum(inflow_amount) as inflow_amount,
+        sum(outflow_amount) as outflow_amount
+    from base
+    group by
+        subsidiary,
+        device_type
+
+    union all
+
+    select
+        subsidiary,
+        device_type,
+        'Segment'::text as aggregation_level,
+        segment,
+        'All ' || segment as device,
+        sum(inflow_amount) as inflow_amount,
+        sum(outflow_amount) as outflow_amount
+    from base
+    group by
+        subsidiary,
+        device_type,
+        segment
+
+    union all
+
+    select
+        subsidiary,
+        device_type,
+        'Device'::text as aggregation_level,
+        segment,
+        device,
+        sum(inflow_amount) as inflow_amount,
+        sum(outflow_amount) as outflow_amount
+    from base
+    group by
+        subsidiary,
+        device_type,
+        segment,
+        device
+)
+select
+    subsidiary,
+    device_type,
+    aggregation_level,
+    segment,
+    device,
+    inflow_amount,
+    outflow_amount
+from feed_rows
+order by
+    subsidiary,
+    case aggregation_level
+        when 'SMP Total' then 1
+        when 'Segment' then 2
+        when 'Device' then 3
+        else 9
+    end,
+    case segment
+        when 'SMP Total' then 1
+        when 'Flagship' then 2
+        when 'Mass' then 3
+        else 9
+    end,
+    device
+) to stdout with csv header;
