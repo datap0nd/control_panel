@@ -240,7 +240,7 @@ def add_metadata_columns(frame: pd.DataFrame, source_path: Path) -> pd.DataFrame
 
 
 def clean_column_name(value: object, position: int) -> str:
-    text = "" if value is None else str(value).strip()
+    text = "" if value is None else str(value).replace("\x00", "").strip()
     if not text or text.lower().startswith("unnamed:"):
         return f"column_{position}"
     return text
@@ -556,9 +556,11 @@ def import_postgres_driver():
 
 
 def database_value(value):
-    pandas = require_pandas()
     if value is None:
         return None
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    pandas = require_pandas()
     if isinstance(value, float) and math.isnan(value):
         return None
     try:
@@ -572,7 +574,9 @@ def database_value(value):
         return value.replace(microsecond=0)
     if hasattr(value, "item"):
         try:
-            return value.item()
+            item = value.item()
+            if item is not value:
+                return database_value(item)
         except Exception:
             return value
     return value
