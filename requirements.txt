@@ -27,6 +27,7 @@ TABLE_NAME = "FILL_ME_IN"
 SHEET_NAME = None  # None means first worksheet.
 CSV_ENCODING = None  # None tries utf-8-sig, utf-8, cp1252, then latin1.
 CSV_SEPARATOR = None  # None tries auto-detect, comma, semicolon, tab, then pipe.
+USE_EXCEL_FOR_CSV = True  # True lets Excel/NASCA decrypt CSV files before parsing.
 
 # Optional fixed source schema. Leave empty to use the first file's detected
 # header row. When filled, the file's detected header row is still dropped,
@@ -71,6 +72,7 @@ class RunConfig:
     sheet_name: str | None
     csv_encoding: str | None
     csv_separator: str | None
+    use_excel_for_csv: bool
     user_defined_columns: list[str]
     excel_password: str | None
     dry_run: bool
@@ -488,16 +490,20 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
         raise ValueError(f"No input Excel or CSV files found in: {config.folder}")
     frames: list[pd.DataFrame] = []
     canonical_columns: list[str] | None = None
-    excel_files = [path for path in files if path.suffix.lower() in EXCEL_EXTENSIONS]
+    excel_needed = any(
+        path.suffix.lower() in EXCEL_EXTENSIONS
+        or (config.use_excel_for_csv and path.suffix.lower() in CSV_EXTENSIONS)
+        for path in files
+    )
 
     with tempfile.TemporaryDirectory(prefix="excel_sql_load_") as temp_root:
         temp_dir = Path(temp_root)
-        excel_context = excel_application() if excel_files else nullcontext(None)
+        excel_context = excel_application() if excel_needed else nullcontext(None)
         with excel_context as excel:
             for source_path in files:
                 size_mb = source_path.stat().st_size / (1024 * 1024)
                 print(f"Transforming {source_path.name} ({size_mb:.2f} MB)", flush=True)
-                if source_path.suffix.lower() in CSV_EXTENSIONS:
+                if source_path.suffix.lower() in CSV_EXTENSIONS and not config.use_excel_for_csv:
                     frame = read_csv_file(
                         source_path,
                         config.csv_encoding,
@@ -505,6 +511,11 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
                         config.user_defined_columns,
                     )
                 else:
+                    if source_path.suffix.lower() in CSV_EXTENSIONS:
+                        print(
+                            f"Opening CSV {source_path.name} through Excel because USE_EXCEL_FOR_CSV=True",
+                            flush=True,
+                        )
                     exported_csv_path = export_workbook_to_csv_with_excel(
                         excel=excel,
                         source_path=source_path,
@@ -827,6 +838,11 @@ def build_config(argv: list[str] | None = None) -> RunConfig:
         default=globals().get("CSV_SEPARATOR"),
         help="Optional CSV delimiter, for example ',' ';' '|' or '\\t'.",
     )
+    parser.add_argument(
+        "--direct-csv",
+        action="store_true",
+        help="Read CSV files directly with Python instead of opening/exporting them through Excel.",
+    )
     parser.add_argument("--password", default=EXCEL_PASSWORD, help="Optional workbook password.")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Insert batch size.")
     parser.add_argument(
@@ -851,6 +867,7 @@ def build_config(argv: list[str] | None = None) -> RunConfig:
         sheet_name=args.sheet,
         csv_encoding=args.csv_encoding,
         csv_separator=args.csv_sep,
+        use_excel_for_csv=not args.direct_csv and bool(globals().get("USE_EXCEL_FOR_CSV", True)),
         user_defined_columns=normalize_user_defined_columns(USER_DEFINED_COLUMNS),
         excel_password=args.password,
         dry_run=bool(args.dry_run),
@@ -861,6 +878,10 @@ def build_config(argv: list[str] | None = None) -> RunConfig:
 
 def main(argv: list[str] | None = None) -> int:
     config = build_config(argv)
+    print(
+        f"CSV handling mode: {'Excel export' if config.use_excel_for_csv else 'direct Python read'}",
+        flush=True,
+    )
     combined = transform_folder(config)
     print(f"Appended {len(combined)} rows from {config.folder}")
 
