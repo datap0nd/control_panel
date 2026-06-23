@@ -28,6 +28,7 @@ SHEET_NAME = None  # None means first worksheet.
 CSV_ENCODING = None  # None tries utf-8-sig, utf-8, cp1252, then latin1.
 CSV_SEPARATOR = None  # None tries auto-detect, comma, semicolon, tab, then pipe.
 USE_EXCEL_FOR_CSV = True  # True lets Excel/NASCA decrypt CSV files before parsing.
+SKIP_FILE_ERRORS = False  # True skips files Excel/Python cannot process.
 
 # Optional fixed source schema. Leave empty to use the first file's detected
 # header row. When filled, the file's detected header row is still dropped,
@@ -78,6 +79,7 @@ class RunConfig:
     dry_run: bool
     output_csv: Path | None
     batch_size: int
+    skip_file_errors: bool
 
 
 def get_env(name: str) -> str:
@@ -155,25 +157,75 @@ def silence_excel(excel) -> None:
 
 def open_workbook(excel, file_path: Path, password: str | None):
     open_password = password if password else DECOY_PASSWORD
-    try:
-        return excel.Workbooks.Open(
-            str(file_path.resolve()),
-            UpdateLinks=0,
-            ReadOnly=True,
-            IgnoreReadOnlyRecommended=True,
-            AddToMru=False,
-            Notify=False,
-            Password=open_password,
-            WriteResPassword=open_password,
+    path_text = str(file_path.resolve())
+    attempts = []
+    if file_path.suffix.lower() in CSV_EXTENSIONS and not password:
+        attempts.extend(
+            [
+                (
+                    "CSV open without password arguments",
+                    lambda: excel.Workbooks.Open(
+                        path_text,
+                        UpdateLinks=0,
+                        ReadOnly=True,
+                        IgnoreReadOnlyRecommended=True,
+                        AddToMru=False,
+                        Notify=False,
+                        Local=True,
+                    ),
+                ),
+                ("minimal CSV open", lambda: excel.Workbooks.Open(path_text)),
+            ]
         )
-    except Exception as exc:
-        message = str(exc)
-        if "password" in message.lower():
-            raise RuntimeError(
-                f"Excel reported that '{file_path.name}' needs a workbook password. "
-                "Set EXCEL_PASSWORD in this script or pass --password."
-            ) from exc
-        raise RuntimeError(f"Excel could not open '{file_path.name}': {message}") from exc
+    attempts.append(
+        (
+            "workbook open with password guard",
+            lambda: excel.Workbooks.Open(
+                path_text,
+                UpdateLinks=0,
+                ReadOnly=True,
+                IgnoreReadOnlyRecommended=True,
+                AddToMru=False,
+                Notify=False,
+                Password=open_password,
+                WriteResPassword=open_password,
+            ),
+        )
+    )
+    if not password:
+        attempts.append(
+            (
+                "workbook open without password arguments",
+                lambda: excel.Workbooks.Open(
+                    path_text,
+                    UpdateLinks=0,
+                    ReadOnly=True,
+                    IgnoreReadOnlyRecommended=True,
+                    AddToMru=False,
+                    Notify=False,
+                ),
+            )
+        )
+
+    errors: list[str] = []
+    last_exception: Exception | None = None
+    for label, opener in attempts:
+        try:
+            return opener()
+        except Exception as exc:
+            last_exception = exc
+            errors.append(f"{label}: {exc}")
+
+    joined_errors = " | ".join(errors)
+    if "password" in joined_errors.lower():
+        raise RuntimeError(
+            f"Excel reported that '{file_path.name}' needs a workbook password. "
+            "Set EXCEL_PASSWORD in this script or pass --password."
+        ) from last_exception
+    raise RuntimeError(
+        f"Excel could not open '{file_path.name}'. Tried {len(attempts)} open method(s). "
+        f"Errors: {joined_errors}"
+    ) from last_exception
 
 
 def export_workbook_to_csv_with_excel(
@@ -489,6 +541,7 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
     if not files:
         raise ValueError(f"No input Excel or CSV files found in: {config.folder}")
     frames: list[pd.DataFrame] = []
+    file_errors: list[tuple[str, str]] = []
     canonical_columns: list[str] | None = None
     excel_needed = any(
         path.suffix.lower() in EXCEL_EXTENSIONS
@@ -501,50 +554,63 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
         excel_context = excel_application() if excel_needed else nullcontext(None)
         with excel_context as excel:
             for source_path in files:
-                size_mb = source_path.stat().st_size / (1024 * 1024)
-                print(f"Transforming {source_path.name} ({size_mb:.2f} MB)", flush=True)
-                if source_path.suffix.lower() in CSV_EXTENSIONS and not config.use_excel_for_csv:
-                    frame = read_csv_file(
-                        source_path,
-                        config.csv_encoding,
-                        config.csv_separator,
-                        config.user_defined_columns,
-                    )
-                else:
-                    if source_path.suffix.lower() in CSV_EXTENSIONS:
+                try:
+                    size_mb = source_path.stat().st_size / (1024 * 1024)
+                    print(f"Transforming {source_path.name} ({size_mb:.2f} MB)", flush=True)
+                    if source_path.suffix.lower() in CSV_EXTENSIONS and not config.use_excel_for_csv:
+                        frame = read_csv_file(
+                            source_path,
+                            config.csv_encoding,
+                            config.csv_separator,
+                            config.user_defined_columns,
+                        )
+                    else:
+                        if source_path.suffix.lower() in CSV_EXTENSIONS:
+                            print(
+                                f"Opening CSV {source_path.name} through Excel because USE_EXCEL_FOR_CSV=True",
+                                flush=True,
+                            )
+                        exported_csv_path = export_workbook_to_csv_with_excel(
+                            excel=excel,
+                            source_path=source_path,
+                            temp_dir=temp_dir,
+                            sheet_name=config.sheet_name,
+                            password=config.excel_password,
+                        )
+                        frame = read_csv_file(
+                            exported_csv_path,
+                            config.csv_encoding,
+                            config.csv_separator,
+                            config.user_defined_columns,
+                            source_path,
+                        )
+                    if canonical_columns is None:
+                        canonical_columns = config.user_defined_columns or source_columns(frame)
+                        validate_column_count(
+                            canonical_columns + list(METADATA_COLUMNS),
+                            "canonical transformed data",
+                        )
                         print(
-                            f"Opening CSV {source_path.name} through Excel because USE_EXCEL_FOR_CSV=True",
+                            f"Using {'USER_DEFINED_COLUMNS' if config.user_defined_columns else source_path.name} "
+                            f"as canonical schema with "
+                            f"{len(canonical_columns)} source columns",
                             flush=True,
                         )
-                    exported_csv_path = export_workbook_to_csv_with_excel(
-                        excel=excel,
-                        source_path=source_path,
-                        temp_dir=temp_dir,
-                        sheet_name=config.sheet_name,
-                        password=config.excel_password,
-                    )
-                    frame = read_csv_file(
-                        exported_csv_path,
-                        config.csv_encoding,
-                        config.csv_separator,
-                        config.user_defined_columns,
-                        source_path,
-                    )
-                if canonical_columns is None:
-                    canonical_columns = config.user_defined_columns or source_columns(frame)
-                    validate_column_count(
-                        canonical_columns + list(METADATA_COLUMNS),
-                        "canonical transformed data",
-                    )
-                    print(
-                        f"Using {'USER_DEFINED_COLUMNS' if config.user_defined_columns else source_path.name} "
-                        f"as canonical schema with "
-                        f"{len(canonical_columns)} source columns",
-                        flush=True,
-                    )
-                frame = align_to_canonical_schema(frame, canonical_columns, source_path)
-                frames.append(frame)
+                    frame = align_to_canonical_schema(frame, canonical_columns, source_path)
+                    frames.append(frame)
+                except Exception as exc:
+                    message = f"{type(exc).__name__}: {exc}"
+                    if not config.skip_file_errors:
+                        raise RuntimeError(f"Failed while processing '{source_path.name}': {message}") from exc
+                    print(f"Skipping {source_path.name}: {message}", flush=True)
+                    file_errors.append((source_path.name, message))
 
+    if not frames:
+        raise RuntimeError("No files were successfully transformed.")
+    if file_errors:
+        print(f"Skipped {len(file_errors)} file(s):", flush=True)
+        for name, message in file_errors:
+            print(f"  {name}: {message}", flush=True)
     print(f"Combining {len(frames)} transformed files", flush=True)
     combined = pandas.concat(frames, ignore_index=True, sort=False)
     validate_column_count(list(combined.columns), "combined transformed data")
@@ -843,6 +909,12 @@ def build_config(argv: list[str] | None = None) -> RunConfig:
         action="store_true",
         help="Read CSV files directly with Python instead of opening/exporting them through Excel.",
     )
+    parser.add_argument(
+        "--skip-file-errors",
+        action="store_true",
+        default=bool(globals().get("SKIP_FILE_ERRORS", False)),
+        help="Skip files that fail to open or parse, then continue with the rest.",
+    )
     parser.add_argument("--password", default=EXCEL_PASSWORD, help="Optional workbook password.")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Insert batch size.")
     parser.add_argument(
@@ -873,6 +945,7 @@ def build_config(argv: list[str] | None = None) -> RunConfig:
         dry_run=bool(args.dry_run),
         output_csv=output_csv,
         batch_size=max(1, int(args.batch_size)),
+        skip_file_errors=bool(args.skip_file_errors),
     )
 
 
