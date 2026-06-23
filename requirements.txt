@@ -98,3 +98,336 @@ def excel_application():
         # DispatchEx starts a private Excel process instead of attaching to
         # whatever workbook the user already has open.
         excel = win32_client.DispatchEx("Excel.Application")
+        silence_excel(excel)
+        yield excel
+    finally:
+        if excel is not None:
+            try:
+                excel.DisplayAlerts = False
+            except Exception:
+                pass
+            try:
+                excel.Quit()
+            except Exception:
+                pass
+        pythoncom.CoUninitialize()
+
+
+def silence_excel(excel) -> None:
+    # msoAutomationSecurityForceDisable = 3. Prevents macro prompts/runs.
+    for attribute, value in (
+        ("Visible", False),
+        ("DisplayAlerts", False),
+        ("ScreenUpdating", False),
+        ("EnableEvents", False),
+        ("AskToUpdateLinks", False),
+        ("AutomationSecurity", 3),
+    ):
+        try:
+            setattr(excel, attribute, value)
+        except Exception:
+            pass
+
+
+def open_workbook(excel, file_path: Path, password: str | None):
+    open_password = password if password else DECOY_PASSWORD
+    try:
+        return excel.Workbooks.Open(
+            str(file_path.resolve()),
+            UpdateLinks=0,
+            ReadOnly=False,
+            IgnoreReadOnlyRecommended=True,
+            AddToMru=False,
+            Notify=False,
+            Password=open_password,
+            WriteResPassword=open_password,
+        )
+    except Exception as exc:
+        message = str(exc)
+        if "password" in message.lower():
+            raise RuntimeError(
+                f"Excel reported that '{file_path.name}' needs a workbook password. "
+                "Set EXCEL_PASSWORD in this script or pass --password."
+            ) from exc
+        raise RuntimeError(f"Excel could not open '{file_path.name}': {message}") from exc
+
+
+def transform_workbook_with_excel(
+    excel,
+    source_path: Path,
+    temp_dir: Path,
+    sheet_name: str | None,
+    password: str | None,
+) -> Path:
+    output_path = temp_dir / f"{source_path.stem}__{uuid.uuid4().hex}.xlsx"
+    workbook = None
+    try:
+        workbook = open_workbook(excel, source_path, password)
+        worksheet = workbook.Worksheets(sheet_name) if sheet_name else workbook.Worksheets(1)
+        worksheet.Rows("1:2").Delete()
+        workbook.SaveAs(
+            str(output_path),
+            FileFormat=XL_OPENXML_WORKBOOK,
+            Password="",
+            WriteResPassword="",
+        )
+        return output_path
+    finally:
+        if workbook is not None:
+            try:
+                workbook.Close(SaveChanges=False)
+            except Exception:
+                pass
+
+
+def find_excel_files(folder: Path) -> list[Path]:
+    if not folder.exists() or not folder.is_dir():
+        raise ValueError(f"Folder does not exist or is not a directory: {folder}")
+    files = [
+        path
+        for path in sorted(folder.iterdir())
+        if path.is_file()
+        and path.suffix.lower() in EXCEL_EXTENSIONS
+        and not path.name.startswith("~$")
+    ]
+    if not files:
+        raise ValueError(f"No Excel files found in: {folder}")
+    return files
+
+
+def read_transformed_file(transformed_path: Path, source_path: Path) -> pd.DataFrame:
+    pandas = require_pandas()
+    frame = pandas.read_excel(transformed_path, engine="openpyxl", dtype=object)
+    last_modified = datetime.fromtimestamp(source_path.stat().st_mtime).replace(microsecond=0)
+
+    frame["upload_date"] = date.today()
+    frame["last_modified_date"] = last_modified
+    frame["source_file"] = source_path.name
+    return frame
+
+
+def transform_folder(config: RunConfig) -> pd.DataFrame:
+    pandas = require_pandas()
+    files = find_excel_files(config.folder)
+    frames: list[pd.DataFrame] = []
+
+    with tempfile.TemporaryDirectory(prefix="excel_sql_load_") as temp_root:
+        temp_dir = Path(temp_root)
+        with excel_application() as excel:
+            for source_path in files:
+                print(f"Transforming {source_path.name}")
+                transformed_path = transform_workbook_with_excel(
+                    excel=excel,
+                    source_path=source_path,
+                    temp_dir=temp_dir,
+                    sheet_name=config.sheet_name,
+                    password=config.excel_password,
+                )
+                frames.append(read_transformed_file(transformed_path, source_path))
+
+    combined = pandas.concat(frames, ignore_index=True, sort=False)
+    return combined
+
+
+def parse_pgurl(pgurl: str) -> dict[str, object]:
+    if not pgurl:
+        raise ValueError("Environment variable pgurl is required.")
+
+    if "=" in pgurl and " " in pgurl:
+        return {"dsn": pgurl}
+
+    if pgurl.startswith(("postgres://", "postgresql://")):
+        parts = urlsplit(pgurl)
+        database = unquote(parts.path.lstrip("/"))
+        if not parts.hostname or not database:
+            raise ValueError("pgurl must include host and database.")
+        params: dict[str, object] = {
+            "host": unquote(parts.hostname),
+            "port": parts.port or 5432,
+            "dbname": database,
+        }
+        query = parse_qs(parts.query or "")
+        sslmode = (query.get("sslmode") or [""])[0].strip()
+        if sslmode:
+            params["sslmode"] = sslmode
+        return params
+
+    if "/" not in pgurl:
+        raise ValueError(
+            "pgurl must be a PostgreSQL URL like postgresql://host:5432/dbname "
+            "or a compact value like host:5432/dbname."
+        )
+
+    host_port, database = pgurl.rsplit("/", 1)
+    if not host_port or not database:
+        raise ValueError("pgurl must include host and database.")
+
+    host = host_port
+    port = 5432
+    if ":" in host_port:
+        host, raw_port = host_port.rsplit(":", 1)
+        port = int(raw_port)
+
+    return {"host": host, "port": port, "dbname": database}
+
+
+def postgres_connect_kwargs() -> dict[str, object]:
+    user = get_env("pgusr")
+    password = get_env("pgpw")
+    pgurl = get_env("pgurl")
+
+    missing = [name for name, value in (("pgusr", user), ("pgpw", password), ("pgurl", pgurl)) if not value]
+    if missing:
+        raise ValueError(f"Missing required environment variable(s): {', '.join(missing)}")
+
+    kwargs = parse_pgurl(pgurl)
+    kwargs["user"] = user
+    kwargs["password"] = password
+    kwargs.setdefault("connect_timeout", 30)
+    kwargs.setdefault("application_name", "excel_folder_to_postgres")
+    return kwargs
+
+
+def import_postgres_driver():
+    try:
+        import psycopg2
+        from psycopg2 import sql
+        from psycopg2.extras import execute_values
+    except ImportError as exc:
+        raise RuntimeError(
+            "psycopg2-binary is required. Install it with: pip install psycopg2-binary"
+        ) from exc
+    return psycopg2, sql, execute_values
+
+
+def database_value(value):
+    pandas = require_pandas()
+    if value is None:
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    try:
+        if pandas.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, pandas.Timestamp):
+        return value.to_pydatetime().replace(microsecond=0)
+    if isinstance(value, datetime):
+        return value.replace(microsecond=0)
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            return value
+    return value
+
+
+def iter_database_rows(frame: pd.DataFrame) -> Iterable[tuple[object, ...]]:
+    for row in frame.itertuples(index=False, name=None):
+        yield tuple(database_value(value) for value in row)
+
+
+def insert_dataframe(frame: pd.DataFrame, schema_name: str, table_name: str, batch_size: int) -> int:
+    if frame.empty:
+        print("No rows to insert.")
+        return 0
+    if not schema_name or not table_name or table_name == "FILL_ME_IN":
+        raise ValueError("Set SCHEMA_NAME and TABLE_NAME before inserting.")
+
+    _psycopg2, sql, execute_values = import_postgres_driver()
+    connect_kwargs = postgres_connect_kwargs()
+    columns = [str(column) for column in frame.columns]
+
+    with _psycopg2.connect(**connect_kwargs) as connection:
+        with connection.cursor() as cursor:
+            insert_sql = sql.SQL("INSERT INTO {}.{} ({}) VALUES %s").format(
+                sql.Identifier(schema_name),
+                sql.Identifier(table_name),
+                sql.SQL(", ").join(sql.Identifier(column) for column in columns),
+            )
+            insert_sql_string = insert_sql.as_string(connection)
+            batch: list[tuple[object, ...]] = []
+            for row in iter_database_rows(frame):
+                batch.append(row)
+                if len(batch) >= batch_size:
+                    execute_values(cursor, insert_sql_string, batch, page_size=batch_size)
+                    batch.clear()
+            if batch:
+                execute_values(cursor, insert_sql_string, batch, page_size=batch_size)
+        connection.commit()
+
+    return len(frame)
+
+
+def build_config(argv: list[str] | None = None) -> RunConfig:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Transform all Excel files in a folder with Excel COM, append them, "
+            "and insert the result into a PostgreSQL table."
+        )
+    )
+    parser.add_argument(
+        "folder",
+        nargs="?",
+        default=INPUT_FOLDER,
+        help="Folder containing Excel files. Defaults to INPUT_FOLDER in the script.",
+    )
+    parser.add_argument("--schema", default=SCHEMA_NAME, help="Destination schema name.")
+    parser.add_argument("--table", default=TABLE_NAME, help="Destination table name.")
+    parser.add_argument("--sheet", default=SHEET_NAME, help="Worksheet name. Defaults to the first worksheet.")
+    parser.add_argument("--password", default=EXCEL_PASSWORD, help="Optional workbook password.")
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Insert batch size.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Transform and append files, but do not insert into PostgreSQL.",
+    )
+    parser.add_argument(
+        "--output-csv",
+        default="",
+        help="Optional CSV path for the appended transformed data.",
+    )
+    args = parser.parse_args(argv)
+
+    folder = Path(args.folder).expanduser()
+    output_csv = Path(args.output_csv).expanduser() if args.output_csv else None
+
+    return RunConfig(
+        folder=folder,
+        schema_name=str(args.schema),
+        table_name=str(args.table),
+        sheet_name=args.sheet,
+        excel_password=args.password,
+        dry_run=bool(args.dry_run),
+        output_csv=output_csv,
+        batch_size=max(1, int(args.batch_size)),
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    config = build_config(argv)
+    combined = transform_folder(config)
+    print(f"Appended {len(combined)} rows from {config.folder}")
+
+    if config.output_csv:
+        config.output_csv.parent.mkdir(parents=True, exist_ok=True)
+        combined.to_csv(config.output_csv, index=False)
+        print(f"Wrote transformed CSV: {config.output_csv}")
+
+    if config.dry_run:
+        print("Dry run complete. No SQL insert performed.")
+        return 0
+
+    inserted = insert_dataframe(
+        frame=combined,
+        schema_name=config.schema_name,
+        table_name=config.table_name,
+        batch_size=config.batch_size,
+    )
+    print(f"Inserted {inserted} rows into {config.schema_name}.{config.table_name}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
