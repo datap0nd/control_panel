@@ -6,7 +6,7 @@ import os
 import platform
 import tempfile
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -24,6 +24,7 @@ INPUT_FOLDER = r""
 SCHEMA_NAME = "public"
 TABLE_NAME = "FILL_ME_IN"
 SHEET_NAME = None  # None means first worksheet.
+CSV_ENCODING = None  # Example: "utf-8-sig" if your CSV has a BOM.
 
 # Optional password for normal workbook-password protection.
 # For Microsoft Information Protection / corporate identity encryption,
@@ -42,6 +43,8 @@ DECOY_PASSWORD = "no-password-provided"
 
 
 EXCEL_EXTENSIONS = {".xlsx", ".xlsm", ".xlsb", ".xls"}
+CSV_EXTENSIONS = {".csv"}
+SOURCE_EXTENSIONS = EXCEL_EXTENSIONS | CSV_EXTENSIONS
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,7 @@ class RunConfig:
     schema_name: str
     table_name: str
     sheet_name: str | None
+    csv_encoding: str | None
     excel_password: str | None
     dry_run: bool
     output_csv: Path | None
@@ -180,24 +184,22 @@ def transform_workbook_with_excel(
                 pass
 
 
-def find_excel_files(folder: Path) -> list[Path]:
+def find_source_files(folder: Path) -> list[Path]:
     if not folder.exists() or not folder.is_dir():
         raise ValueError(f"Folder does not exist or is not a directory: {folder}")
     files = [
         path
         for path in sorted(folder.iterdir())
         if path.is_file()
-        and path.suffix.lower() in EXCEL_EXTENSIONS
+        and path.suffix.lower() in SOURCE_EXTENSIONS
         and not path.name.startswith("~$")
     ]
     if not files:
-        raise ValueError(f"No Excel files found in: {folder}")
+        raise ValueError(f"No Excel or CSV files found in: {folder}")
     return files
 
 
-def read_transformed_file(transformed_path: Path, source_path: Path) -> pd.DataFrame:
-    pandas = require_pandas()
-    frame = pandas.read_excel(transformed_path, engine="openpyxl", dtype=object)
+def add_metadata_columns(frame: pd.DataFrame, source_path: Path) -> pd.DataFrame:
     last_modified = datetime.fromtimestamp(source_path.stat().st_mtime).replace(microsecond=0)
 
     frame["upload_date"] = date.today()
@@ -206,16 +208,36 @@ def read_transformed_file(transformed_path: Path, source_path: Path) -> pd.DataF
     return frame
 
 
+def read_transformed_excel_file(transformed_path: Path, source_path: Path) -> pd.DataFrame:
+    pandas = require_pandas()
+    frame = pandas.read_excel(transformed_path, engine="openpyxl", dtype=object)
+    return add_metadata_columns(frame, source_path)
+
+
+def read_csv_file(source_path: Path, csv_encoding: str | None) -> pd.DataFrame:
+    pandas = require_pandas()
+    read_kwargs = {"skiprows": 2, "dtype": object}
+    if csv_encoding:
+        read_kwargs["encoding"] = csv_encoding
+    frame = pandas.read_csv(source_path, **read_kwargs)
+    return add_metadata_columns(frame, source_path)
+
+
 def transform_folder(config: RunConfig) -> pd.DataFrame:
     pandas = require_pandas()
-    files = find_excel_files(config.folder)
+    files = find_source_files(config.folder)
     frames: list[pd.DataFrame] = []
+    excel_files = [path for path in files if path.suffix.lower() in EXCEL_EXTENSIONS]
 
     with tempfile.TemporaryDirectory(prefix="excel_sql_load_") as temp_root:
         temp_dir = Path(temp_root)
-        with excel_application() as excel:
+        excel_context = excel_application() if excel_files else nullcontext(None)
+        with excel_context as excel:
             for source_path in files:
                 print(f"Transforming {source_path.name}")
+                if source_path.suffix.lower() in CSV_EXTENSIONS:
+                    frames.append(read_csv_file(source_path, config.csv_encoding))
+                    continue
                 transformed_path = transform_workbook_with_excel(
                     excel=excel,
                     source_path=source_path,
@@ -223,7 +245,7 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
                     sheet_name=config.sheet_name,
                     password=config.excel_password,
                 )
-                frames.append(read_transformed_file(transformed_path, source_path))
+                frames.append(read_transformed_excel_file(transformed_path, source_path))
 
     combined = pandas.concat(frames, ignore_index=True, sort=False)
     return combined
@@ -363,7 +385,7 @@ def insert_dataframe(frame: pd.DataFrame, schema_name: str, table_name: str, bat
 def build_config(argv: list[str] | None = None) -> RunConfig:
     parser = argparse.ArgumentParser(
         description=(
-            "Transform all Excel files in a folder with Excel COM, append them, "
+            "Transform all Excel or CSV files in a folder, append them, "
             "and insert the result into a PostgreSQL table."
         )
     )
@@ -371,11 +393,12 @@ def build_config(argv: list[str] | None = None) -> RunConfig:
         "folder",
         nargs="?",
         default=INPUT_FOLDER,
-        help="Folder containing Excel files. Defaults to INPUT_FOLDER in the script.",
+        help="Folder containing Excel or CSV files. Defaults to INPUT_FOLDER in the script.",
     )
     parser.add_argument("--schema", default=SCHEMA_NAME, help="Destination schema name.")
     parser.add_argument("--table", default=TABLE_NAME, help="Destination table name.")
     parser.add_argument("--sheet", default=SHEET_NAME, help="Worksheet name. Defaults to the first worksheet.")
+    parser.add_argument("--csv-encoding", default=CSV_ENCODING, help="Optional CSV encoding, for example utf-8-sig.")
     parser.add_argument("--password", default=EXCEL_PASSWORD, help="Optional workbook password.")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Insert batch size.")
     parser.add_argument(
@@ -398,6 +421,7 @@ def build_config(argv: list[str] | None = None) -> RunConfig:
         schema_name=str(args.schema),
         table_name=str(args.table),
         sheet_name=args.sheet,
+        csv_encoding=args.csv_encoding,
         excel_password=args.password,
         dry_run=bool(args.dry_run),
         output_csv=output_csv,
