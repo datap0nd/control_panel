@@ -229,18 +229,33 @@ def add_metadata_columns(frame: pd.DataFrame, source_path: Path) -> pd.DataFrame
     return frame
 
 
-def rename_first_column_to_city(frame: pd.DataFrame) -> pd.DataFrame:
-    columns = list(frame.columns)
-    if columns:
-        columns[0] = "City"
-        frame.columns = columns
+def clean_column_name(value: object, position: int) -> str:
+    text = "" if value is None else str(value).strip()
+    if not text or text.lower().startswith("unnamed:"):
+        return f"column_{position}"
+    return text
+
+
+def unique_column_names(columns: Iterable[object]) -> list[str]:
+    names: list[str] = []
+    seen: dict[str, int] = {}
+    for position, value in enumerate(columns, start=1):
+        base = "City" if position == 1 else clean_column_name(value, position)
+        count = seen.get(base, 0) + 1
+        seen[base] = count
+        names.append(base if count == 1 else f"{base}_{count}")
+    return names
+
+
+def normalize_column_names(frame: pd.DataFrame) -> pd.DataFrame:
+    frame.columns = unique_column_names(frame.columns)
     return frame
 
 
 def read_transformed_excel_file(transformed_path: Path, source_path: Path) -> pd.DataFrame:
     pandas = require_pandas()
     frame = pandas.read_excel(transformed_path, engine="openpyxl", dtype=object)
-    frame = rename_first_column_to_city(frame)
+    frame = normalize_column_names(frame)
     return add_metadata_columns(frame, source_path)
 
 
@@ -302,8 +317,7 @@ def build_frame_from_filtered_rows(
 
     width = max(len(row) for row in filtered_rows)
     padded_rows = [row + [""] * (width - len(row)) for row in filtered_rows]
-    headers = [str(value).strip() for value in padded_rows[0]]
-    headers[0] = "City"
+    headers = unique_column_names(padded_rows[0])
 
     frame = pandas.DataFrame(padded_rows[1:], columns=headers)
     print(
