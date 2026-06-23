@@ -583,6 +583,13 @@ def iter_database_rows(frame: pd.DataFrame) -> Iterable[tuple[object, ...]]:
         yield tuple(database_value(value) for value in row)
 
 
+def execute_values_sql(insert_prefix: str) -> str:
+    # psycopg2.extras.execute_values treats every percent sign specially while
+    # searching for its VALUES placeholder. Escape literal percent signs that
+    # can appear in quoted identifiers such as "Margin %".
+    return insert_prefix.replace("%", "%%") + "%s"
+
+
 def insert_dataframe(frame: pd.DataFrame, schema_name: str, table_name: str, batch_size: int) -> int:
     if frame.empty:
         print("No rows to insert.")
@@ -596,20 +603,30 @@ def insert_dataframe(frame: pd.DataFrame, schema_name: str, table_name: str, bat
 
     with _psycopg2.connect(**connect_kwargs) as connection:
         with connection.cursor() as cursor:
-            insert_sql = sql.SQL("INSERT INTO {}.{} ({}) VALUES %s").format(
+            insert_prefix = sql.SQL("INSERT INTO {}.{} ({}) VALUES ").format(
                 sql.Identifier(schema_name),
                 sql.Identifier(table_name),
                 sql.SQL(", ").join(sql.Identifier(column) for column in columns),
             )
-            insert_sql_string = insert_sql.as_string(connection)
+            insert_sql_string = execute_values_sql(insert_prefix.as_string(connection))
+            print(
+                f"Inserting {len(frame)} rows into {schema_name}.{table_name} "
+                f"in batches of {batch_size}",
+                flush=True,
+            )
             batch: list[tuple[object, ...]] = []
+            inserted = 0
             for row in iter_database_rows(frame):
                 batch.append(row)
                 if len(batch) >= batch_size:
                     execute_values(cursor, insert_sql_string, batch, page_size=batch_size)
+                    inserted += len(batch)
+                    print(f"Inserted {inserted}/{len(frame)} rows", flush=True)
                     batch.clear()
             if batch:
                 execute_values(cursor, insert_sql_string, batch, page_size=batch_size)
+                inserted += len(batch)
+                print(f"Inserted {inserted}/{len(frame)} rows", flush=True)
         connection.commit()
 
     return len(frame)
