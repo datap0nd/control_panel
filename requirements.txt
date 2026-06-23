@@ -457,6 +457,50 @@ def read_csv_file(
     ) from last_error
 
 
+def source_columns(frame: pd.DataFrame) -> list[str]:
+    return [
+        str(column)
+        for column in frame.columns
+        if str(column) not in METADATA_COLUMNS
+    ]
+
+
+def align_to_canonical_schema(
+    frame: pd.DataFrame,
+    canonical_columns: list[str],
+    source_path: Path,
+) -> pd.DataFrame:
+    pandas = require_pandas()
+    current_columns = source_columns(frame)
+    if current_columns != canonical_columns:
+        print(
+            f"Warning: {source_path.name} headers differ from the first file. "
+            "Appending by column position.",
+            flush=True,
+        )
+    target_width = len(canonical_columns)
+    current_width = len(current_columns)
+    source_part = frame[current_columns].copy()
+    if current_width > target_width:
+        print(
+            f"Warning: {source_path.name} has {current_width} source columns; "
+            f"only the first {target_width} will be used.",
+            flush=True,
+        )
+        source_part = source_part.iloc[:, :target_width]
+    elif current_width < target_width:
+        print(
+            f"Warning: {source_path.name} has {current_width} source columns; "
+            f"padding to {target_width}.",
+            flush=True,
+        )
+        for index in range(current_width, target_width):
+            source_part[f"__missing_column_{index + 1}"] = ""
+    source_part.columns = canonical_columns
+    metadata_part = frame[list(METADATA_COLUMNS)].copy()
+    return pandas.concat([source_part, metadata_part], axis=1)
+
+
 def transform_folder(config: RunConfig) -> pd.DataFrame:
     pandas = require_pandas()
     files = find_source_files(config.folder)
@@ -466,6 +510,7 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
     if not files:
         raise ValueError(f"No input Excel or CSV files found in: {config.folder}")
     frames: list[pd.DataFrame] = []
+    canonical_columns: list[str] | None = None
     excel_files = [path for path in files if path.suffix.lower() in EXCEL_EXTENSIONS]
 
     with tempfile.TemporaryDirectory(prefix="excel_sql_load_") as temp_root:
@@ -476,28 +521,37 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
                 size_mb = source_path.stat().st_size / (1024 * 1024)
                 print(f"Transforming {source_path.name} ({size_mb:.2f} MB)", flush=True)
                 if source_path.suffix.lower() in CSV_EXTENSIONS:
-                    frames.append(
-                        read_csv_file(
-                            source_path,
-                            config.csv_encoding,
-                            config.csv_separator,
-                        )
+                    frame = read_csv_file(
+                        source_path,
+                        config.csv_encoding,
+                        config.csv_separator,
                     )
-                    continue
-                transformed_path = transform_workbook_with_excel(
-                    excel=excel,
-                    source_path=source_path,
-                    temp_dir=temp_dir,
-                    sheet_name=config.sheet_name,
-                    password=config.excel_password,
-                )
-                frames.append(
-                    read_transformed_excel_file(
+                else:
+                    transformed_path = transform_workbook_with_excel(
+                        excel=excel,
+                        source_path=source_path,
+                        temp_dir=temp_dir,
+                        sheet_name=config.sheet_name,
+                        password=config.excel_password,
+                    )
+                    frame = read_transformed_excel_file(
                         transformed_path,
                         source_path,
                         config.sheet_name,
                     )
-                )
+                if canonical_columns is None:
+                    canonical_columns = source_columns(frame)
+                    validate_column_count(
+                        canonical_columns + list(METADATA_COLUMNS),
+                        "canonical transformed data",
+                    )
+                    print(
+                        f"Using {source_path.name} as canonical schema with "
+                        f"{len(canonical_columns)} source columns",
+                        flush=True,
+                    )
+                frame = align_to_canonical_schema(frame, canonical_columns, source_path)
+                frames.append(frame)
 
     print(f"Combining {len(frames)} transformed files", flush=True)
     combined = pandas.concat(frames, ignore_index=True, sort=False)
