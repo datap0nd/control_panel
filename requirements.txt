@@ -1,34 +1,16 @@
--- SMP amount feed by subsidiary, segment, and device.
+-- Recurrent SMP amount feed view.
 --
--- Source:
---   bi_reporting.inflow_outflow_mv
+-- Run once after bi_reporting.inflow_outflow_mv exists:
+--   psql "$DATABASE_URL" -f queries_ran/smp_amount_feed_view.sql
 --
--- Product mapping:
---   bi_reporting.item_mapping_mv
+-- Then export when needed with:
+--   psql "$DATABASE_URL" -f queries_ran/smp_amount_feed_export.sql > smp_amount_feed.csv
 --
--- Output:
---   CSV to stdout. Run with psql and redirect stdout to a file, for example:
---     psql "$DATABASE_URL" -f queries_ran/smp_amount_feed.sql > smp_amount_feed.csv
---
--- Grain:
---   One row per subsidiary, device_type, aggregation_level, segment, and device.
---
--- aggregation_level prevents double counting:
---   - SMP Total: one total smartphone row per subsidiary
---   - Segment: one Flagship and one Mass row per subsidiary
---   - Device: one row per mapped device per subsidiary, including S25F when
---     item_mapping_mv exposes it as the Series value
---
--- Segment rule:
---   - Flagship: item_mapping_mv."Seg1" = 'FLAGSHIP'
---   - Mass: every other SMART item. This keeps SMP Total equal to Flagship
---     plus Mass instead of silently dropping other smartphone Seg1 values.
---
--- Amount definitions come directly from the final MV:
---   inflow_amount  = sum("Total Inflow Amt")
---   outflow_amount = sum("Total Outflow Amt")
+-- This is a normal view, not a materialized view. The final inflow/outflow
+-- source is already materialized, so this view stays current after the final
+-- MV is refreshed without adding another refresh dependency.
 
-copy (
+create or replace view bi_reporting.smp_amount_feed_v as
 with item_map as (
     select
         "Item ID"::text as item_id,
@@ -112,20 +94,4 @@ select
     device,
     inflow_amount,
     outflow_amount
-from feed_rows
-order by
-    subsidiary,
-    case aggregation_level
-        when 'SMP Total' then 1
-        when 'Segment' then 2
-        when 'Device' then 3
-        else 9
-    end,
-    case segment
-        when 'SMP Total' then 1
-        when 'Flagship' then 2
-        when 'Mass' then 3
-        else 9
-    end,
-    device
-) to stdout with csv header;
+from feed_rows;
