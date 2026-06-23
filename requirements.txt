@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import math
 import os
 import platform
-import re
 import tempfile
 import uuid
 from contextlib import contextmanager, nullcontext
@@ -47,6 +47,7 @@ DECOY_PASSWORD = "no-password-provided"
 EXCEL_EXTENSIONS = {".xlsx", ".xlsm", ".xlsb", ".xls"}
 CSV_EXTENSIONS = {".csv"}
 SOURCE_EXTENSIONS = EXCEL_EXTENSIONS | CSV_EXTENSIONS
+CDE_INDEXES = (2, 3, 4)
 
 
 @dataclass(frozen=True)
@@ -171,7 +172,7 @@ def transform_workbook_with_excel(
     try:
         workbook = open_workbook(excel, source_path, password)
         worksheet = workbook.Worksheets(sheet_name) if sheet_name else workbook.Worksheets(1)
-        worksheet.Rows("1:2").Delete()
+        delete_rows_with_blank_cde(worksheet)
         workbook.SaveAs(
             str(output_path),
             FileFormat=XL_OPENXML_WORKBOOK,
@@ -185,6 +186,23 @@ def transform_workbook_with_excel(
                 workbook.Close(SaveChanges=False)
             except Exception:
                 pass
+
+
+def has_text(value: object) -> bool:
+    return value is not None and str(value).strip() != ""
+
+
+def delete_rows_with_blank_cde(worksheet) -> None:
+    used_range = worksheet.UsedRange
+    first_row = int(used_range.Row)
+    last_row = first_row + int(used_range.Rows.Count) - 1
+    for row_number in range(last_row, first_row - 1, -1):
+        values = [
+            worksheet.Cells(row_number, column_number).Value
+            for column_number in (3, 4, 5)
+        ]
+        if not any(has_text(value) for value in values):
+            worksheet.Rows(row_number).Delete()
 
 
 def find_source_files(folder: Path) -> list[Path]:
@@ -211,9 +229,18 @@ def add_metadata_columns(frame: pd.DataFrame, source_path: Path) -> pd.DataFrame
     return frame
 
 
+def rename_first_column_to_city(frame: pd.DataFrame) -> pd.DataFrame:
+    columns = list(frame.columns)
+    if columns:
+        columns[0] = "City"
+        frame.columns = columns
+    return frame
+
+
 def read_transformed_excel_file(transformed_path: Path, source_path: Path) -> pd.DataFrame:
     pandas = require_pandas()
     frame = pandas.read_excel(transformed_path, engine="openpyxl", dtype=object)
+    frame = rename_first_column_to_city(frame)
     return add_metadata_columns(frame, source_path)
 
 
@@ -221,12 +248,6 @@ def csv_encoding_candidates(csv_encoding: str | None) -> list[str | None]:
     if csv_encoding:
         return [csv_encoding]
     return ["utf-8-sig", "utf-8", "cp1252", "latin1"]
-
-
-def csv_separator_candidates(csv_separator: str | None) -> list[str | None]:
-    if csv_separator:
-        return [csv_separator.replace("\\t", "\t")]
-    return [None, ",", ";", "\t", "|"]
 
 
 def csv_separator_label(csv_separator: str | None) -> str:
@@ -237,27 +258,59 @@ def csv_separator_label(csv_separator: str | None) -> str:
     return csv_separator
 
 
-def parser_line_number(message: str) -> int | None:
-    match = re.search(r"line\s+(\d+)", message, flags=re.IGNORECASE)
-    if not match:
-        return None
-    try:
-        return int(match.group(1))
-    except ValueError:
-        return None
+def row_has_cde_info(row: list[object]) -> bool:
+    return any(index < len(row) and has_text(row[index]) for index in CDE_INDEXES)
 
 
-def csv_line_preview(source_path: Path, line_number: int | None, encoding: str | None) -> str:
-    if not line_number:
-        return ""
+def sniff_csv_separator(sample: str) -> str | None:
     try:
-        with source_path.open("r", encoding=encoding or "utf-8", errors="replace") as handle:
-            for current_line, text in enumerate(handle, start=1):
-                if current_line == line_number:
-                    return text.rstrip("\r\n")
-    except OSError:
-        return ""
-    return ""
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+    except csv.Error:
+        return None
+    return dialect.delimiter
+
+
+def ordered_csv_separators(csv_separator: str | None, sample: str) -> list[str]:
+    if csv_separator:
+        return [csv_separator.replace("\\t", "\t")]
+    candidates: list[str] = []
+    sniffed = sniff_csv_separator(sample)
+    for separator in (sniffed, ",", ";", "\t", "|"):
+        if separator and separator not in candidates:
+            candidates.append(separator)
+    return candidates
+
+
+def read_csv_rows(source_path: Path, encoding: str, separator: str) -> list[list[str]]:
+    with source_path.open("r", encoding=encoding, newline="") as handle:
+        return [list(row) for row in csv.reader(handle, delimiter=separator)]
+
+
+def build_frame_from_filtered_rows(
+    rows: list[list[str]],
+    source_path: Path,
+    encoding: str,
+    separator: str,
+) -> pd.DataFrame:
+    pandas = require_pandas()
+    filtered_rows = [row for row in rows if row_has_cde_info(row)]
+    if not filtered_rows:
+        raise RuntimeError(
+            f"No rows remained in '{source_path.name}' after dropping rows where "
+            "columns C, D, and E are all blank."
+        )
+
+    width = max(len(row) for row in filtered_rows)
+    padded_rows = [row + [""] * (width - len(row)) for row in filtered_rows]
+    headers = [str(value).strip() for value in padded_rows[0]]
+    headers[0] = "City"
+
+    frame = pandas.DataFrame(padded_rows[1:], columns=headers)
+    print(
+        f"Read {source_path.name} using CSV encoding {encoding}, "
+        f"separator {csv_separator_label(separator)}"
+    )
+    return frame
 
 
 def read_csv_file(
@@ -265,52 +318,41 @@ def read_csv_file(
     csv_encoding: str | None,
     csv_separator: str | None,
 ) -> pd.DataFrame:
-    pandas = require_pandas()
     last_error: UnicodeDecodeError | None = None
-    parse_errors: list[tuple[str | None, str | None, Exception]] = []
-    fallback_frame = None
-    fallback_label = ""
+    csv_errors: list[Exception] = []
+    no_cde_attempts: list[tuple[str, str]] = []
     for encoding in csv_encoding_candidates(csv_encoding):
-        for separator in csv_separator_candidates(csv_separator):
-            read_kwargs = {
-                "skiprows": 2,
-                "dtype": object,
-                "encoding": encoding,
-                "engine": "python",
-                "sep": separator,
-            }
-            try:
-                frame = pandas.read_csv(source_path, **read_kwargs)
-            except UnicodeDecodeError as exc:
-                last_error = exc
-                if csv_encoding:
-                    raise
+        try:
+            sample = source_path.read_text(encoding=encoding, errors="strict")[:8192]
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            if csv_encoding:
                 break
-            except pandas.errors.ParserError as exc:
-                parse_errors.append((encoding, separator, exc))
-                continue
-            label = f"encoding {encoding}, separator {csv_separator_label(separator)}"
-            if len(frame.columns) > 1 or csv_separator:
-                print(f"Read {source_path.name} using CSV {label}")
+            continue
+        for separator in ordered_csv_separators(csv_separator, sample):
+            try:
+                rows = read_csv_rows(source_path, encoding, separator)
+                if not any(row_has_cde_info(row) for row in rows):
+                    no_cde_attempts.append((encoding, separator))
+                    continue
+                frame = build_frame_from_filtered_rows(rows, source_path, encoding, separator)
                 return add_metadata_columns(frame, source_path)
-            fallback_frame = frame
-            fallback_label = label
-    if fallback_frame is not None and not parse_errors:
-        print(f"Read {source_path.name} using CSV {fallback_label}")
-        return add_metadata_columns(fallback_frame, source_path)
-    if parse_errors:
-        encoding, separator, error = parse_errors[-1]
-        line_number = parser_line_number(str(error))
-        preview = csv_line_preview(source_path, line_number, encoding)
-        preview_message = f" Offending line preview: {preview}" if preview else ""
+            except csv.Error as exc:
+                csv_errors.append(exc)
+                continue
+    if no_cde_attempts:
+        encoding, separator = no_cde_attempts[-1]
+        raise RuntimeError(
+            f"No rows remained in '{source_path.name}' after dropping rows where "
+            "columns C, D, and E are all blank. "
+            f"Last tried encoding {encoding}, separator {csv_separator_label(separator)}. "
+            "Try passing the real delimiter, for example --csv-sep ';' or --csv-sep '\\t'."
+        )
+    if csv_errors:
         raise RuntimeError(
             f"Could not parse CSV file '{source_path.name}'. "
-            f"Last tried encoding {encoding} and separator {csv_separator_label(separator)}. "
-            "The file appears to have inconsistent columns after the first two rows. "
-            "Try passing the real delimiter, for example --csv-sep ';' or --csv-sep '\\t'. "
-            "If the delimiter is comma, inspect the reported line for unquoted commas inside values."
-            f"{preview_message}"
-        ) from error
+            "Try passing the real delimiter, for example --csv-sep ';' or --csv-sep '\\t'."
+        ) from csv_errors[-1]
     raise RuntimeError(
         f"Could not decode CSV file '{source_path.name}'. "
         "Try passing --csv-encoding cp1252 or --csv-encoding latin1."
@@ -320,6 +362,11 @@ def read_csv_file(
 def transform_folder(config: RunConfig) -> pd.DataFrame:
     pandas = require_pandas()
     files = find_source_files(config.folder)
+    if config.output_csv:
+        output_csv_path = config.output_csv.resolve()
+        files = [path for path in files if path.resolve() != output_csv_path]
+    if not files:
+        raise ValueError(f"No input Excel or CSV files found in: {config.folder}")
     frames: list[pd.DataFrame] = []
     excel_files = [path for path in files if path.suffix.lower() in EXCEL_EXTENSIONS]
 
