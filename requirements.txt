@@ -143,7 +143,7 @@ def open_workbook(excel, file_path: Path, password: str | None):
         return excel.Workbooks.Open(
             str(file_path.resolve()),
             UpdateLinks=0,
-            ReadOnly=False,
+            ReadOnly=True,
             IgnoreReadOnlyRecommended=True,
             AddToMru=False,
             Notify=False,
@@ -170,9 +170,11 @@ def transform_workbook_with_excel(
     output_path = temp_dir / f"{source_path.stem}__{uuid.uuid4().hex}.xlsx"
     workbook = None
     try:
+        print(f"Opening {source_path.name} with Excel", flush=True)
         workbook = open_workbook(excel, source_path, password)
-        worksheet = workbook.Worksheets(sheet_name) if sheet_name else workbook.Worksheets(1)
-        delete_rows_with_blank_cde(worksheet)
+        if sheet_name:
+            workbook.Worksheets(sheet_name).Activate()
+        print(f"Saving decrypted copy of {source_path.name}", flush=True)
         workbook.SaveAs(
             str(output_path),
             FileFormat=XL_OPENXML_WORKBOOK,
@@ -189,20 +191,12 @@ def transform_workbook_with_excel(
 
 
 def has_text(value: object) -> bool:
+    try:
+        if pd is not None and pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
     return value is not None and str(value).strip() != ""
-
-
-def delete_rows_with_blank_cde(worksheet) -> None:
-    used_range = worksheet.UsedRange
-    first_row = int(used_range.Row)
-    last_row = first_row + int(used_range.Rows.Count) - 1
-    for row_number in range(last_row, first_row - 1, -1):
-        values = [
-            worksheet.Cells(row_number, column_number).Value
-            for column_number in (3, 4, 5)
-        ]
-        if not any(has_text(value) for value in values):
-            worksheet.Rows(row_number).Delete()
 
 
 def find_source_files(folder: Path) -> list[Path]:
@@ -247,15 +241,25 @@ def unique_column_names(columns: Iterable[object]) -> list[str]:
     return names
 
 
-def normalize_column_names(frame: pd.DataFrame) -> pd.DataFrame:
-    frame.columns = unique_column_names(frame.columns)
-    return frame
-
-
-def read_transformed_excel_file(transformed_path: Path, source_path: Path) -> pd.DataFrame:
+def read_transformed_excel_file(
+    transformed_path: Path,
+    source_path: Path,
+    sheet_name: str | None,
+) -> pd.DataFrame:
     pandas = require_pandas()
-    frame = pandas.read_excel(transformed_path, engine="openpyxl", dtype=object)
-    frame = normalize_column_names(frame)
+    raw_frame = pandas.read_excel(
+        transformed_path,
+        engine="openpyxl",
+        dtype=object,
+        header=None,
+        sheet_name=sheet_name or 0,
+    )
+    rows = raw_frame.where(pandas.notna(raw_frame), "").values.tolist()
+    frame = build_frame_from_filtered_rows(
+        rows=rows,
+        source_path=source_path,
+        read_label="Excel temp copy",
+    )
     return add_metadata_columns(frame, source_path)
 
 
@@ -302,10 +306,9 @@ def read_csv_rows(source_path: Path, encoding: str, separator: str) -> list[list
 
 
 def build_frame_from_filtered_rows(
-    rows: list[list[str]],
+    rows: list[list[object]],
     source_path: Path,
-    encoding: str,
-    separator: str,
+    read_label: str,
 ) -> pd.DataFrame:
     pandas = require_pandas()
     filtered_rows = [row for row in rows if row_has_cde_info(row)]
@@ -320,10 +323,7 @@ def build_frame_from_filtered_rows(
     headers = unique_column_names(padded_rows[0])
 
     frame = pandas.DataFrame(padded_rows[1:], columns=headers)
-    print(
-        f"Read {source_path.name} using CSV encoding {encoding}, "
-        f"separator {csv_separator_label(separator)}"
-    )
+    print(f"Read {source_path.name} using {read_label}", flush=True)
     return frame
 
 
@@ -349,7 +349,14 @@ def read_csv_file(
                 if not any(row_has_cde_info(row) for row in rows):
                     no_cde_attempts.append((encoding, separator))
                     continue
-                frame = build_frame_from_filtered_rows(rows, source_path, encoding, separator)
+                frame = build_frame_from_filtered_rows(
+                    rows=rows,
+                    source_path=source_path,
+                    read_label=(
+                        f"CSV encoding {encoding}, "
+                        f"separator {csv_separator_label(separator)}"
+                    ),
+                )
                 return add_metadata_columns(frame, source_path)
             except csv.Error as exc:
                 csv_errors.append(exc)
@@ -389,7 +396,8 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
         excel_context = excel_application() if excel_files else nullcontext(None)
         with excel_context as excel:
             for source_path in files:
-                print(f"Transforming {source_path.name}")
+                size_mb = source_path.stat().st_size / (1024 * 1024)
+                print(f"Transforming {source_path.name} ({size_mb:.2f} MB)", flush=True)
                 if source_path.suffix.lower() in CSV_EXTENSIONS:
                     frames.append(
                         read_csv_file(
@@ -406,7 +414,13 @@ def transform_folder(config: RunConfig) -> pd.DataFrame:
                     sheet_name=config.sheet_name,
                     password=config.excel_password,
                 )
-                frames.append(read_transformed_excel_file(transformed_path, source_path))
+                frames.append(
+                    read_transformed_excel_file(
+                        transformed_path,
+                        source_path,
+                        config.sheet_name,
+                    )
+                )
 
     combined = pandas.concat(frames, ignore_index=True, sort=False)
     return combined
