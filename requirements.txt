@@ -1,174 +1,699 @@
--- Recurrent SMP amount and quantity feed view.
---
--- Run after bi_reporting.inflow_outflow_mv exists, and rerun whenever this
--- report shape changes:
---   psql "$DATABASE_URL" -f queries_ran/smp_amount_feed_view.sql
---
--- To download the recurrent report, export from:
---   bi_reporting.smp_amount_feed_v
---
--- This is a normal view, not a materialized view. The final inflow/outflow
--- source is already materialized, so this view stays current after the final
--- MV is refreshed without adding another refresh dependency.
---
--- Time grain:
---   One row per calendar quarter from 2025 onward, exposed as time_period
---   values such as Q1 2025 and Q2 2025.
---
--- Metric grain:
---   One row per metric_type. Use metric_type = 'Amt' for amount and
---   metric_type = 'Qty' for quantity.
+from __future__ import annotations
 
-drop view if exists bi_reporting.smp_amount_feed_v;
+import argparse
+import csv
+import platform
+import tempfile
+import uuid
+from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
+from datetime import date, datetime
+from pathlib import Path
+from typing import Iterable
 
-create view bi_reporting.smp_amount_feed_v as
-with item_map as (
-    select
-        "Item ID"::text as item_id,
-        max("Seg1"::text) as seg1,
-        min(nullif(nullif("Series"::text, ''), 'NAN')) as series
-    from bi_reporting.item_mapping_mv
-    where "Biz Group" = 'SMART'
-    group by
-        "Item ID"::text
-),
-fact_rows as (
-    select
-        (f."Month"::bigint / 100)::integer as period_year,
-        (((f."Month"::bigint % 100)::integer - 1) / 3 + 1)::integer as period_quarter,
-        'Q'
-            || (((f."Month"::bigint % 100)::integer - 1) / 3 + 1)::text
-            || ' '
-            || (f."Month"::bigint / 100)::text as time_period,
-        f."Subsidiary"::text as subsidiary,
-        'Smartphone'::text as device_type,
-        case
-            when im.seg1 = 'FLAGSHIP' then 'Flagship'
-            else 'Mass'
-        end as segment,
-        coalesce(im.series, nullif(nullif(f."Series"::text, ''), 'NAN'), 'Unmapped') as device,
-        coalesce(f."Total Inflow", 0) as inflow_qty,
-        coalesce(f."Total Outflow", 0) as outflow_qty,
-        coalesce(f."Total Inflow Amt", 0) as inflow_amount,
-        coalesce(f."Total Outflow Amt", 0) as outflow_amount
-    from bi_reporting.inflow_outflow_mv f
-    join item_map im
-        on im.item_id = f."ItemID"
-    where f."Biz Grp" = 'SMART'
-      and f."Month" >= 202501
-      and f."Subsidiary" is not null
-      and f."Subsidiary" <> ''
-),
-base as (
-    select
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        'Amt'::text as metric_type,
-        segment,
-        device,
-        inflow_amount as inflow_value,
-        outflow_amount as outflow_value
-    from fact_rows
+try:
+    import pandas as pd
+except ImportError:
+    pd = None  # type: ignore[assignment]
 
-    union all
 
-    select
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        'Qty'::text as metric_type,
-        segment,
-        device,
-        inflow_qty as inflow_value,
-        outflow_qty as outflow_value
-    from fact_rows
-),
-feed_rows as (
-    select
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        metric_type,
-        'SMP Total'::text as aggregation_level,
-        'SMP Total'::text as segment,
-        'All Smartphones'::text as device,
-        sum(inflow_value) as inflow_value,
-        sum(outflow_value) as outflow_value
-    from base
-    group by
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        metric_type
+# Fill these in, or pass them through CLI flags.
+INPUT_FOLDER = r""
+OUTPUT_CSV = "combined_output.csv"
+SHEET_NAME = None  # None means first worksheet.
+CSV_ENCODING = None  # None tries utf-8-sig, utf-8, cp1252, then latin1.
+CSV_SEPARATOR = None  # None tries auto-detect, comma, semicolon, tab, then pipe.
+USE_EXCEL_FOR_CSV = False  # True opens CSV files through Excel before parsing.
+SKIP_FILE_ERRORS = False  # True skips files Excel/Python cannot process.
 
-    union all
+# Optional fixed source column layout. Leave empty to use the first file's detected
+# header row. When filled, the file's detected header row is still dropped,
+# but these names are used for every file and all files append by position.
+# Keep metadata columns out of this list; they are added automatically.
+USER_DEFINED_COLUMNS: list[str] = [
+    # "City",
+    # "Column 2",
+    # "Column 3",
+]
 
-    select
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        metric_type,
-        'Segment'::text as aggregation_level,
-        segment,
-        'All ' || segment as device,
-        sum(inflow_value) as inflow_value,
-        sum(outflow_value) as outflow_value
-    from base
-    group by
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        metric_type,
-        segment
+# Optional password for normal workbook-password protection.
+# For Microsoft Information Protection / corporate identity encryption,
+# leave this blank and let Excel open the file under your signed-in account.
+EXCEL_PASSWORD = None
 
-    union all
+# Guardrail against accidental column explosion from a bad header row.
+MAX_OUTPUT_COLUMNS = 1600
 
-    select
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        metric_type,
-        'Device'::text as aggregation_level,
-        segment,
-        device,
-        sum(inflow_value) as inflow_value,
-        sum(outflow_value) as outflow_value
-    from base
-    group by
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        metric_type,
-        segment,
-        device
-)
-select
-    period_year,
-    period_quarter,
-    time_period,
-    subsidiary,
-    device_type,
-    metric_type,
-    aggregation_level,
-    segment,
-    device,
-    inflow_value,
-    outflow_value
-from feed_rows;
+# Excel SaveAs file formats.
+XL_CSV = 6
+XL_CSV_UTF8 = 62
+
+# This decoy makes password-protected files fail instead of showing a hidden
+# password dialog. Excel ignores it for unprotected workbooks.
+DECOY_PASSWORD = "no-password-provided"
+
+
+EXCEL_EXTENSIONS = {".xlsx", ".xlsm", ".xlsb", ".xls"}
+CSV_EXTENSIONS = {".csv"}
+SOURCE_EXTENSIONS = EXCEL_EXTENSIONS | CSV_EXTENSIONS
+CDE_INDEXES = (2, 3, 4)
+METADATA_COLUMNS = ("upload_date", "last_modified_date", "source_file")
+
+
+@dataclass(frozen=True)
+class RunConfig:
+    folder: Path
+    sheet_name: str | None
+    csv_encoding: str | None
+    csv_separator: str | None
+    use_excel_for_csv: bool
+    user_defined_columns: list[str]
+    excel_password: str | None
+    output_csv: Path
+    skip_file_errors: bool
+
+
+def require_windows_excel() -> None:
+    if platform.system() != "Windows":
+        raise RuntimeError(
+            "This script must run on Windows with desktop Microsoft Excel installed. "
+            "pywin32 cannot automate Excel on macOS or Linux."
+        )
+
+
+def import_pywin32():
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError as exc:
+        raise RuntimeError(
+            "pywin32 is required. Install it with: pip install pywin32"
+        ) from exc
+    return pythoncom, win32com.client
+
+
+def require_pandas():
+    if pd is None:
+        raise RuntimeError("pandas is required. Install it with: pip install pandas")
+    return pd
+
+
+@contextmanager
+def excel_application():
+    require_windows_excel()
+    pythoncom, win32_client = import_pywin32()
+    pythoncom.CoInitialize()
+    excel = None
+    try:
+        # DispatchEx starts a private Excel process instead of attaching to
+        # whatever workbook the user already has open.
+        excel = win32_client.DispatchEx("Excel.Application")
+        silence_excel(excel)
+        yield excel
+    finally:
+        if excel is not None:
+            try:
+                excel.DisplayAlerts = False
+            except Exception:
+                pass
+            try:
+                excel.Quit()
+            except Exception:
+                pass
+        pythoncom.CoUninitialize()
+
+
+def silence_excel(excel) -> None:
+    # msoAutomationSecurityForceDisable = 3. Prevents macro prompts/runs.
+    for attribute, value in (
+        ("Visible", False),
+        ("DisplayAlerts", False),
+        ("ScreenUpdating", False),
+        ("EnableEvents", False),
+        ("AskToUpdateLinks", False),
+        ("AutomationSecurity", 3),
+    ):
+        try:
+            setattr(excel, attribute, value)
+        except Exception:
+            pass
+
+
+def open_workbook(excel, file_path: Path, password: str | None):
+    open_password = password if password else DECOY_PASSWORD
+    path_text = str(file_path.resolve())
+    attempts = []
+    if file_path.suffix.lower() in CSV_EXTENSIONS and not password:
+        attempts.extend(
+            [
+                (
+                    "CSV open without password arguments",
+                    lambda: excel.Workbooks.Open(
+                        path_text,
+                        UpdateLinks=0,
+                        ReadOnly=True,
+                        IgnoreReadOnlyRecommended=True,
+                        AddToMru=False,
+                        Notify=False,
+                        Local=True,
+                    ),
+                ),
+                ("minimal CSV open", lambda: excel.Workbooks.Open(path_text)),
+            ]
+        )
+    attempts.append(
+        (
+            "workbook open with password guard",
+            lambda: excel.Workbooks.Open(
+                path_text,
+                UpdateLinks=0,
+                ReadOnly=True,
+                IgnoreReadOnlyRecommended=True,
+                AddToMru=False,
+                Notify=False,
+                Password=open_password,
+                WriteResPassword=open_password,
+            ),
+        )
+    )
+    if not password:
+        attempts.append(
+            (
+                "workbook open without password arguments",
+                lambda: excel.Workbooks.Open(
+                    path_text,
+                    UpdateLinks=0,
+                    ReadOnly=True,
+                    IgnoreReadOnlyRecommended=True,
+                    AddToMru=False,
+                    Notify=False,
+                ),
+            )
+        )
+
+    errors: list[str] = []
+    last_exception: Exception | None = None
+    for label, opener in attempts:
+        try:
+            return opener()
+        except Exception as exc:
+            last_exception = exc
+            errors.append(f"{label}: {exc}")
+
+    joined_errors = " | ".join(errors)
+    if "password" in joined_errors.lower():
+        raise RuntimeError(
+            f"Excel reported that '{file_path.name}' needs a workbook password. "
+            "Set EXCEL_PASSWORD in this script or pass --password."
+        ) from last_exception
+    raise RuntimeError(
+        f"Excel could not open '{file_path.name}'. Tried {len(attempts)} open method(s). "
+        f"Errors: {joined_errors}"
+    ) from last_exception
+
+
+def export_workbook_to_csv_with_excel(
+    excel,
+    source_path: Path,
+    temp_dir: Path,
+    sheet_name: str | None,
+    password: str | None,
+) -> Path:
+    output_path = temp_dir / f"{source_path.stem}__{uuid.uuid4().hex}.csv"
+    workbook = None
+    csv_workbook = None
+    try:
+        print(f"Opening {source_path.name} with Excel", flush=True)
+        workbook = open_workbook(excel, source_path, password)
+        worksheet = workbook.Worksheets(sheet_name) if sheet_name else workbook.Worksheets(1)
+        print(f"Exporting visible values from {source_path.name} to CSV", flush=True)
+        worksheet.Copy()
+        csv_workbook = excel.ActiveWorkbook
+        try:
+            csv_workbook.SaveAs(str(output_path), FileFormat=XL_CSV_UTF8, Local=True)
+        except Exception:
+            csv_workbook.SaveAs(str(output_path), FileFormat=XL_CSV, Local=True)
+        return output_path
+    finally:
+        if csv_workbook is not None:
+            try:
+                csv_workbook.Close(SaveChanges=False)
+            except Exception:
+                pass
+        if workbook is not None:
+            try:
+                workbook.Close(SaveChanges=False)
+            except Exception:
+                pass
+
+
+def has_text(value: object) -> bool:
+    try:
+        if pd is not None and pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return value is not None and str(value).strip() != ""
+
+
+def trim_trailing_blanks(row: Iterable[object]) -> list[object]:
+    values = list(row)
+    while values and not has_text(values[-1]):
+        values.pop()
+    return values
+
+
+def find_source_files(folder: Path) -> list[Path]:
+    if not folder.exists() or not folder.is_dir():
+        raise ValueError(f"Folder does not exist or is not a directory: {folder}")
+    files = [
+        path
+        for path in sorted(folder.iterdir())
+        if path.is_file()
+        and path.suffix.lower() in SOURCE_EXTENSIONS
+        and not path.name.startswith("~$")
+    ]
+    if not files:
+        raise ValueError(f"No Excel or CSV files found in: {folder}")
+    return files
+
+
+def add_metadata_columns(frame: pd.DataFrame, source_path: Path) -> pd.DataFrame:
+    last_modified = datetime.fromtimestamp(source_path.stat().st_mtime).replace(microsecond=0)
+
+    frame[METADATA_COLUMNS[0]] = date.today()
+    frame[METADATA_COLUMNS[1]] = last_modified
+    frame[METADATA_COLUMNS[2]] = source_path.name
+    return frame
+
+
+def clean_column_name(value: object, position: int) -> str:
+    text = "" if value is None else str(value).replace("\x00", "").strip()
+    if not text or text.lower().startswith("unnamed:"):
+        return f"column_{position}"
+    return text
+
+
+def unique_column_names(columns: Iterable[object]) -> list[str]:
+    names: list[str] = []
+    seen: dict[str, int] = {}
+    for position, value in enumerate(columns, start=1):
+        base = "City" if position == 1 else clean_column_name(value, position)
+        key = base.casefold()
+        count = seen.get(key, 0) + 1
+        seen[key] = count
+        names.append(base if count == 1 else f"{base}_{count}")
+    return names
+
+
+def normalize_user_defined_columns(columns: Iterable[object]) -> list[str]:
+    normalized = unique_column_names(columns)
+    metadata_names = {column.casefold() for column in METADATA_COLUMNS}
+    conflicts = [column for column in normalized if column.casefold() in metadata_names]
+    if conflicts:
+        raise RuntimeError(
+            "USER_DEFINED_COLUMNS must not include metadata columns: "
+            + ", ".join(conflicts)
+        )
+    validate_column_count(normalized + list(METADATA_COLUMNS), "USER_DEFINED_COLUMNS")
+    return normalized
+
+
+def csv_encoding_candidates(csv_encoding: str | None) -> list[str | None]:
+    if csv_encoding:
+        return [csv_encoding]
+    return ["utf-8-sig", "utf-8", "cp1252", "latin1"]
+
+
+def csv_separator_label(csv_separator: str | None) -> str:
+    if csv_separator is None:
+        return "auto"
+    if csv_separator == "\t":
+        return "\\t"
+    return csv_separator
+
+
+def row_has_cde_info(row: list[object]) -> bool:
+    return any(index < len(row) and has_text(row[index]) for index in CDE_INDEXES)
+
+
+def sniff_csv_separator(sample: str) -> str | None:
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+    except csv.Error:
+        return None
+    return dialect.delimiter
+
+
+def ordered_csv_separators(csv_separator: str | None, sample: str) -> list[str]:
+    if csv_separator:
+        return [csv_separator.replace("\\t", "\t")]
+    candidates: list[str] = []
+    sniffed = sniff_csv_separator(sample)
+    for separator in (sniffed, ",", ";", "\t", "|"):
+        if separator and separator not in candidates:
+            candidates.append(separator)
+    return candidates
+
+
+def read_csv_rows(source_path: Path, encoding: str, separator: str) -> list[list[str]]:
+    with source_path.open("r", encoding=encoding, newline="") as handle:
+        return [trim_trailing_blanks(row) for row in csv.reader(handle, delimiter=separator)]
+
+
+def build_frame_from_filtered_rows(
+    rows: list[list[object]],
+    source_path: Path,
+    read_label: str,
+    user_defined_columns: list[str],
+) -> pd.DataFrame:
+    pandas = require_pandas()
+    filtered_rows = [row for row in rows if row_has_cde_info(row)]
+    if not filtered_rows:
+        raise RuntimeError(
+            f"No rows remained in '{source_path.name}' after dropping rows where "
+            "columns C, D, and E are all blank."
+        )
+
+    if user_defined_columns:
+        headers = user_defined_columns
+        header_width = len(headers)
+        header_source = "USER_DEFINED_COLUMNS"
+        width_source = "configured columns"
+    else:
+        header_width = len(trim_trailing_blanks(filtered_rows[0]))
+        headers = unique_column_names(filtered_rows[0][:header_width])
+        header_source = "detected header row"
+        width_source = "detected header"
+    max_source_columns = MAX_OUTPUT_COLUMNS - len(METADATA_COLUMNS)
+    if header_width > max_source_columns:
+        raise RuntimeError(
+            f"Detected {header_width} source columns in '{source_path.name}', "
+            f"but this loader is capped at {MAX_OUTPUT_COLUMNS} total columns "
+            f"including metadata. Check that the correct header row was detected."
+        )
+    data_rows = filtered_rows[1:]
+    truncated_rows = sum(1 for row in data_rows if len(row) > header_width)
+    if truncated_rows:
+        print(
+            f"Warning: {source_path.name} has {truncated_rows} data rows wider than "
+            f"the {header_width}-column {width_source}. Extra cells were ignored.",
+            flush=True,
+        )
+    padded_rows = [
+        row[:header_width] + [""] * max(0, header_width - len(row))
+        for row in data_rows
+    ]
+
+    frame = pandas.DataFrame(padded_rows, columns=headers)
+    print(
+        f"Read {source_path.name} using {read_label}; "
+        f"{len(frame)} rows, {len(frame.columns)} source columns from {header_source}",
+        flush=True,
+    )
+    return frame
+
+
+def read_csv_file(
+    source_path: Path,
+    csv_encoding: str | None,
+    csv_separator: str | None,
+    user_defined_columns: list[str],
+    metadata_source_path: Path | None = None,
+) -> pd.DataFrame:
+    metadata_path = metadata_source_path or source_path
+    display_name = metadata_path.name
+    last_error: UnicodeDecodeError | None = None
+    csv_errors: list[Exception] = []
+    no_cde_attempts: list[tuple[str, str]] = []
+    for encoding in csv_encoding_candidates(csv_encoding):
+        try:
+            sample = source_path.read_text(encoding=encoding, errors="strict")[:8192]
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            if csv_encoding:
+                break
+            continue
+        for separator in ordered_csv_separators(csv_separator, sample):
+            try:
+                rows = read_csv_rows(source_path, encoding, separator)
+                if not any(row_has_cde_info(row) for row in rows):
+                    no_cde_attempts.append((encoding, separator))
+                    continue
+                frame = build_frame_from_filtered_rows(
+                    rows=rows,
+                    source_path=metadata_path,
+                    read_label=(
+                        f"CSV encoding {encoding}, "
+                        f"separator {csv_separator_label(separator)}"
+                    ),
+                    user_defined_columns=user_defined_columns,
+                )
+                return add_metadata_columns(frame, metadata_path)
+            except csv.Error as exc:
+                csv_errors.append(exc)
+                continue
+    if no_cde_attempts:
+        encoding, separator = no_cde_attempts[-1]
+        raise RuntimeError(
+            f"No rows remained in '{display_name}' after dropping rows where "
+            "columns C, D, and E are all blank. "
+            f"Last tried encoding {encoding}, separator {csv_separator_label(separator)}. "
+            "Try passing the real delimiter, for example --csv-sep ';' or --csv-sep '\\t'."
+        )
+    if csv_errors:
+        raise RuntimeError(
+            f"Could not parse CSV file '{display_name}'. "
+            "Try passing the real delimiter, for example --csv-sep ';' or --csv-sep '\\t'."
+        ) from csv_errors[-1]
+    raise RuntimeError(
+        f"Could not decode CSV file '{display_name}'. "
+        "Try passing --csv-encoding cp1252 or --csv-encoding latin1."
+    ) from last_error
+
+
+def source_columns(frame: pd.DataFrame) -> list[str]:
+    return [
+        str(column)
+        for column in frame.columns
+        if str(column) not in METADATA_COLUMNS
+    ]
+
+
+def align_to_canonical_columns(
+    frame: pd.DataFrame,
+    canonical_columns: list[str],
+    source_path: Path,
+) -> pd.DataFrame:
+    pandas = require_pandas()
+    current_columns = source_columns(frame)
+    if current_columns != canonical_columns:
+        print(
+            f"Warning: {source_path.name} headers differ from the first file. "
+            "Appending by column position.",
+            flush=True,
+        )
+    target_width = len(canonical_columns)
+    current_width = len(current_columns)
+    source_part = frame[current_columns].copy()
+    if current_width > target_width:
+        print(
+            f"Warning: {source_path.name} has {current_width} source columns; "
+            f"only the first {target_width} will be used.",
+            flush=True,
+        )
+        source_part = source_part.iloc[:, :target_width]
+    elif current_width < target_width:
+        print(
+            f"Warning: {source_path.name} has {current_width} source columns; "
+            f"padding to {target_width}.",
+            flush=True,
+        )
+        for index in range(current_width, target_width):
+            source_part[f"__missing_column_{index + 1}"] = ""
+    source_part.columns = canonical_columns
+    metadata_part = frame[list(METADATA_COLUMNS)].copy()
+    return pandas.concat([source_part, metadata_part], axis=1)
+
+
+def transform_folder(config: RunConfig) -> pd.DataFrame:
+    pandas = require_pandas()
+    files = find_source_files(config.folder)
+    if config.output_csv:
+        output_csv_path = config.output_csv.resolve()
+        files = [path for path in files if path.resolve() != output_csv_path]
+    if not files:
+        raise ValueError(f"No input Excel or CSV files found in: {config.folder}")
+    frames: list[pd.DataFrame] = []
+    file_errors: list[tuple[str, str]] = []
+    canonical_columns: list[str] | None = None
+    excel_needed = any(
+        path.suffix.lower() in EXCEL_EXTENSIONS
+        or (config.use_excel_for_csv and path.suffix.lower() in CSV_EXTENSIONS)
+        for path in files
+    )
+
+    with tempfile.TemporaryDirectory(prefix="excel_csv_load_") as temp_root:
+        temp_dir = Path(temp_root)
+        excel_context = excel_application() if excel_needed else nullcontext(None)
+        with excel_context as excel:
+            for source_path in files:
+                try:
+                    size_mb = source_path.stat().st_size / (1024 * 1024)
+                    print(f"Transforming {source_path.name} ({size_mb:.2f} MB)", flush=True)
+                    if source_path.suffix.lower() in CSV_EXTENSIONS and not config.use_excel_for_csv:
+                        frame = read_csv_file(
+                            source_path,
+                            config.csv_encoding,
+                            config.csv_separator,
+                            config.user_defined_columns,
+                        )
+                    else:
+                        if source_path.suffix.lower() in CSV_EXTENSIONS:
+                            print(
+                                f"Opening CSV {source_path.name} through Excel because USE_EXCEL_FOR_CSV=True",
+                                flush=True,
+                            )
+                        exported_csv_path = export_workbook_to_csv_with_excel(
+                            excel=excel,
+                            source_path=source_path,
+                            temp_dir=temp_dir,
+                            sheet_name=config.sheet_name,
+                            password=config.excel_password,
+                        )
+                        frame = read_csv_file(
+                            exported_csv_path,
+                            config.csv_encoding,
+                            config.csv_separator,
+                            config.user_defined_columns,
+                            source_path,
+                        )
+                    if canonical_columns is None:
+                        canonical_columns = config.user_defined_columns or source_columns(frame)
+                        validate_column_count(
+                            canonical_columns + list(METADATA_COLUMNS),
+                            "canonical transformed data",
+                        )
+                        print(
+                            f"Using {'USER_DEFINED_COLUMNS' if config.user_defined_columns else source_path.name} "
+                            f"as canonical column layout with "
+                            f"{len(canonical_columns)} source columns",
+                            flush=True,
+                        )
+                    frame = align_to_canonical_columns(frame, canonical_columns, source_path)
+                    frames.append(frame)
+                except Exception as exc:
+                    message = f"{type(exc).__name__}: {exc}"
+                    if not config.skip_file_errors:
+                        raise RuntimeError(f"Failed while processing '{source_path.name}': {message}") from exc
+                    print(f"Skipping {source_path.name}: {message}", flush=True)
+                    file_errors.append((source_path.name, message))
+
+    if not frames:
+        raise RuntimeError("No files were successfully transformed.")
+    if file_errors:
+        print(f"Skipped {len(file_errors)} file(s):", flush=True)
+        for name, message in file_errors:
+            print(f"  {name}: {message}", flush=True)
+    print(f"Combining {len(frames)} transformed files", flush=True)
+    combined = pandas.concat(frames, ignore_index=True, sort=False)
+    validate_column_count(list(combined.columns), "combined transformed data")
+    print(
+        f"Combined {len(combined)} rows and {len(combined.columns)} columns",
+        flush=True,
+    )
+    return combined
+
+
+def validate_column_count(columns: list[str], context: str) -> None:
+    if len(columns) <= MAX_OUTPUT_COLUMNS:
+        return
+    preview = ", ".join(columns[:20])
+    raise RuntimeError(
+        f"{context} has {len(columns)} columns, which exceeds the "
+        f"{MAX_OUTPUT_COLUMNS}-column safety limit. This usually means one file "
+        "had the wrong header row, the files do not share one column layout, or a row was "
+        f"parsed as thousands of columns. First columns: {preview}"
+    )
+
+
+def build_config(argv: list[str] | None = None) -> RunConfig:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Transform all Excel or CSV files in a folder, append them, "
+            "and write one resulting CSV."
+        )
+    )
+    parser.add_argument(
+        "folder",
+        nargs="?",
+        default=INPUT_FOLDER,
+        help="Folder containing Excel or CSV files. Defaults to INPUT_FOLDER in the script.",
+    )
+    parser.add_argument("--sheet", default=SHEET_NAME, help="Worksheet name. Defaults to the first worksheet.")
+    parser.add_argument(
+        "--csv-encoding",
+        default=globals().get("CSV_ENCODING"),
+        help="Optional CSV encoding, for example utf-8-sig.",
+    )
+    parser.add_argument(
+        "--csv-sep",
+        default=globals().get("CSV_SEPARATOR"),
+        help="Optional CSV delimiter, for example ',' ';' '|' or '\\t'.",
+    )
+    parser.add_argument(
+        "--direct-csv",
+        action="store_true",
+        help="Read CSV files directly with Python. This is the default unless USE_EXCEL_FOR_CSV=True.",
+    )
+    parser.add_argument(
+        "--excel-csv",
+        action="store_true",
+        help="Open/export CSV files through Excel before parsing.",
+    )
+    parser.add_argument(
+        "--skip-file-errors",
+        action="store_true",
+        default=bool(globals().get("SKIP_FILE_ERRORS", False)),
+        help="Skip files that fail to open or parse, then continue with the rest.",
+    )
+    parser.add_argument("--password", default=EXCEL_PASSWORD, help="Optional workbook password.")
+    parser.add_argument(
+        "--output-csv",
+        default=OUTPUT_CSV,
+        help="CSV path for the appended transformed data. Defaults to OUTPUT_CSV in the script.",
+    )
+    args = parser.parse_args(argv)
+
+    folder = Path(args.folder).expanduser()
+    output_csv = Path(args.output_csv).expanduser()
+
+    return RunConfig(
+        folder=folder,
+        sheet_name=args.sheet,
+        csv_encoding=args.csv_encoding,
+        csv_separator=args.csv_sep,
+        use_excel_for_csv=bool(args.excel_csv or (not args.direct_csv and globals().get("USE_EXCEL_FOR_CSV", False))),
+        user_defined_columns=normalize_user_defined_columns(USER_DEFINED_COLUMNS),
+        excel_password=args.password,
+        output_csv=output_csv,
+        skip_file_errors=bool(args.skip_file_errors),
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    config = build_config(argv)
+    print(
+        f"CSV handling mode: {'Excel export' if config.use_excel_for_csv else 'direct Python read'}",
+        flush=True,
+    )
+    combined = transform_folder(config)
+    print(f"Appended {len(combined)} rows from {config.folder}")
+    config.output_csv.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(config.output_csv, index=False)
+    print(f"Wrote transformed CSV: {config.output_csv}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
