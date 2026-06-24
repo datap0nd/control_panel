@@ -681,6 +681,45 @@ def build_config(argv: list[str] | None = None) -> RunConfig:
     )
 
 
+def timestamped_csv_path(output_csv: Path) -> Path:
+    suffix = output_csv.suffix or ".csv"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return output_csv.with_name(f"{output_csv.stem}_{timestamp}{suffix}")
+
+
+def write_output_csv(combined: pd.DataFrame, output_csv: Path) -> Path:
+    try:
+        output_csv.parent.mkdir(parents=True, exist_ok=True)
+    except PermissionError as exc:
+        raise PermissionError(
+            f"Permission denied creating output folder '{output_csv.parent}'. "
+            "Pass --output-csv with a folder you can write to."
+        ) from exc
+    try:
+        combined.to_csv(output_csv, index=False)
+        return output_csv
+    except PermissionError as exc:
+        fallback_path = timestamped_csv_path(output_csv)
+        try:
+            combined.to_csv(fallback_path, index=False)
+            print(
+                f"Could not write {output_csv}; it may be open or locked. "
+                f"Wrote timestamped CSV instead: {fallback_path}",
+                flush=True,
+            )
+            return fallback_path
+        except PermissionError as fallback_exc:
+            raise PermissionError(
+                f"Permission denied writing '{output_csv}'. Close the file if it is "
+                "open in Excel, or pass --output-csv with a folder you can write to."
+            ) from fallback_exc
+        except Exception as fallback_exc:
+            raise RuntimeError(
+                f"Could not write '{output_csv}', and fallback output "
+                f"'{fallback_path}' also failed."
+            ) from fallback_exc
+
+
 def main(argv: list[str] | None = None) -> int:
     config = build_config(argv)
     print(
@@ -689,9 +728,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     combined = transform_folder(config)
     print(f"Appended {len(combined)} rows from {config.folder}")
-    config.output_csv.parent.mkdir(parents=True, exist_ok=True)
-    combined.to_csv(config.output_csv, index=False)
-    print(f"Wrote transformed CSV: {config.output_csv}")
+    output_path = write_output_csv(combined, config.output_csv)
+    print(f"Wrote transformed CSV: {output_path}")
     return 0
 
 
