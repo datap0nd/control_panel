@@ -13,9 +13,9 @@ K = Total
 L = Value / Sales
 M = 2 Q.
 
-Use this as a helper formula in a new column, for example N2.
+Use this as a helper formula in N4.
 It does NOT return the top account name.
-It returns the rank of the current row's account, from E2, within
+It returns the rank of the current row's account, from E4, within
 the current row's context.
 
 The context used by the formula is:
@@ -30,30 +30,30 @@ So if the current row is account ABC inside:
 Channel = 2026
 Customer = IRAN
 Biz Group = SMART
-Plan = whatever is in H2
+Plan = whatever is in H4
 Seg 1 = Sub Total
 Category = 2026
 
 then the formula returns ABC's rank within that exact context.
 
-Formula for N2:
+Formula for N4:
 
 =LET(
   norm,LAMBDA(x,TRIM(SUBSTITUTE(x&"",CHAR(160)," "))),
   num,LAMBDA(x,IFERROR(1*SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(x&"",",",""),"$","")," ",""),0)),
-  ch,norm($C2),
-  ctry,norm($D2),
-  acct,norm($E2),
-  biz,norm($F2),
-  plan,norm($H2),
-  chanCol,$C$2:$C$100000,
-  custCol,$D$2:$D$100000,
-  acctCol,$E$2:$E$100000,
-  bizCol,$F$2:$F$100000,
-  segCol,$G$2:$G$100000,
-  planCol,$H$2:$H$100000,
-  yearCol,$I$2:$I$100000,
-  valCol,$L$2:$L$100000,
+  ch,norm($C4),
+  ctry,norm($D4),
+  acct,norm($E4),
+  biz,norm($F4),
+  plan,norm($H4),
+  chanCol,$C$4:$C$100000,
+  custCol,$D$4:$D$100000,
+  acctCol,$E$4:$E$100000,
+  bizCol,$F$4:$F$100000,
+  segCol,$G$4:$G$100000,
+  planCol,$H$4:$H$100000,
+  yearCol,$I$4:$I$100000,
+  valCol,$L$4:$L$100000,
   sales,num(valCol),
   ctx,(norm(chanCol)=ch)*
       (norm(custCol)=ctry)*
@@ -69,7 +69,7 @@ Formula for N2:
 )
 
 How the rank works:
-1. The formula reads the current row's account from E2.
+1. The formula reads the current row's account from E4.
 2. It finds all rows in the same context: same Channel, Customer,
    Biz Group, and Plan.
 3. It then forces Seg 1 to Sub Total and Category / Year to 2026,
@@ -87,13 +87,13 @@ $N:$N,3
 
 Notes:
 1. If Plan should not be part of the context, remove these two parts:
-   plan,norm($H2),
+   plan,norm($H4),
    (norm(planCol)=plan)*
 2. If Seg 1 should come from the row instead of always Sub Total,
    replace:
    (norm(segCol)="Sub Total")*
    with:
-   (norm(segCol)=norm($G2))*
-3. If your data goes beyond row 100000, extend all $2:$100000 ranges.
+   (norm(segCol)=norm($G4))*
+3. If your data goes beyond row 100000, extend all $4:$100000 ranges.
 4. Ties receive the same rank. For example, if two accounts tie for
    rank 2, the next account will be rank 4.
