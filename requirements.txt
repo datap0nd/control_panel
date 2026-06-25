@@ -55,10 +55,19 @@ Formula for N4:
       (segCol="Sub Total")*
       (yearCol="2026")*
       (acctCol<>""),
+  acctCtx,ctx*(acctCol=acct),
+  poolCount,SUM(ctx),
+  acctCount,SUM(acctCtx),
   accts,UNIQUE(FILTER(acctCol,ctx)),
   totals,BYROW(accts,LAMBDA(a,SUM(FILTER(sales,ctx*(acctCol=a),0)))),
-  myTotal,XLOOKUP(acct,accts,totals),
-  RANK.EQ(myTotal,totals,0)
+  myTotal,SUM(FILTER(sales,acctCtx,0)),
+  IF(poolCount=0,
+    "No matching 2026 Sub Total pool",
+    IF(acctCount=0,
+      "Current OrgSales not found in pool",
+      RANK.EQ(myTotal,totals,0)
+    )
+  )
 )
 
 Important:
@@ -71,7 +80,7 @@ How it works:
 2. Inside that pool, keep only Seg1 = Sub Total and Category = 2026.
 3. Get the unique OrgSales accounts in that pool.
 4. Sum Value for each OrgSales account.
-5. Find the current row's OrgSales total.
+5. Sum the current row's OrgSales total inside that same pool.
 6. Return its RANK.EQ position, descending by Value.
 
 Rank 1 = highest Value.
