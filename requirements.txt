@@ -23,7 +23,6 @@ T = Top account returned by the formula
 U = Value for that account in the displayed year
 
 Fixed source filters used by both formulas:
-F / Biz Group = SMART
 G / Seg 1 = Sub Total
 
 This version avoids the common reason SUMIFS returns all zeros:
@@ -31,7 +30,7 @@ numbers stored as text, years stored as text, and hidden spaces in
 the source data.
 
 Put this formula in T2 to return the top account for the row's
-channel / country, ranked by 2026 sales for SMART / Sub Total:
+channel / country, ranked by 2026 sales for Sub Total:
 
 =LET(
   norm,LAMBDA(x,TRIM(SUBSTITUTE(x&"",CHAR(160)," "))),
@@ -42,14 +41,12 @@ channel / country, ranked by 2026 sales for SMART / Sub Total:
   chanCol,$C$2:$C$100000,
   custCol,$D$2:$D$100000,
   acctCol,$E$2:$E$100000,
-  bizCol,$F$2:$F$100000,
   segCol,$G$2:$G$100000,
   yearCol,$I$2:$I$100000,
   valCol,$L$2:$L$100000,
   sales,num(valCol),
   mask,(norm(chanCol)=ch)*
        (norm(custCol)=ctry)*
-       (norm(bizCol)="SMART")*
        (norm(segCol)="Sub Total")*
        (norm(yearCol)="2026")*
        (norm(acctCol)<>""),
@@ -59,7 +56,7 @@ channel / country, ranked by 2026 sales for SMART / Sub Total:
 )
 
 Put this formula in U2 to fetch the value for that returned account
-in the row's selected/displayed year, also for SMART / Sub Total:
+in the row's selected/displayed year, also for Sub Total:
 
 =LET(
   norm,LAMBDA(x,TRIM(SUBSTITUTE(x&"",CHAR(160)," "))),
@@ -71,7 +68,6 @@ in the row's selected/displayed year, also for SMART / Sub Total:
   chanCol,$C$2:$C$100000,
   custCol,$D$2:$D$100000,
   acctCol,$E$2:$E$100000,
-  bizCol,$F$2:$F$100000,
   segCol,$G$2:$G$100000,
   yearCol,$I$2:$I$100000,
   valCol,$L$2:$L$100000,
@@ -79,7 +75,6 @@ in the row's selected/displayed year, also for SMART / Sub Total:
   SUM(FILTER(sales,
     (norm(chanCol)=ch)*
     (norm(custCol)=ctry)*
-    (norm(bizCol)="SMART")*
     (norm(segCol)="Sub Total")*
     (norm(yearCol)=yr)*
     (norm(acctCol)=acct),
@@ -94,7 +89,7 @@ Quick checks if it still returns zero:
    O2 = Channel, P2 = Customer, R2 = year, S2 = rank.
    Q2 is not used by these formulas.
 3. Confirm Value / Sales is in column L, not Total in column K.
-4. Confirm column F contains SMART and column G contains Sub Total.
+4. Confirm column G contains Sub Total.
    If your file uses different capitalization or wording, change those
    fixed text criteria in the formulas.
 5. If your Excel uses semicolons instead of commas in formulas,
