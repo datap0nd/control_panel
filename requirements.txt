@@ -1,46 +1,68 @@
 Top 3 accounts by 2026 sales
 
-Assume the source table is named SalesData and has these columns:
-channel, customer, orgsales, seg1, category, value
+Source data columns, starting from column C:
+C = Channel
+D = Customer / Country
+E = OrgSales / Account
+F = Biz Group
+G = Seg 1
+H = Plan
+I = Category / Year
+J = 1 Q.
+K = Total
+L = Value / Sales
+M = 2 Q.
 
-In the output table, use one row per rank, where rank is 1, 2, or 3.
+Example output table layout:
+O = Channel
+P = Customer / Country
+Q = Seg 1
+R = Category / Year to display
+S = Rank, using 1, 2, or 3
+T = Top account returned by the formula
+U = Value for that account in the displayed year
 
-Formula to return the top account for the row's channel / country / seg1,
-ranked by 2026 sales:
+Put this formula in T2 to return the top account for the row's
+channel / country / seg1, ranked by 2026 sales:
 
 =LET(
-  ch,[@channel],
-  ctry,[@customer],
-  seg,[@seg1],
-  n,[@rank],
-  accts,UNIQUE(FILTER(SalesData[orgsales],
-    (SalesData[channel]=ch)*
-    (SalesData[customer]=ctry)*
-    (SalesData[seg1]=seg)*
-    (SalesData[category]=2026)
+  ch,$O2,
+  ctry,$P2,
+  seg,$Q2,
+  n,$S2,
+  accts,UNIQUE(FILTER($E:$E,
+    ($E:$E<>"")*
+    ($C:$C=ch)*
+    ($D:$D=ctry)*
+    ($G:$G=seg)*
+    ($I:$I=2026)
   )),
   sales2026,SUMIFS(
-    SalesData[value],
-    SalesData[channel],ch,
-    SalesData[customer],ctry,
-    SalesData[seg1],seg,
-    SalesData[category],2026,
-    SalesData[orgsales],accts
+    $L:$L,
+    $C:$C,ch,
+    $D:$D,ctry,
+    $G:$G,seg,
+    $I:$I,2026,
+    $E:$E,accts
   ),
   IFERROR(INDEX(SORTBY(accts,sales2026,-1),n),"")
 )
 
-Formula to fetch the value for that returned account in the row's selected year:
+Put this formula in U2 to fetch the value for that returned account
+in the row's selected/displayed year:
 
 =SUMIFS(
-  SalesData[value],
-  SalesData[channel],[@channel],
-  SalesData[customer],[@customer],
-  SalesData[seg1],[@seg1],
-  SalesData[category],[@category],
-  SalesData[orgsales],[@TopAccount]
+  $L:$L,
+  $C:$C,$O2,
+  $D:$D,$P2,
+  $G:$G,$Q2,
+  $I:$I,$R2,
+  $E:$E,$T2
 )
 
 Important:
-The ranking formula always uses category = 2026.
-The value formula uses the output row's category/year.
+The ranking formula always uses column I = 2026.
+The value formula uses the output row's selected year in R.
+If your year values are stored as text, change 2026 to "2026".
+If your output table starts somewhere other than O, only change the
+output references $O2, $P2, $Q2, $R2, $S2, and $T2.
