@@ -1,4 +1,4 @@
-Rank each OrgSales account within the current row context
+Perfect OrgSales rank formula
 
 Headers start in row 3, beginning in column C:
 C = Channel
@@ -12,19 +12,23 @@ J = 1 Q.
 K = Total
 L = Value / Sales
 M = 2 Q.
+N = Rank helper
 
-Put this helper formula in N4 and copy it down.
+Paste this in N4 and copy it down.
 
-What it does:
-It returns the rank of the current row's OrgSales account from E4.
-The ranking is calculated within the current row's Channel, Customer,
-and Biz Group.
+This formula ranks the current row's OrgSales account from E4 by
+descending Value from column L.
+
+Dynamic context from current row:
+C = Channel
+D = Customer / Country
+F = Biz Group
 
 Hard filters:
 G / Seg1 = Sub Total
 I / Category = 2026
 
-Ignored fields:
+Ignored:
 H / Plan
 J / 1 Q.
 K / Total
@@ -32,57 +36,45 @@ M / 2 Q.
 
 Formula for N4:
 
-=IFERROR(LET(
-  norm,LAMBDA(x,TRIM(SUBSTITUTE(x&"",CHAR(160)," "))),
-  num,LAMBDA(x,IFERROR(1*SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(x&"",",",""),"$","")," ",""),0)),
-  ch,norm($C4),
-  ctry,norm($D4),
-  acct,norm($E4),
-  biz,norm($F4),
-  chanCol,$C$4:$C$100000,
-  custCol,$D$4:$D$100000,
-  acctCol,$E$4:$E$100000,
-  bizCol,$F$4:$F$100000,
-  segCol,$G$4:$G$100000,
-  yearCol,$I$4:$I$100000,
+=LET(
+  ch,TRIM(SUBSTITUTE($C4&"",CHAR(160)," ")),
+  ctry,TRIM(SUBSTITUTE($D4&"",CHAR(160)," ")),
+  acct,TRIM(SUBSTITUTE($E4&"",CHAR(160)," ")),
+  biz,TRIM(SUBSTITUTE($F4&"",CHAR(160)," ")),
+  chanCol,TRIM(SUBSTITUTE($C$4:$C$100000&"",CHAR(160)," ")),
+  custCol,TRIM(SUBSTITUTE($D$4:$D$100000&"",CHAR(160)," ")),
+  acctCol,TRIM(SUBSTITUTE($E$4:$E$100000&"",CHAR(160)," ")),
+  bizCol,TRIM(SUBSTITUTE($F$4:$F$100000&"",CHAR(160)," ")),
+  segCol,TRIM(SUBSTITUTE($G$4:$G$100000&"",CHAR(160)," ")),
+  yearCol,TRIM(SUBSTITUTE($I$4:$I$100000&"",CHAR(160)," ")),
   valCol,$L$4:$L$100000,
-  sales,num(valCol),
-  ctx,(norm(chanCol)=ch)*
-      (norm(custCol)=ctry)*
-      (norm(bizCol)=biz)*
-      (norm(segCol)="Sub Total")*
-      (norm(yearCol)="2026")*
-      (norm(acctCol)<>""),
-  accts,UNIQUE(FILTER(norm(acctCol),ctx)),
-  totals,BYROW(accts,LAMBDA(a,SUM(FILTER(sales,ctx*(norm(acctCol)=a),0)))),
-  myTotal,INDEX(totals,XMATCH(acct,accts,0)),
-  1+SUM(--(totals>myTotal))
-),"")
+  sales,IFERROR(1*SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(valCol&"",",",""),"$","")," ",""),0),
+  ctx,(chanCol=ch)*
+      (custCol=ctry)*
+      (bizCol=biz)*
+      (segCol="Sub Total")*
+      (yearCol="2026")*
+      (acctCol<>""),
+  accts,UNIQUE(FILTER(acctCol,ctx)),
+  totals,BYROW(accts,LAMBDA(a,SUM(FILTER(sales,ctx*(acctCol=a),0)))),
+  myTotal,XLOOKUP(acct,accts,totals),
+  RANK.EQ(myTotal,totals,0)
+)
 
-Logic:
-1. Read the current row context:
-   Channel from C4, Customer from D4, Biz Group from F4.
-2. Read the current row account:
-   OrgSales from E4.
-3. Build the ranking pool:
-   all rows with the same Channel, Customer, and Biz Group,
-   where Seg1 is Sub Total and Category is 2026.
-4. Ignore Plan completely.
-5. Group that ranking pool by OrgSales.
-6. Sum Value from column L for each OrgSales account.
-7. Rank the current row's OrgSales by descending summed Value.
-   Rank 1 means no account has a higher Value.
-   Rank 3 means two accounts have a higher Value.
+Important:
+There is no outer IFERROR on purpose. If it cannot calculate, Excel
+should show the real error instead of silently returning blank.
 
-You can then use column N as another SUMIFS criterion.
-For example:
+How it works:
+1. Build a filtered pool of rows with the same Channel, Customer, and
+   Biz Group as the current row.
+2. Inside that pool, keep only Seg1 = Sub Total and Category = 2026.
+3. Get the unique OrgSales accounts in that pool.
+4. Sum Value for each OrgSales account.
+5. Find the current row's OrgSales total.
+6. Return its RANK.EQ position, descending by Value.
 
-$N:$N,3
+Rank 1 = highest Value.
+Rank 3 = two OrgSales accounts have higher Value.
 
-Notes:
-1. This treats OrgSales as the account being ranked.
-   Do not add OrgSales as a context filter before ranking, or each
-   account only compares against itself.
-2. If your data goes beyond row 100000, extend all $4:$100000 ranges.
-3. Ties receive the same rank. For example, if two accounts tie for
-   rank 2, the next account will be rank 4.
+If Excel uses semicolon separators, replace commas with semicolons.
