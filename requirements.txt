@@ -22,47 +22,70 @@ S = Rank, using 1, 2, or 3
 T = Top account returned by the formula
 U = Value for that account in the displayed year
 
+This version avoids the common reason SUMIFS returns all zeros:
+numbers stored as text, years stored as text, and hidden spaces in
+the source data.
+
 Put this formula in T2 to return the top account for the row's
 channel / country / seg1, ranked by 2026 sales:
 
 =LET(
-  ch,$O2,
-  ctry,$P2,
-  seg,$Q2,
+  norm,LAMBDA(x,TRIM(SUBSTITUTE(x&"",CHAR(160)," "))),
+  num,LAMBDA(x,IFERROR(1*SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(x&"",",",""),"$","")," ",""),0)),
+  ch,norm($O2),
+  ctry,norm($P2),
+  seg,norm($Q2),
   n,$S2,
-  accts,UNIQUE(FILTER($E:$E,
-    ($E:$E<>"")*
-    ($C:$C=ch)*
-    ($D:$D=ctry)*
-    ($G:$G=seg)*
-    ($I:$I=2026)
-  )),
-  sales2026,SUMIFS(
-    $L:$L,
-    $C:$C,ch,
-    $D:$D,ctry,
-    $G:$G,seg,
-    $I:$I,2026,
-    $E:$E,accts
-  ),
-  IFERROR(INDEX(SORTBY(accts,sales2026,-1),n),"")
+  chanCol,$C$2:$C$100000,
+  custCol,$D$2:$D$100000,
+  acctCol,$E$2:$E$100000,
+  segCol,$G$2:$G$100000,
+  yearCol,$I$2:$I$100000,
+  valCol,$L$2:$L$100000,
+  sales,num(valCol),
+  mask,(norm(chanCol)=ch)*
+       (norm(custCol)=ctry)*
+       (norm(segCol)=seg)*
+       (norm(yearCol)="2026")*
+       (norm(acctCol)<>""),
+  accts,UNIQUE(FILTER(norm(acctCol),mask)),
+  totals,BYROW(accts,LAMBDA(a,SUM(FILTER(sales,mask*(norm(acctCol)=a),0)))),
+  IFERROR(INDEX(SORTBY(accts,totals,-1),n),"")
 )
 
 Put this formula in U2 to fetch the value for that returned account
 in the row's selected/displayed year:
 
-=SUMIFS(
-  $L:$L,
-  $C:$C,$O2,
-  $D:$D,$P2,
-  $G:$G,$Q2,
-  $I:$I,$R2,
-  $E:$E,$T2
+=LET(
+  norm,LAMBDA(x,TRIM(SUBSTITUTE(x&"",CHAR(160)," "))),
+  num,LAMBDA(x,IFERROR(1*SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(x&"",",",""),"$","")," ",""),0)),
+  ch,norm($O2),
+  ctry,norm($P2),
+  seg,norm($Q2),
+  yr,norm($R2),
+  acct,norm($T2),
+  chanCol,$C$2:$C$100000,
+  custCol,$D$2:$D$100000,
+  acctCol,$E$2:$E$100000,
+  segCol,$G$2:$G$100000,
+  yearCol,$I$2:$I$100000,
+  valCol,$L$2:$L$100000,
+  sales,num(valCol),
+  SUM(FILTER(sales,
+    (norm(chanCol)=ch)*
+    (norm(custCol)=ctry)*
+    (norm(segCol)=seg)*
+    (norm(yearCol)=yr)*
+    (norm(acctCol)=acct),
+    0
+  ))
 )
 
-Important:
-The ranking formula always uses column I = 2026.
-The value formula uses the output row's selected year in R.
-If your year values are stored as text, change 2026 to "2026".
-If your output table starts somewhere other than O, only change the
-output references $O2, $P2, $Q2, $R2, $S2, and $T2.
+Quick checks if it still returns zero:
+1. Confirm the source values really run from row 2 to row 100000.
+   If not, change every $2:$100000 range to cover your actual rows.
+2. Confirm the output row cells match the source spelling exactly:
+   O2 = Channel, P2 = Customer, Q2 = Seg 1, R2 = year, S2 = rank.
+3. Confirm Value / Sales is in column L, not Total in column K.
+4. If your Excel uses semicolons instead of commas in formulas,
+   replace the argument separators with semicolons.
