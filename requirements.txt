@@ -16,36 +16,41 @@ M = 2 Q.
 Example output table layout:
 O = Channel
 P = Customer / Country
-Q = Seg 1
+Q = Seg 1, optional / not used by these formulas
 R = Category / Year to display
 S = Rank, using 1, 2, or 3
 T = Top account returned by the formula
 U = Value for that account in the displayed year
+
+Fixed source filters used by both formulas:
+F / Biz Group = SMART
+G / Seg 1 = Sub Total
 
 This version avoids the common reason SUMIFS returns all zeros:
 numbers stored as text, years stored as text, and hidden spaces in
 the source data.
 
 Put this formula in T2 to return the top account for the row's
-channel / country / seg1, ranked by 2026 sales:
+channel / country, ranked by 2026 sales for SMART / Sub Total:
 
 =LET(
   norm,LAMBDA(x,TRIM(SUBSTITUTE(x&"",CHAR(160)," "))),
   num,LAMBDA(x,IFERROR(1*SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(x&"",",",""),"$","")," ",""),0)),
   ch,norm($O2),
   ctry,norm($P2),
-  seg,norm($Q2),
   n,$S2,
   chanCol,$C$2:$C$100000,
   custCol,$D$2:$D$100000,
   acctCol,$E$2:$E$100000,
+  bizCol,$F$2:$F$100000,
   segCol,$G$2:$G$100000,
   yearCol,$I$2:$I$100000,
   valCol,$L$2:$L$100000,
   sales,num(valCol),
   mask,(norm(chanCol)=ch)*
        (norm(custCol)=ctry)*
-       (norm(segCol)=seg)*
+       (norm(bizCol)="SMART")*
+       (norm(segCol)="Sub Total")*
        (norm(yearCol)="2026")*
        (norm(acctCol)<>""),
   accts,UNIQUE(FILTER(norm(acctCol),mask)),
@@ -54,19 +59,19 @@ channel / country / seg1, ranked by 2026 sales:
 )
 
 Put this formula in U2 to fetch the value for that returned account
-in the row's selected/displayed year:
+in the row's selected/displayed year, also for SMART / Sub Total:
 
 =LET(
   norm,LAMBDA(x,TRIM(SUBSTITUTE(x&"",CHAR(160)," "))),
   num,LAMBDA(x,IFERROR(1*SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(x&"",",",""),"$","")," ",""),0)),
   ch,norm($O2),
   ctry,norm($P2),
-  seg,norm($Q2),
   yr,norm($R2),
   acct,norm($T2),
   chanCol,$C$2:$C$100000,
   custCol,$D$2:$D$100000,
   acctCol,$E$2:$E$100000,
+  bizCol,$F$2:$F$100000,
   segCol,$G$2:$G$100000,
   yearCol,$I$2:$I$100000,
   valCol,$L$2:$L$100000,
@@ -74,7 +79,8 @@ in the row's selected/displayed year:
   SUM(FILTER(sales,
     (norm(chanCol)=ch)*
     (norm(custCol)=ctry)*
-    (norm(segCol)=seg)*
+    (norm(bizCol)="SMART")*
+    (norm(segCol)="Sub Total")*
     (norm(yearCol)=yr)*
     (norm(acctCol)=acct),
     0
@@ -85,7 +91,11 @@ Quick checks if it still returns zero:
 1. Confirm the source values really run from row 2 to row 100000.
    If not, change every $2:$100000 range to cover your actual rows.
 2. Confirm the output row cells match the source spelling exactly:
-   O2 = Channel, P2 = Customer, Q2 = Seg 1, R2 = year, S2 = rank.
+   O2 = Channel, P2 = Customer, R2 = year, S2 = rank.
+   Q2 is not used by these formulas.
 3. Confirm Value / Sales is in column L, not Total in column K.
-4. If your Excel uses semicolons instead of commas in formulas,
+4. Confirm column F contains SMART and column G contains Sub Total.
+   If your file uses different capitalization or wording, change those
+   fixed text criteria in the formulas.
+5. If your Excel uses semicolons instead of commas in formulas,
    replace the argument separators with semicolons.
