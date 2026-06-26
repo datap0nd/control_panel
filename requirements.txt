@@ -1,89 +1,435 @@
-Perfect OrgSales rank formula
-
-Headers start in row 3, beginning in column C:
-C = Channel
-D = Customer / Country
-E = OrgSales / Account
-F = Biz Group
-G = Seg1
-H = Plan
-I = Category / Year
-J = 1 Q.
-K = Total
-L = Value / Sales
-M = 2 Q.
-N = Rank helper
-
-Paste this in N4 and copy it down.
-
-This formula ranks the current row's OrgSales account from E4 by
-descending Value from column L.
-
-Dynamic context from current row:
-C = Channel
-D = Customer / Country
-F = Biz Group
-
-Hard filters:
-G / Seg1 = Sub Total
-I / Category = 2026
-
-Ignored:
-H / Plan
-J / 1 Q.
-K / Total
-M / 2 Q.
-
-Formula for N4:
-
-=LET(
-  ch,TRIM(SUBSTITUTE($C4&"",CHAR(160)," ")),
-  ctry,TRIM(SUBSTITUTE($D4&"",CHAR(160)," ")),
-  acct,TRIM(SUBSTITUTE($E4&"",CHAR(160)," ")),
-  biz,TRIM(SUBSTITUTE($F4&"",CHAR(160)," ")),
-  chanCol,TRIM(SUBSTITUTE($C$4:$C$100000&"",CHAR(160)," ")),
-  custCol,TRIM(SUBSTITUTE($D$4:$D$100000&"",CHAR(160)," ")),
-  acctCol,TRIM(SUBSTITUTE($E$4:$E$100000&"",CHAR(160)," ")),
-  bizCol,TRIM(SUBSTITUTE($F$4:$F$100000&"",CHAR(160)," ")),
-  segCol,TRIM(SUBSTITUTE($G$4:$G$100000&"",CHAR(160)," ")),
-  yearCol,TRIM(SUBSTITUTE($I$4:$I$100000&"",CHAR(160)," ")),
-  valCol,$L$4:$L$100000,
-  sales,IFERROR(1*SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(valCol&"",",",""),"$","")," ",""),0),
-  ctx,(chanCol=ch)*
-      (custCol=ctry)*
-      (bizCol=biz)*
-      (segCol="Sub Total")*
-      (yearCol="2026")*
-      (acctCol<>""),
-  acctCtx,ctx*(acctCol=acct),
-  poolCount,SUM(ctx),
-  acctCount,SUM(acctCtx),
-  accts,UNIQUE(FILTER(acctCol,ctx)),
-  totals,BYROW(accts,LAMBDA(a,SUM(FILTER(sales,ctx*(acctCol=a),0)))),
-  myTotal,SUM(FILTER(sales,acctCtx,0)),
-  IF(poolCount=0,
-    "No matching 2026 Sub Total pool",
-    IF(acctCount=0,
-      "Current OrgSales not found in pool",
-      RANK.EQ(myTotal,totals,0)
-    )
-  )
+param(
+    [string]$Repository = "",
+    [string]$Workflow = "windows-portable.yml",
+    [string]$Branch = "main",
+    [string]$LatestReleaseTag = "composer-windows-latest",
+    [string]$ArtifactName = "composer-windows",
+    [string]$ReleaseZipName = "composer-windows.zip",
+    [string]$LocalReleaseZipPath = "",
+    [string]$OutputDirectory = (Join-Path ([Environment]::GetFolderPath("UserProfile")) "Downloads\ComposerInstall"),
+    [string]$RunId = "",
+    [switch]$KeepDownloads
 )
 
-Important:
-There is no outer IFERROR on purpose. If it cannot calculate, Excel
-should show the real error instead of silently returning blank.
+$ErrorActionPreference = "Stop"
 
-How it works:
-1. Build a filtered pool of rows with the same Channel, Customer, and
-   Biz Group as the current row.
-2. Inside that pool, keep only Seg1 = Sub Total and Category = 2026.
-3. Get the unique OrgSales accounts in that pool.
-4. Sum Value for each OrgSales account.
-5. Sum the current row's OrgSales total inside that same pool.
-6. Return its RANK.EQ position, descending by Value.
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+try {
+    $Proxy = [System.Net.WebRequest]::GetSystemWebProxy()
+    $Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
+    [System.Net.WebRequest]::DefaultWebProxy = $Proxy
+} catch {}
 
-Rank 1 = highest Value.
-Rank 3 = two OrgSales accounts have higher Value.
+function Get-EnvValue {
+    param(
+        [string]$Name,
+        [string]$Default = $null
+    )
 
-If Excel uses semicolon separators, replace commas with semicolons.
+    $Value = [Environment]::GetEnvironmentVariable($Name, "Process")
+    if (-not $Value) { $Value = [Environment]::GetEnvironmentVariable($Name, "User") }
+    if (-not $Value) { $Value = [Environment]::GetEnvironmentVariable($Name, "Machine") }
+    if (-not $Value) { return $Default }
+    return $Value
+}
+
+function Require-EnvValue {
+    param([string]$Name)
+
+    $Value = Get-EnvValue $Name
+    if (-not $Value) {
+        throw "Environment variable $Name is not set. Set it once with: [Environment]::SetEnvironmentVariable('$Name','TOKEN','User'), then reopen PowerShell."
+    }
+    return $Value
+}
+
+function Get-HttpStatusCode {
+    param([object]$ErrorRecord)
+
+    if ($ErrorRecord.Exception.Response) {
+        try {
+            return [int]$ErrorRecord.Exception.Response.StatusCode
+        } catch {
+            return "N/A"
+        }
+    }
+    return "N/A"
+}
+
+function Write-NetworkGuidance {
+    param(
+        [object]$Code,
+        [string]$Message
+    )
+
+    if ($Code -eq 502) {
+        Write-Host "A 502 usually means the corporate proxy could not connect to GitHub's download storage redirect." -ForegroundColor Yellow
+    }
+
+    if ($Message -match "forbidden by its access permissions|SocketException|access a socket") {
+        Write-Host "This socket error usually means endpoint policy or firewall rules are blocking scripted outbound web requests." -ForegroundColor Yellow
+    }
+
+    Write-Host "If this keeps failing, download composer-windows.zip through an approved browser or file-transfer path." -ForegroundColor Yellow
+}
+
+function Save-GitHubFileWithCurl {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$Accept = "application/octet-stream"
+    )
+
+    $Curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if (-not $Curl) {
+        return $false
+    }
+
+    $ConfigPath = Join-Path ([System.IO.Path]::GetTempPath()) "composer_curl_$([guid]::NewGuid().ToString('N')).conf"
+    $CurlConfig = @(
+        'header = "Authorization: token ' + $script:Pat + '"',
+        'header = "Accept: ' + $Accept + '"',
+        'header = "Cache-Control: no-cache"',
+        'header = "X-GitHub-Api-Version: 2022-11-28"',
+        'header = "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"'
+    )
+
+    try {
+        [System.IO.File]::WriteAllLines($ConfigPath, $CurlConfig, [System.Text.Encoding]::ASCII)
+        & $Curl.Source `
+            --fail `
+            --location `
+            --silent `
+            --show-error `
+            --connect-timeout 30 `
+            --max-time 180 `
+            --config $ConfigPath `
+            --output $Path `
+            $Uri
+
+        if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $Path)) {
+            return $true
+        }
+
+        Write-Host "  curl.exe failed with exit code $LASTEXITCODE" -ForegroundColor Yellow
+        return $false
+    } catch {
+        Write-Host "  curl.exe fallback failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    } finally {
+        if (Test-Path -LiteralPath $ConfigPath) {
+            Remove-Item -LiteralPath $ConfigPath -Force
+        }
+    }
+}
+
+function Invoke-GitHubJson {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri
+    )
+
+    $LastCode = "N/A"
+    $LastMessage = ""
+    for ($Attempt = 1; $Attempt -le 3; $Attempt++) {
+        try {
+            $Response = Invoke-WebRequest -Uri $Uri -Headers $script:JsonHeaders -UseBasicParsing -TimeoutSec 60
+            return ($Response.Content | ConvertFrom-Json)
+        } catch {
+            $Code = Get-HttpStatusCode $_
+            $Message = $_.Exception.Message
+            $LastCode = $Code
+            $LastMessage = $Message
+            if ($Attempt -lt 3) {
+                Write-Host "  API attempt $Attempt failed [HTTP $Code]: $Message. Retrying..." -ForegroundColor Yellow
+                Start-Sleep -Seconds (2 * $Attempt)
+            } else {
+                Write-Host "  PowerShell API requests failed. Trying curl.exe fallback..." -ForegroundColor Yellow
+            }
+        }
+    }
+
+    $JsonPath = Join-Path ([System.IO.Path]::GetTempPath()) "composer_github_$([guid]::NewGuid().ToString('N')).json"
+    try {
+        if (Save-GitHubFileWithCurl -Uri $Uri -Path $JsonPath -Accept "application/vnd.github+json") {
+            return (Get-Content -LiteralPath $JsonPath -Raw | ConvertFrom-Json)
+        }
+    } finally {
+        if (Test-Path -LiteralPath $JsonPath) {
+            Remove-Item -LiteralPath $JsonPath -Force
+        }
+    }
+
+    Write-Host "ERROR: GitHub API request failed [HTTP $LastCode]: $Uri" -ForegroundColor Red
+    Write-Host $LastMessage -ForegroundColor Red
+    Write-NetworkGuidance -Code $LastCode -Message $LastMessage
+    exit 1
+}
+
+function Try-Invoke-GitHubJson {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri
+    )
+
+    try {
+        $Response = Invoke-WebRequest -Uri $Uri -Headers $script:JsonHeaders -UseBasicParsing -TimeoutSec 60
+        return ($Response.Content | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
+}
+
+function Save-GitHubFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    for ($Attempt = 1; $Attempt -le 3; $Attempt++) {
+        try {
+            Invoke-WebRequest -Uri $Uri -Headers $script:DownloadHeaders -OutFile $Path -UseBasicParsing -TimeoutSec 120 -MaximumRedirection 10
+            return
+        } catch {
+            $Code = Get-HttpStatusCode $_
+            $Message = $_.Exception.Message
+            if ($Attempt -lt 3) {
+                Write-Host "  download attempt $Attempt failed [HTTP $Code]: $Message. Retrying..." -ForegroundColor Yellow
+                Start-Sleep -Seconds (2 * $Attempt)
+            } else {
+                Write-Host "  PowerShell download failed. Trying curl.exe fallback..." -ForegroundColor Yellow
+                if (Save-GitHubFileWithCurl -Uri $Uri -Path $Path) {
+                    return
+                }
+
+                Write-Host "ERROR: GitHub download failed [HTTP $Code]: $Uri" -ForegroundColor Red
+                Write-Host $Message -ForegroundColor Red
+                Write-NetworkGuidance -Code $Code -Message $Message
+                exit 1
+            }
+        }
+    }
+}
+
+function Assert-ZipFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$ZipPath,
+        [Parameter(Mandatory = $true)][string]$SourceLabel
+    )
+
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        $Archive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+        $Archive.Dispose()
+    } catch {
+        $Size = 0
+        try {
+            $Size = (Get-Item -LiteralPath $ZipPath).Length
+        } catch {}
+        throw "Downloaded file from $SourceLabel is not a valid zip: $ZipPath ($Size bytes). Delete it and rerun the installer; if this repeats, GitHub or the network proxy returned a non-zip response."
+    }
+}
+
+function Assert-WindowsRuntimeZip {
+    param(
+        [Parameter(Mandatory = $true)][string]$ZipPath,
+        [Parameter(Mandatory = $true)][string]$SourceLabel
+    )
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+    $Archive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $Entries = @($Archive.Entries | ForEach-Object { $_.FullName.Replace("\", "/").ToLowerInvariant() })
+        $Missing = @()
+        $RequiredPatterns = @(
+            @{ Name = "pythoncom DLL"; Pattern = "^_internal/pywin32_system32/pythoncom\d+\.dll$" },
+            @{ Name = "pywintypes DLL"; Pattern = "^_internal/pywin32_system32/pywintypes\d+\.dll$" },
+            @{ Name = "win32api extension"; Pattern = "^_internal/win32/win32api\.pyd$" },
+            @{ Name = "win32process extension"; Pattern = "^_internal/win32/win32process\.pyd$" },
+            @{ Name = "win32com package"; Pattern = "^_internal/win32com/" }
+        )
+
+        foreach ($Required in $RequiredPatterns) {
+            if (-not ($Entries | Where-Object { $_ -match $Required.Pattern } | Select-Object -First 1)) {
+                $Missing += $Required.Name
+            }
+        }
+
+        if ($Missing.Count -gt 0) {
+            throw "Release zip from $SourceLabel is missing Windows Excel support files: $($Missing -join ', '). Delete any local composer-windows.zip next to this installer and rerun it so it downloads the latest release asset."
+        }
+    } finally {
+        $Archive.Dispose()
+    }
+}
+
+function Install-ComposerReleaseZip {
+    param(
+        [Parameter(Mandatory = $true)][string]$ZipPath,
+        [Parameter(Mandatory = $true)][string]$SourceLabel
+    )
+
+    $ResolvedZipPath = [System.IO.Path]::GetFullPath($ZipPath)
+    if (-not (Test-Path -LiteralPath $ResolvedZipPath)) {
+        throw "Release zip not found: $ResolvedZipPath"
+    }
+
+    foreach ($Path in @($ReleaseZipPath, $ReleaseExtract)) {
+        if ((Test-Path -LiteralPath $Path) -and ([System.IO.Path]::GetFullPath($Path) -ne $ResolvedZipPath)) {
+            Remove-Item -LiteralPath $Path -Recurse -Force
+        }
+    }
+
+    if ([System.IO.Path]::GetFullPath($ReleaseZipPath) -ne $ResolvedZipPath) {
+        Copy-Item -LiteralPath $ResolvedZipPath -Destination $ReleaseZipPath -Force
+    }
+
+    Write-Host "Extracting release zip from $SourceLabel..." -ForegroundColor Cyan
+    Assert-ZipFile -ZipPath $ReleaseZipPath -SourceLabel $SourceLabel
+    Assert-WindowsRuntimeZip -ZipPath $ReleaseZipPath -SourceLabel $SourceLabel
+    Expand-Archive -Path $ReleaseZipPath -DestinationPath $ReleaseExtract -Force
+
+    $SetupScript = Join-Path $ReleaseExtract "setup.ps1"
+    if (-not (Test-Path -LiteralPath $SetupScript)) {
+        throw "Release zip did not contain setup.ps1."
+    }
+
+    Write-Host "Running setup.ps1..." -ForegroundColor Cyan
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $SetupScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "setup.ps1 failed with exit code $LASTEXITCODE."
+    }
+
+    Write-Host ""
+    Write-Host "Composer installed successfully." -ForegroundColor Green
+    Write-Host "Launch it from the Desktop or Start Menu shortcut."
+}
+
+if ([string]::IsNullOrWhiteSpace($Repository)) {
+    $Repository = Get-EnvValue "COMPOSER_REPOSITORY" "datap0nd/composer"
+}
+
+if ([string]::IsNullOrWhiteSpace($Repository) -or $Repository -notmatch "^[^/]+/[^/]+$") {
+    throw "Repository must be OWNER/REPO. Pass -Repository OWNER/REPO or set COMPOSER_REPOSITORY."
+}
+
+$script:Pat = Require-EnvValue "PAT_CODE"
+$script:JsonHeaders = @{
+    "Authorization"          = "token $script:Pat"
+    "Accept"                 = "application/vnd.github+json"
+    "Cache-Control"          = "no-cache"
+    "X-GitHub-Api-Version"   = "2022-11-28"
+    "User-Agent"             = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+}
+$script:DownloadHeaders = @{
+    "Authorization"          = "token $script:Pat"
+    "Accept"                 = "application/octet-stream"
+    "Cache-Control"          = "no-cache"
+    "X-GitHub-Api-Version"   = "2022-11-28"
+    "User-Agent"             = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+}
+
+$ApiRoot = "https://api.github.com"
+$EncodedWorkflow = [System.Uri]::EscapeDataString($Workflow)
+$EncodedBranch = [System.Uri]::EscapeDataString($Branch)
+$EncodedLatestReleaseTag = [System.Uri]::EscapeDataString($LatestReleaseTag)
+$OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
+$ArtifactArchive = Join-Path $OutputDirectory "$ArtifactName-artifact.zip"
+$ArtifactExtract = Join-Path $OutputDirectory "$ArtifactName-artifact"
+$ReleaseZipPath = Join-Path $OutputDirectory $ReleaseZipName
+$ReleaseExtract = Join-Path $OutputDirectory "composer-windows"
+
+Write-Host ""
+Write-Host "=== Composer Windows Install ===" -ForegroundColor Cyan
+Write-Host "Repository: $Repository"
+Write-Host "Workflow:   $Workflow"
+Write-Host "Branch:     $Branch"
+Write-Host "Output:     $OutputDirectory"
+Write-Host "PAT_CODE:   DETECTED"
+Write-Host ""
+
+New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+
+$BundledReleaseZipPath = Join-Path $PSScriptRoot $ReleaseZipName
+if ([string]::IsNullOrWhiteSpace($LocalReleaseZipPath) -and (Test-Path -LiteralPath $BundledReleaseZipPath)) {
+    $LocalReleaseZipPath = $BundledReleaseZipPath
+}
+
+if (-not [string]::IsNullOrWhiteSpace($LocalReleaseZipPath)) {
+    Write-Host "Using local release zip. GitHub download will be skipped." -ForegroundColor Green
+    Install-ComposerReleaseZip -ZipPath $LocalReleaseZipPath -SourceLabel "local file"
+    exit 0
+}
+
+if ([string]::IsNullOrWhiteSpace($RunId)) {
+    if ([string]::IsNullOrWhiteSpace($LatestReleaseTag)) {
+        throw "No Windows release tag was configured. Run the installer without -RunId to use composer-windows-latest, or pass -RunId only for a historical workflow run that still has an Actions artifact."
+    }
+
+    $ReleaseUri = "$ApiRoot/repos/$Repository/releases/tags/$EncodedLatestReleaseTag"
+    $LatestRelease = Invoke-GitHubJson $ReleaseUri
+    $ReleaseAsset = @($LatestRelease.assets) |
+        Where-Object { $_.name -eq $ReleaseZipName } |
+        Select-Object -First 1
+
+    if (-not $ReleaseAsset) {
+        throw "Release '$LatestReleaseTag' does not contain $ReleaseZipName. Current Windows installs use the GitHub release asset, not Actions artifacts."
+    }
+
+    foreach ($Path in @($ReleaseZipPath, $ReleaseExtract)) {
+        if (Test-Path -LiteralPath $Path) {
+            Remove-Item -LiteralPath $Path -Recurse -Force
+        }
+    }
+
+    Write-Host "Using latest release asset '$LatestReleaseTag'." -ForegroundColor Green
+    Save-GitHubFile -Uri $ReleaseAsset.url -Path $ReleaseZipPath
+    Install-ComposerReleaseZip -ZipPath $ReleaseZipPath -SourceLabel "latest release asset"
+    exit 0
+}
+
+$RunUri = "$ApiRoot/repos/$Repository/actions/runs/$RunId"
+$SelectedRun = Invoke-GitHubJson $RunUri
+Write-Host "Using requested run $RunId" -ForegroundColor Green
+
+$ArtifactsUri = "$ApiRoot/repos/$Repository/actions/runs/$RunId/artifacts?per_page=100"
+$Artifacts = Invoke-GitHubJson $ArtifactsUri
+$Artifact = @($Artifacts.artifacts) |
+    Where-Object { $_.name -eq $ArtifactName -and $_.expired -ne $true } |
+    Select-Object -First 1
+
+if (-not $Artifact) {
+    throw "Artifact '$ArtifactName' was not found for workflow run $RunId, or it has expired. Current Windows builds are published as the '$LatestReleaseTag' release asset; rerun install-composer-windows.ps1 without -RunId."
+}
+
+foreach ($Path in @($ArtifactArchive, $ArtifactExtract, $ReleaseZipPath, $ReleaseExtract)) {
+    if (Test-Path -LiteralPath $Path) {
+        Remove-Item -LiteralPath $Path -Recurse -Force
+    }
+}
+
+$DownloadUri = $Artifact.archive_download_url
+if ([string]::IsNullOrWhiteSpace($DownloadUri)) {
+    $DownloadUri = "$ApiRoot/repos/$Repository/actions/artifacts/$($Artifact.id)/zip"
+}
+
+Write-Host "Downloading artifact '$ArtifactName'..." -ForegroundColor Cyan
+Save-GitHubFile -Uri $DownloadUri -Path $ArtifactArchive
+
+Write-Host "Extracting release zip..." -ForegroundColor Cyan
+Expand-Archive -Path $ArtifactArchive -DestinationPath $ArtifactExtract -Force
+$InnerZip = Get-ChildItem -LiteralPath $ArtifactExtract -Filter $ReleaseZipName -File -Recurse |
+    Select-Object -First 1
+
+if (-not $InnerZip) {
+    throw "Downloaded artifact did not contain $ReleaseZipName."
+}
+
+Copy-Item -LiteralPath $InnerZip.FullName -Destination $ReleaseZipPath -Force
+Install-ComposerReleaseZip -ZipPath $ReleaseZipPath -SourceLabel "downloaded artifact"
+
+if (-not $KeepDownloads) {
+    foreach ($Path in @($ArtifactArchive, $ArtifactExtract)) {
+        if (Test-Path -LiteralPath $Path) {
+            Remove-Item -LiteralPath $Path -Recurse -Force
+        }
+    }
+}
