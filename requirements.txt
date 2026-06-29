@@ -1,1 +1,10 @@
-$pat=$env:pat_code; if(-not $pat){$pat=[Environment]::GetEnvironmentVariable('pat_code','User')}; $script=Join-Path $env:TEMP 'install-composer-windows.ps1'; Invoke-WebRequest -UseBasicParsing -Headers @{Authorization="token $pat";Accept="application/vnd.github.raw"} -Uri "https://api.github.com/repos/datap0nd/composer/contents/portable/install-composer-windows.ps1?ref=codex/polish-hierarchy-customization" -OutFile $script; powershell -NoProfile -ExecutionPolicy Bypass -File $script -Repository "datap0nd/composer"
+$script = "$env:TEMP\install-composer-windows.ps1"
+$headers = @{ Authorization = "token $env:PAT_CODE"; "Cache-Control" = "no-cache" }
+
+Invoke-WebRequest `
+  -UseBasicParsing `
+  -Headers $headers `
+  -Uri "https://raw.githubusercontent.com/datap0nd/composer/main/portable/install-composer-windows.ps1?ts=$(Get-Date -Format yyyyMMddHHmmss)" `
+  -OutFile $script
+
+powershell -ExecutionPolicy Bypass -File $script
