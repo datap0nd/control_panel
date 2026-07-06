@@ -1,10 +1,170 @@
-$script = "$env:TEMP\install-composer-windows.ps1"
-$headers = @{ Authorization = "token $env:PAT_CODE"; "Cache-Control" = "no-cache" }
 
-Invoke-WebRequest `
-  -UseBasicParsing `
-  -Headers $headers `
-  -Uri "https://raw.githubusercontent.com/datap0nd/composer/main/portable/install-composer-windows.ps1?ts=$(Get-Date -Format yyyyMMddHHmmss)" `
-  -OutFile $script
+drop view if exists bi_reporting.smp_amount_feed_value_type_v;
 
-powershell -ExecutionPolicy Bypass -File $script
+create view bi_reporting.smp_amount_feed_value_type_v as
+with item_map as (
+    select
+        "Item ID"::text as item_id,
+        max("Seg1"::text) as seg1,
+        min(nullif(nullif("Series"::text, ''), 'NAN')) as series
+    from bi_reporting.item_mapping_mv
+    where "Biz Group" = 'SMART'
+    group by
+        "Item ID"::text
+),
+fact_rows as (
+    select
+        (f."Month"::bigint / 100)::integer as period_year,
+        (((f."Month"::bigint % 100)::integer - 1) / 3 + 1)::integer as period_quarter,
+        'Q'
+            || (((f."Month"::bigint % 100)::integer - 1) / 3 + 1)::text
+            || ' '
+            || (f."Month"::bigint / 100)::text as time_period,
+        f."Subsidiary"::text as subsidiary,
+        'Smartphone'::text as device_type,
+        case
+            when im.seg1 = 'FLAGSHIP' then 'Flagship'
+            else 'Mass'
+        end as segment,
+        coalesce(im.series, nullif(nullif(f."Series"::text, ''), 'NAN'), 'Unmapped') as device,
+        coalesce(f."Total Inflow", 0) as inflow_qty,
+        coalesce(f."Total Outflow", 0) as outflow_qty,
+        coalesce(f."Total Inflow Amt", 0) as inflow_amount,
+        coalesce(f."Total Outflow Amt", 0) as outflow_amount
+    from bi_reporting.inflow_outflow_mv f
+    join item_map im
+        on im.item_id = f."ItemID"
+    where f."Biz Grp" = 'SMART'
+      and f."Month" >= 202501
+      and f."Subsidiary" is not null
+      and f."Subsidiary" <> ''
+),
+base as (
+    select
+        period_year,
+        period_quarter,
+        time_period,
+        subsidiary,
+        device_type,
+        'Amt'::text as metric_type,
+        segment,
+        device,
+        inflow_amount as inflow_value,
+        outflow_amount as outflow_value
+    from fact_rows
+
+    union all
+
+    select
+        period_year,
+        period_quarter,
+        time_period,
+        subsidiary,
+        device_type,
+        'Qty'::text as metric_type,
+        segment,
+        device,
+        inflow_qty as inflow_value,
+        outflow_qty as outflow_value
+    from fact_rows
+),
+feed_rows as (
+    select
+        period_year,
+        period_quarter,
+        time_period,
+        subsidiary,
+        device_type,
+        metric_type,
+        'SMP Total'::text as aggregation_level,
+        'SMP Total'::text as segment,
+        'All Smartphones'::text as device,
+        sum(inflow_value) as inflow_value,
+        sum(outflow_value) as outflow_value
+    from base
+    group by
+        period_year,
+        period_quarter,
+        time_period,
+        subsidiary,
+        device_type,
+        metric_type
+
+    union all
+
+    select
+        period_year,
+        period_quarter,
+        time_period,
+        subsidiary,
+        device_type,
+        metric_type,
+        'Segment'::text as aggregation_level,
+        segment,
+        'All ' || segment as device,
+        sum(inflow_value) as inflow_value,
+        sum(outflow_value) as outflow_value
+    from base
+    group by
+        period_year,
+        period_quarter,
+        time_period,
+        subsidiary,
+        device_type,
+        metric_type,
+        segment
+
+    union all
+
+    select
+        period_year,
+        period_quarter,
+        time_period,
+        subsidiary,
+        device_type,
+        metric_type,
+        'Device'::text as aggregation_level,
+        segment,
+        device,
+        sum(inflow_value) as inflow_value,
+        sum(outflow_value) as outflow_value
+    from base
+    group by
+        period_year,
+        period_quarter,
+        time_period,
+        subsidiary,
+        device_type,
+        metric_type,
+        segment,
+        device
+)
+select
+    period_year,
+    period_quarter,
+    time_period,
+    subsidiary,
+    device_type,
+    metric_type,
+    aggregation_level,
+    segment,
+    device,
+    'Inflow'::text as "type",
+    inflow_value as "value"
+from feed_rows
+
+union all
+
+select
+    period_year,
+    period_quarter,
+    time_period,
+    subsidiary,
+    device_type,
+    metric_type,
+    aggregation_level,
+    segment,
+    device,
+    'Outflow'::text as "type",
+    outflow_value as "value"
+from feed_rows;
