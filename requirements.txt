@@ -1,4 +1,3 @@
-
 drop view if exists bi_reporting.smp_amount_feed_value_type_v;
 
 create view bi_reporting.smp_amount_feed_value_type_v as
@@ -7,7 +6,7 @@ with item_map as (
         "Item ID"::text as item_id,
         max("Seg1"::text) as seg1,
         min(nullif(nullif("Series"::text, ''), 'NAN')) as series
-    from bi_reporting.item_mapping_mv
+    from reporting_schema.item_mapping_mv
     where "Biz Group" = 'SMART'
     group by
         "Item ID"::text
@@ -31,7 +30,7 @@ fact_rows as (
         coalesce(f."Total Outflow", 0) as outflow_qty,
         coalesce(f."Total Inflow Amt", 0) as inflow_amount,
         coalesce(f."Total Outflow Amt", 0) as outflow_amount
-    from bi_reporting.inflow_outflow_mv f
+    from reporting_schema.inflow_outflow_mv f
     join item_map im
         on im.item_id = f."ItemID"
     where f."Biz Grp" = 'SMART'
@@ -168,3 +167,146 @@ select
     'Outflow'::text as "type",
     outflow_value as "value"
 from feed_rows;
+
+// Power Query Advanced Editor replacement for the existing Sellout Stays query.
+//
+// Prerequisite:
+// - bi_reporting.inflow_outflow_mv exists in PostgreSQL.
+// - Replace SERVER_NAME and DATABASE_NAME with the report environment values.
+//
+// Intent:
+// - Stop reading the local activation export folder directly.
+// - Read the final inflow/outflow materialized view instead.
+// - Keep the existing Sellout Stays table schema stable so current measures,
+//   relationships, visuals, and Date table logic continue to bind.
+//
+// Important:
+// - This intentionally keeps export-side rows only. The current Sellout Stays
+//   table is based on the export folder, and S/O that stays is an export-side
+//   denominator. Including import rows would double-count the denominator.
+
+let
+    Source = PostgreSQL.Database("SERVER_NAME", "DATABASE_NAME"),
+    SelloutFromInflowOutflow = Value.NativeQuery(
+        Source,
+        "
+        select
+            to_date(left(lpad(f.""Month""::text, 6, '0'), 6), 'YYYYMM')::date as date,
+            to_char(to_date(left(lpad(f.""Month""::text, 6, '0'), 6), 'YYYYMM'), 'YYYY-MM') as month_key,
+            coalesce(nullif(btrim(f.""Sell-out Country""::text), ''), nullif(btrim(f.""Current Country""::text), '')) as country_code,
+            coalesce(nullif(btrim(f.""Subsidiary""::text), ''), nullif(btrim(f.""Sell-in Sub""::text), ''), 'Unmapped') as subsidiary_resolved,
+            coalesce(nullif(btrim(f.""Sell-in Channel""::text), ''), nullif(btrim(f.""Sell-in AP1""::text), '')) as sales_channel_name,
+            case
+                when nullif(btrim(f.""Sell-in Account""::text), '') is not null then nullif(btrim(f.""Sell-in Account""::text), '')
+                when nullif(btrim(f.""Sell-in AP1""::text), '') is not null then nullif(btrim(f.""Sell-in AP1""::text), '')
+                when nullif(btrim(f.""Sell-in Channel""::text), '') is not null then nullif(btrim(f.""Sell-in Channel""::text), '') || ' account pending'
+                else 'Account pending'
+            end as account_partner_resolved,
+            case
+                when upper(nullif(btrim(f.""Biz Sub""::text), '')) = 'TABLET' then 'TABLET'
+                when upper(nullif(btrim(f.""Biz Sub""::text), '')) in ('WEARABLE', 'WEARABLES') then 'WEARABLE'
+                when nullif(btrim(f.""Biz Sub""::text), '') is not null then 'SMARTPHONE'
+                else null
+            end as device_category_code,
+            nullif(btrim(f.""MKT Name""::text), '') as device_model_name,
+            coalesce(f.""S/O that Stays"", 0)::bigint as so_that_stays_units,
+            nullif(btrim(f.""Sell-in Sub""::text), '') as sell_in_sub,
+            nullif(btrim(f.""Current Sub""::text), '') as current_sub,
+            nullif(btrim(f.""Sell-out Sub""::text), '') as sell_out_sub,
+            f.""Sell-in Region""::text as ""Sell-in Region"",
+            f.""Sell-in Sub""::text as ""Sell-in Sub"",
+            f.""Sell-in AP1""::text as ""Sell-in AP1"",
+            f.""Sell-in Account""::text as ""Sell-in Account"",
+            f.""Sell-out Region""::text as ""Sell-out Region"",
+            f.""Sell-out Sub""::text as ""Sell-out Sub"",
+            f.""Sell-out Country""::text as ""Sell-out Country"",
+            f.""Current Region""::text as ""Current Region"",
+            f.""Current Sub""::text as ""Current Sub"",
+            f.""Current Country""::text as ""Current Country"",
+            f.""Biz Sub""::text as ""Biz Sub"",
+            f.""Series""::text as ""Series"",
+            f.""MKT Name""::text as ""MKT Name"",
+            f.""Memory""::text as ""Memory"",
+            f.""Storage""::text as ""Storage"",
+            f.""Item Code""::text as ""Item Code"",
+            f.""Month""::text as ""Sell-out Month"",
+            coalesce(f.""Active Qty"", 0)::bigint as ""Active"",
+            f.""Grand total""::text as ""Grand total"",
+            coalesce(nullif(btrim(f.""Subsidiary""::text), ''), nullif(btrim(f.""Sell-in Sub""::text), '')) as subsidiary,
+            nullif(btrim(f.""Sell-in AP1""::text), '') as sub_sales_channel_name,
+            nullif(btrim(f.""Sell-in Account""::text), '') as account_partner,
+            coalesce(f.""Active Qty"", 0)::bigint as active_units,
+            upper(nullif(btrim(f.""Sell-in Sub""::text), '')) as sell_in_sub_resolved,
+            upper(nullif(btrim(f.""Current Sub""::text), '')) as current_sub_resolved,
+            upper(nullif(btrim(f.""Sell-out Sub""::text), '')) as sell_out_sub_resolved,
+            coalesce(f.""Active Qty"", 0)::bigint as active_units_resolved,
+            coalesce(f.""Active Qty"", 0)::bigint as total_sellout_units,
+            coalesce(nullif(btrim(f.""Across Sub""::text), ''), 'Unclassified') as in_out_classification,
+            case
+                when coalesce(nullif(btrim(f.""Across Sub""::text), ''), 'Unclassified') = 'Domestic' then 'Stays'
+                else 'Does Not Stay'
+            end as so_that_stays_flag,
+            coalesce(f.""2nd Activation Out"", 0)::bigint as second_activation_units,
+            coalesce(f.""CI Out"", 0)::bigint as ci_units,
+            (coalesce(f.""2nd Activation Out"", 0) + coalesce(f.""CI Out"", 0))::bigint as parallel_so_units,
+            (coalesce(f.""Active Qty"", 0) - coalesce(f.""S/O that Stays"", 0))::bigint as non_stay_sellout_units
+        from bi_reporting.inflow_outflow_mv f
+        where f.""Source Side"" = 'export'
+        ",
+        null,
+        [EnableFolding = true]
+    ),
+    #"Changed Type" = Table.TransformColumnTypes(
+        SelloutFromInflowOutflow,
+        {
+            {"date", type date},
+            {"month_key", type text},
+            {"country_code", type text},
+            {"subsidiary_resolved", type text},
+            {"sales_channel_name", type text},
+            {"account_partner_resolved", type text},
+            {"device_category_code", type text},
+            {"device_model_name", type text},
+            {"so_that_stays_units", Int64.Type},
+            {"sell_in_sub", type text},
+            {"current_sub", type text},
+            {"sell_out_sub", type text},
+            {"Sell-in Region", type text},
+            {"Sell-in Sub", type text},
+            {"Sell-in AP1", type text},
+            {"Sell-in Account", type text},
+            {"Sell-out Region", type text},
+            {"Sell-out Sub", type text},
+            {"Sell-out Country", type text},
+            {"Current Region", type text},
+            {"Current Sub", type text},
+            {"Current Country", type text},
+            {"Biz Sub", type text},
+            {"Series", type text},
+            {"MKT Name", type text},
+            {"Memory", type text},
+            {"Storage", type text},
+            {"Item Code", type text},
+            {"Sell-out Month", type text},
+            {"Active", Int64.Type},
+            {"Grand total", type text},
+            {"subsidiary", type text},
+            {"sub_sales_channel_name", type text},
+            {"account_partner", type text},
+            {"active_units", Int64.Type},
+            {"sell_in_sub_resolved", type text},
+            {"current_sub_resolved", type text},
+            {"sell_out_sub_resolved", type text},
+            {"active_units_resolved", Int64.Type},
+            {"total_sellout_units", Int64.Type},
+            {"in_out_classification", type text},
+            {"so_that_stays_flag", type text},
+            {"second_activation_units", Int64.Type},
+            {"ci_units", Int64.Type},
+            {"parallel_so_units", Int64.Type},
+            {"non_stay_sellout_units", Int64.Type}
+        },
+        [Culture = "en-US", MissingField = MissingField.UseNull]
+    )
+in
+    #"Changed Type"
