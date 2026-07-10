@@ -1,312 +1,681 @@
-drop view if exists bi_reporting.smp_amount_feed_value_type_v;
+/// Paste-ready TMDL createOrReplace script for the full-page Samsung executive-summary HTML Content visual.
+/// The single measure returns the title, display-only page tabs, display-only filter context, KPIs, signals, trends, and channel mix.
+/// The tabs and filter chips mirror report state only. They do not navigate or set filters. No scripts, links, web fonts, images, or other external assets are used.
 
-create view bi_reporting.smp_amount_feed_value_type_v as
-with item_map as (
-    select
-        "Item ID"::text as item_id,
-        max("Seg1"::text) as seg1,
-        min(nullif(nullif("Series"::text, ''), 'NAN')) as series
-    from reporting_schema.item_mapping_mv
-    where "Biz Group" = 'SMART'
-    group by
-        "Item ID"::text
-),
-fact_rows as (
-    select
-        (f."Month"::bigint / 100)::integer as period_year,
-        (((f."Month"::bigint % 100)::integer - 1) / 3 + 1)::integer as period_quarter,
-        'Q'
-            || (((f."Month"::bigint % 100)::integer - 1) / 3 + 1)::text
-            || ' '
-            || (f."Month"::bigint / 100)::text as time_period,
-        f."Subsidiary"::text as subsidiary,
-        'Smartphone'::text as device_type,
-        case
-            when im.seg1 = 'FLAGSHIP' then 'Flagship'
-            else 'Mass'
-        end as segment,
-        coalesce(im.series, nullif(nullif(f."Series"::text, ''), 'NAN'), 'Unmapped') as device,
-        coalesce(f."Total Inflow", 0) as inflow_qty,
-        coalesce(f."Total Outflow", 0) as outflow_qty,
-        coalesce(f."Total Inflow Amt", 0) as inflow_amount,
-        coalesce(f."Total Outflow Amt", 0) as outflow_amount
-    from reporting_schema.inflow_outflow_mv f
-    join item_map im
-        on im.item_id = f."ItemID"
-    where f."Biz Grp" = 'SMART'
-      and f."Month" >= 202501
-      and f."Subsidiary" is not null
-      and f."Subsidiary" <> ''
-),
-base as (
-    select
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        'Amt'::text as metric_type,
-        segment,
-        device,
-        inflow_amount as inflow_value,
-        outflow_amount as outflow_value
-    from fact_rows
+createOrReplace
+	ref table Measures_table
 
-    union all
+		measure 'HTML Executive Summary Samsung' =
+				VAR _AnalysisYear = [Analysis Year]
+				VAR _AsOfDate = COALESCE ( [KPI Executive Sparkline Anchor Date], MAX ( 'Date'[Date] ), TODAY () )
+				VAR _OwnerRaw = COALESCE ( [Business Owner], "Not assigned" )
+				VAR _OwnerText = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _OwnerRaw, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
+				VAR _EvaluatedAt = [Last Refreshed]
+				VAR _EvaluatedText = IF ( ISBLANK ( _EvaluatedAt ), "Not evaluated", FORMAT ( _EvaluatedAt, "dd mmm yyyy HH:mm" ) )
 
-    select
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        'Qty'::text as metric_type,
-        segment,
-        device,
-        inflow_qty as inflow_value,
-        outflow_qty as outflow_value
-    from fact_rows
-),
-feed_rows as (
-    select
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        metric_type,
-        'SMP Total'::text as aggregation_level,
-        'SMP Total'::text as segment,
-        'All Smartphones'::text as device,
-        sum(inflow_value) as inflow_value,
-        sum(outflow_value) as outflow_value
-    from base
-    group by
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        metric_type
+				VAR _PeriodLabelFilters = FILTERS ( 'Date Filter'[Period Label] )
+				VAR _PeriodLabelCount = COUNTROWS ( _PeriodLabelFilters )
+				VAR _PeriodTypeFilters = FILTERS ( 'Date Filter'[Period Type] )
+				VAR _PeriodTypeCount = COUNTROWS ( _PeriodTypeFilters )
+				VAR _PeriodRaw =
+					SWITCH (
+						TRUE (),
+						_PeriodLabelCount = 1, COALESCE ( MAXX ( _PeriodLabelFilters, 'Date Filter'[Period Label] ), "No period" ),
+						_PeriodLabelCount > 1, FORMAT ( _PeriodLabelCount, "#,##0" ) & " periods",
+						_PeriodTypeCount = 1, COALESCE ( MAXX ( _PeriodTypeFilters, 'Date Filter'[Period Type] ), "No period type" ),
+						_PeriodTypeCount > 1, FORMAT ( _PeriodTypeCount, "#,##0" ) & " period types",
+						"All periods"
+					)
+				VAR _PeriodText = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _PeriodRaw, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
 
-    union all
+				VAR _SubsidiaryFilters = FILTERS ( 'Subsidiary Master'[Subsidiary] )
+				VAR _SubsidiaryCount = COUNTROWS ( _SubsidiaryFilters )
+				VAR _SubsidiaryRaw =
+					SWITCH (
+						TRUE (),
+						_SubsidiaryCount = 1, COALESCE ( MAXX ( _SubsidiaryFilters, 'Subsidiary Master'[Subsidiary] ), "No subsidiary" ),
+						_SubsidiaryCount > 1, FORMAT ( _SubsidiaryCount, "#,##0" ) & " subsidiaries",
+						"All subsidiaries"
+					)
+				VAR _SubsidiaryText = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _SubsidiaryRaw, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
 
-    select
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        metric_type,
-        'Segment'::text as aggregation_level,
-        segment,
-        'All ' || segment as device,
-        sum(inflow_value) as inflow_value,
-        sum(outflow_value) as outflow_value
-    from base
-    group by
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        metric_type,
-        segment
+				VAR _DeviceModelFilters = FILTERS ( Sales[Device Model] )
+				VAR _DeviceModelCount = COUNTROWS ( _DeviceModelFilters )
+				VAR _DeviceSeriesFilters = FILTERS ( Sales[Device Series] )
+				VAR _DeviceSeriesCount = COUNTROWS ( _DeviceSeriesFilters )
+				VAR _DeviceFamilyFilters = FILTERS ( Sales[Product Family] )
+				VAR _DeviceFamilyCount = COUNTROWS ( _DeviceFamilyFilters )
+				VAR _DeviceRaw =
+					SWITCH (
+						TRUE (),
+						_DeviceModelCount = 1, COALESCE ( MAXX ( _DeviceModelFilters, Sales[Device Model] ), "No device" ),
+						_DeviceModelCount > 1, FORMAT ( _DeviceModelCount, "#,##0" ) & " device models",
+						_DeviceSeriesCount = 1, COALESCE ( MAXX ( _DeviceSeriesFilters, Sales[Device Series] ), "No series" ) & " series",
+						_DeviceSeriesCount > 1, FORMAT ( _DeviceSeriesCount, "#,##0" ) & " device series",
+						_DeviceFamilyCount = 1, COALESCE ( MAXX ( _DeviceFamilyFilters, Sales[Product Family] ), "No family" ),
+						_DeviceFamilyCount > 1, FORMAT ( _DeviceFamilyCount, "#,##0" ) & " device families",
+						"All devices"
+					)
+				VAR _DeviceText = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _DeviceRaw, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
 
-    union all
+				VAR _PartnerFilters = FILTERS ( Sales[Account / Partner] )
+				VAR _PartnerCount = COUNTROWS ( _PartnerFilters )
+				VAR _SubChannelFilters = FILTERS ( Sales[Sub Sales Channel] )
+				VAR _SubChannelCount = COUNTROWS ( _SubChannelFilters )
+				VAR _SalesChannelFilters = FILTERS ( Sales[Sales Channel] )
+				VAR _ChannelCountContext = COUNTROWS ( _SalesChannelFilters )
+				VAR _ChannelRaw =
+					SWITCH (
+						TRUE (),
+						_PartnerCount = 1, COALESCE ( MAXX ( _PartnerFilters, Sales[Account / Partner] ), "No partner" ),
+						_PartnerCount > 1, FORMAT ( _PartnerCount, "#,##0" ) & " partners",
+						_SubChannelCount = 1, COALESCE ( MAXX ( _SubChannelFilters, Sales[Sub Sales Channel] ), "No sub-channel" ),
+						_SubChannelCount > 1, FORMAT ( _SubChannelCount, "#,##0" ) & " sub-channels",
+						_ChannelCountContext = 1, COALESCE ( MAXX ( _SalesChannelFilters, Sales[Sales Channel] ), "No channel" ),
+						_ChannelCountContext > 1, FORMAT ( _ChannelCountContext, "#,##0" ) & " channels",
+						"All channels"
+					)
+				VAR _ChannelText = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _ChannelRaw, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
 
-    select
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        metric_type,
-        'Device'::text as aggregation_level,
-        segment,
-        device,
-        sum(inflow_value) as inflow_value,
-        sum(outflow_value) as outflow_value
-    from base
-    group by
-        period_year,
-        period_quarter,
-        time_period,
-        subsidiary,
-        device_type,
-        metric_type,
-        segment,
-        device
-)
-select
-    period_year,
-    period_quarter,
-    time_period,
-    subsidiary,
-    device_type,
-    metric_type,
-    aggregation_level,
-    segment,
-    device,
-    'Inflow'::text as "type",
-    inflow_value as "value"
-from feed_rows
+				VAR _ServiceFilters = FILTERS ( Sales[Product Type] )
+				VAR _ServiceCount = COUNTROWS ( _ServiceFilters )
+				VAR _ServiceRaw =
+					SWITCH (
+						TRUE (),
+						_ServiceCount = 1, COALESCE ( MAXX ( _ServiceFilters, Sales[Product Type] ), "No service type" ),
+						_ServiceCount > 1, FORMAT ( _ServiceCount, "#,##0" ) & " service types",
+						"All services"
+					)
+				VAR _ServiceText = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _ServiceRaw, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
 
-union all
+				VAR _PaymentFilters = FILTERS ( Sales[Payment Type] )
+				VAR _PaymentCount = COUNTROWS ( _PaymentFilters )
+				VAR _PaymentRaw =
+					SWITCH (
+						TRUE (),
+						_PaymentCount = 1, COALESCE ( MAXX ( _PaymentFilters, Sales[Payment Type] ), "No payment type" ),
+						_PaymentCount > 1, FORMAT ( _PaymentCount, "#,##0" ) & " payment types",
+						"All payments"
+					)
+				VAR _PaymentText = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _PaymentRaw, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
 
-select
-    period_year,
-    period_quarter,
-    time_period,
-    subsidiary,
-    device_type,
-    metric_type,
-    aggregation_level,
-    segment,
-    device,
-    'Outflow'::text as "type",
-    outflow_value as "value"
-from feed_rows;
+				VAR _AttachUnsupportedContext =
+					( ( _DeviceFamilyCount > 0 || _DeviceSeriesCount > 0 ) && _DeviceModelCount = 0 )
+						|| _PartnerCount > 0
+						|| _ServiceCount > 0
+						|| _PaymentCount > 0
+				VAR _PartnersUnsupportedContext =
+					_ChannelCountContext > 0
+						|| _SubChannelCount > 0
+						|| _PartnerCount > 0
+						|| _DeviceFamilyCount > 0
+						|| _DeviceSeriesCount > 0
+						|| _DeviceModelCount > 0
+						|| _ServiceCount > 0
+						|| _PaymentCount > 0
+				VAR _SparkStart = DATE ( YEAR ( EDATE ( _AsOfDate, -5 ) ), MONTH ( EDATE ( _AsOfDate, -5 ) ), 1 )
+				VAR _SparkSeries =
+					ADDCOLUMNS (
+						GENERATESERIES ( 0, 5, 1 ),
+						"__Sales",
+							VAR _MonthStart = EDATE ( _SparkStart, [Value] )
+							RETURN
+								COALESCE (
+									CALCULATE (
+										[Sales Volume],
+										REMOVEFILTERS ( 'Date' ),
+										REMOVEFILTERS ( 'Date Filter' ),
+										DATESBETWEEN ( 'Date'[Date], _MonthStart, EOMONTH ( _MonthStart, 0 ) )
+									),
+									0
+								),
+						"__Attach",
+							VAR _MonthStart = EDATE ( _SparkStart, [Value] )
+							RETURN
+								IF (
+									_AttachUnsupportedContext,
+									BLANK (),
+									COALESCE (
+										CALCULATE (
+											[Raw Attach Rate],
+											REMOVEFILTERS ( 'Date' ),
+											REMOVEFILTERS ( 'Date Filter' ),
+											DATESBETWEEN ( 'Date'[Date], _MonthStart, EOMONTH ( _MonthStart, 0 ) )
+										),
+										0
+									)
+								),
+						"__Revenue",
+							VAR _MonthStart = EDATE ( _SparkStart, [Value] )
+							RETURN
+								COALESCE (
+									CALCULATE (
+										[Gross Revenue],
+										REMOVEFILTERS ( 'Date' ),
+										REMOVEFILTERS ( 'Date Filter' ),
+										DATESBETWEEN ( 'Date'[Date], _MonthStart, EOMONTH ( _MonthStart, 0 ) )
+									),
+									0
+								),
+						"__Policies",
+							VAR _MonthStart = EDATE ( _SparkStart, [Value] )
+							RETURN
+								COALESCE (
+									CALCULATE (
+										[Active Policies],
+										REMOVEFILTERS ( 'Date' ),
+										REMOVEFILTERS ( 'Date Filter' ),
+										DATESBETWEEN ( 'Date'[Date], _MonthStart, EOMONTH ( _MonthStart, 0 ) )
+									),
+									0
+								)
+					)
+				VAR _SalesSparkMin = MINX ( _SparkSeries, [__Sales] )
+				VAR _SalesSparkMax = MAXX ( _SparkSeries, [__Sales] )
+				VAR _SalesSparkRange = IF ( _SalesSparkMax = _SalesSparkMin, 1, _SalesSparkMax - _SalesSparkMin )
+				VAR _SalesSpark =
+					CONCATENATEX (
+						_SparkSeries,
+						VAR _X = 4 + [Value] * 22.4
+						VAR _Y = 5 + DIVIDE ( _SalesSparkMax - [__Sales], _SalesSparkRange, 0.5 ) * 30
+						RETURN FORMAT ( _X, "0.0" ) & "," & FORMAT ( _Y, "0.0" ),
+						" ",
+						[Value],
+						ASC
+					)
+				VAR _AttachSparkMin = MINX ( _SparkSeries, [__Attach] )
+				VAR _AttachSparkMax = MAXX ( _SparkSeries, [__Attach] )
+				VAR _AttachSparkRange = IF ( _AttachSparkMax = _AttachSparkMin, 1, _AttachSparkMax - _AttachSparkMin )
+				VAR _AttachSpark =
+					IF (
+						_AttachUnsupportedContext,
+						"",
+						CONCATENATEX (
+							_SparkSeries,
+							VAR _X = 4 + [Value] * 22.4
+							VAR _Y = 5 + DIVIDE ( _AttachSparkMax - [__Attach], _AttachSparkRange, 0.5 ) * 30
+							RETURN FORMAT ( _X, "0.0" ) & "," & FORMAT ( _Y, "0.0" ),
+							" ",
+							[Value],
+							ASC
+						)
+					)
+				VAR _RevenueSparkMin = MINX ( _SparkSeries, [__Revenue] )
+				VAR _RevenueSparkMax = MAXX ( _SparkSeries, [__Revenue] )
+				VAR _RevenueSparkRange = IF ( _RevenueSparkMax = _RevenueSparkMin, 1, _RevenueSparkMax - _RevenueSparkMin )
+				VAR _RevenueSpark =
+					CONCATENATEX (
+						_SparkSeries,
+						VAR _X = 4 + [Value] * 22.4
+						VAR _Y = 5 + DIVIDE ( _RevenueSparkMax - [__Revenue], _RevenueSparkRange, 0.5 ) * 30
+						RETURN FORMAT ( _X, "0.0" ) & "," & FORMAT ( _Y, "0.0" ),
+						" ",
+						[Value],
+						ASC
+					)
+				VAR _PolicySparkMin = MINX ( _SparkSeries, [__Policies] )
+				VAR _PolicySparkMax = MAXX ( _SparkSeries, [__Policies] )
+				VAR _PolicySparkRange = IF ( _PolicySparkMax = _PolicySparkMin, 1, _PolicySparkMax - _PolicySparkMin )
+				VAR _PolicySpark =
+					CONCATENATEX (
+						_SparkSeries,
+						VAR _X = 4 + [Value] * 22.4
+						VAR _Y = 5 + DIVIDE ( _PolicySparkMax - [__Policies], _PolicySparkRange, 0.5 ) * 30
+						RETURN FORMAT ( _X, "0.0" ) & "," & FORMAT ( _Y, "0.0" ),
+						" ",
+						[Value],
+						ASC
+					)
 
-// Power Query Advanced Editor replacement for the existing Sellout Stays query.
-//
-// Prerequisite:
-// - bi_reporting.inflow_outflow_mv exists in PostgreSQL.
-// - Replace SERVER_NAME and DATABASE_NAME with the report environment values.
-//
-// Intent:
-// - Stop reading the local activation export folder directly.
-// - Read the final inflow/outflow materialized view instead.
-// - Keep the existing Sellout Stays table schema stable so current measures,
-//   relationships, visuals, and Date table logic continue to bind.
-//
-// Important:
-// - This intentionally keeps export-side rows only. The current Sellout Stays
-//   table is based on the export folder, and S/O that stays is an export-side
-//   denominator. Including import rows would double-count the denominator.
+				VAR _Sales = [Sales Volume]
+				VAR _SalesLy = [Sales Volume LY]
+				VAR _SalesPlan = [Sales Plan QTY]
+				VAR _SalesLyDelta = DIVIDE ( _Sales - _SalesLy, _SalesLy )
+				VAR _SalesPlanRatio = DIVIDE ( _Sales, _SalesPlan )
+				VAR _SalesText = IF ( ISBLANK ( _Sales ), "--", FORMAT ( _Sales, "#,##0" ) )
+				VAR _SalesLyText = IF ( ISBLANK ( _SalesLyDelta ), "n/a", FORMAT ( _SalesLyDelta, "+0.0%;-0.0%;0.0%" ) )
+				VAR _SalesPlanText = IF ( ISBLANK ( _SalesPlanRatio ), "n/a", FORMAT ( _SalesPlanRatio, "0.0%" ) )
+				VAR _SalesLyClass = IF ( ISBLANK ( _SalesLyDelta ), "na", IF ( _SalesLyDelta >= 0, "good", "bad" ) )
+				VAR _SalesPlanClass = IF ( ISBLANK ( _SalesPlanRatio ), "na", IF ( _SalesPlanRatio >= 1, "good", "warning" ) )
 
-let
-    Source = PostgreSQL.Database("SERVER_NAME", "DATABASE_NAME"),
-    SelloutFromInflowOutflow = Value.NativeQuery(
-        Source,
-        "
-        select
-            to_date(left(lpad(f.""Month""::text, 6, '0'), 6), 'YYYYMM')::date as date,
-            to_char(to_date(left(lpad(f.""Month""::text, 6, '0'), 6), 'YYYYMM'), 'YYYY-MM') as month_key,
-            coalesce(nullif(btrim(f.""Sell-out Country""::text), ''), nullif(btrim(f.""Current Country""::text), '')) as country_code,
-            coalesce(nullif(btrim(f.""Subsidiary""::text), ''), nullif(btrim(f.""Sell-in Sub""::text), ''), 'Unmapped') as subsidiary_resolved,
-            coalesce(nullif(btrim(f.""Sell-in Channel""::text), ''), nullif(btrim(f.""Sell-in AP1""::text), '')) as sales_channel_name,
-            case
-                when nullif(btrim(f.""Sell-in Account""::text), '') is not null then nullif(btrim(f.""Sell-in Account""::text), '')
-                when nullif(btrim(f.""Sell-in AP1""::text), '') is not null then nullif(btrim(f.""Sell-in AP1""::text), '')
-                when nullif(btrim(f.""Sell-in Channel""::text), '') is not null then nullif(btrim(f.""Sell-in Channel""::text), '') || ' account pending'
-                else 'Account pending'
-            end as account_partner_resolved,
-            case
-                when upper(nullif(btrim(f.""Biz Sub""::text), '')) = 'TABLET' then 'TABLET'
-                when upper(nullif(btrim(f.""Biz Sub""::text), '')) in ('WEARABLE', 'WEARABLES') then 'WEARABLE'
-                when nullif(btrim(f.""Biz Sub""::text), '') is not null then 'SMARTPHONE'
-                else null
-            end as device_category_code,
-            nullif(btrim(f.""MKT Name""::text), '') as device_model_name,
-            coalesce(f.""S/O that Stays"", 0)::bigint as so_that_stays_units,
-            nullif(btrim(f.""Sell-in Sub""::text), '') as sell_in_sub,
-            nullif(btrim(f.""Current Sub""::text), '') as current_sub,
-            nullif(btrim(f.""Sell-out Sub""::text), '') as sell_out_sub,
-            f.""Sell-in Region""::text as ""Sell-in Region"",
-            f.""Sell-in Sub""::text as ""Sell-in Sub"",
-            f.""Sell-in AP1""::text as ""Sell-in AP1"",
-            f.""Sell-in Account""::text as ""Sell-in Account"",
-            f.""Sell-out Region""::text as ""Sell-out Region"",
-            f.""Sell-out Sub""::text as ""Sell-out Sub"",
-            f.""Sell-out Country""::text as ""Sell-out Country"",
-            f.""Current Region""::text as ""Current Region"",
-            f.""Current Sub""::text as ""Current Sub"",
-            f.""Current Country""::text as ""Current Country"",
-            f.""Biz Sub""::text as ""Biz Sub"",
-            f.""Series""::text as ""Series"",
-            f.""MKT Name""::text as ""MKT Name"",
-            f.""Memory""::text as ""Memory"",
-            f.""Storage""::text as ""Storage"",
-            f.""Item Code""::text as ""Item Code"",
-            f.""Month""::text as ""Sell-out Month"",
-            coalesce(f.""Active Qty"", 0)::bigint as ""Active"",
-            f.""Grand total""::text as ""Grand total"",
-            coalesce(nullif(btrim(f.""Subsidiary""::text), ''), nullif(btrim(f.""Sell-in Sub""::text), '')) as subsidiary,
-            nullif(btrim(f.""Sell-in AP1""::text), '') as sub_sales_channel_name,
-            nullif(btrim(f.""Sell-in Account""::text), '') as account_partner,
-            coalesce(f.""Active Qty"", 0)::bigint as active_units,
-            upper(nullif(btrim(f.""Sell-in Sub""::text), '')) as sell_in_sub_resolved,
-            upper(nullif(btrim(f.""Current Sub""::text), '')) as current_sub_resolved,
-            upper(nullif(btrim(f.""Sell-out Sub""::text), '')) as sell_out_sub_resolved,
-            coalesce(f.""Active Qty"", 0)::bigint as active_units_resolved,
-            coalesce(f.""Active Qty"", 0)::bigint as total_sellout_units,
-            coalesce(nullif(btrim(f.""Across Sub""::text), ''), 'Unclassified') as in_out_classification,
-            case
-                when coalesce(nullif(btrim(f.""Across Sub""::text), ''), 'Unclassified') = 'Domestic' then 'Stays'
-                else 'Does Not Stay'
-            end as so_that_stays_flag,
-            coalesce(f.""2nd Activation Out"", 0)::bigint as second_activation_units,
-            coalesce(f.""CI Out"", 0)::bigint as ci_units,
-            (coalesce(f.""2nd Activation Out"", 0) + coalesce(f.""CI Out"", 0))::bigint as parallel_so_units,
-            (coalesce(f.""Active Qty"", 0) - coalesce(f.""S/O that Stays"", 0))::bigint as non_stay_sellout_units
-        from bi_reporting.inflow_outflow_mv f
-        where f.""Source Side"" = 'export'
-        ",
-        null,
-        [EnableFolding = true]
-    ),
-    #"Changed Type" = Table.TransformColumnTypes(
-        SelloutFromInflowOutflow,
-        {
-            {"date", type date},
-            {"month_key", type text},
-            {"country_code", type text},
-            {"subsidiary_resolved", type text},
-            {"sales_channel_name", type text},
-            {"account_partner_resolved", type text},
-            {"device_category_code", type text},
-            {"device_model_name", type text},
-            {"so_that_stays_units", Int64.Type},
-            {"sell_in_sub", type text},
-            {"current_sub", type text},
-            {"sell_out_sub", type text},
-            {"Sell-in Region", type text},
-            {"Sell-in Sub", type text},
-            {"Sell-in AP1", type text},
-            {"Sell-in Account", type text},
-            {"Sell-out Region", type text},
-            {"Sell-out Sub", type text},
-            {"Sell-out Country", type text},
-            {"Current Region", type text},
-            {"Current Sub", type text},
-            {"Current Country", type text},
-            {"Biz Sub", type text},
-            {"Series", type text},
-            {"MKT Name", type text},
-            {"Memory", type text},
-            {"Storage", type text},
-            {"Item Code", type text},
-            {"Sell-out Month", type text},
-            {"Active", Int64.Type},
-            {"Grand total", type text},
-            {"subsidiary", type text},
-            {"sub_sales_channel_name", type text},
-            {"account_partner", type text},
-            {"active_units", Int64.Type},
-            {"sell_in_sub_resolved", type text},
-            {"current_sub_resolved", type text},
-            {"sell_out_sub_resolved", type text},
-            {"active_units_resolved", Int64.Type},
-            {"total_sellout_units", Int64.Type},
-            {"in_out_classification", type text},
-            {"so_that_stays_flag", type text},
-            {"second_activation_units", Int64.Type},
-            {"ci_units", Int64.Type},
-            {"parallel_so_units", Int64.Type},
-            {"non_stay_sellout_units", Int64.Type}
-        },
-        [Culture = "en-US", MissingField = MissingField.UseNull]
-    )
-in
-    #"Changed Type"
+				VAR _Attach = IF ( _AttachUnsupportedContext, BLANK (), [Raw Attach Rate] )
+				VAR _AttachLy = IF ( _AttachUnsupportedContext, BLANK (), [Raw Attach Rate LY] )
+				VAR _AttachPlan = IF ( _AttachUnsupportedContext, BLANK (), [Sales Plan Attach Rate] )
+				VAR _AttachLyPoints = ( _Attach - _AttachLy ) * 100
+				VAR _AttachPlanPoints = ( _Attach - _AttachPlan ) * 100
+				VAR _AttachText = IF ( ISBLANK ( _Attach ), "--", FORMAT ( _Attach, "0.0%" ) )
+				VAR _AttachLyText = IF ( ISBLANK ( _Attach ) || ISBLANK ( _AttachLy ), "n/a", FORMAT ( _AttachLyPoints, "+0.0 pts;-0.0 pts;0.0 pts" ) )
+				VAR _AttachPlanText = IF ( ISBLANK ( _Attach ) || ISBLANK ( _AttachPlan ), "n/a", FORMAT ( _AttachPlanPoints, "+0.0 pts;-0.0 pts;0.0 pts" ) )
+				VAR _AttachLyClass = IF ( ISBLANK ( _Attach ) || ISBLANK ( _AttachLy ), "na", IF ( _AttachLyPoints >= 0, "good", "bad" ) )
+				VAR _AttachPlanClass = IF ( ISBLANK ( _Attach ) || ISBLANK ( _AttachPlan ), "na", IF ( _AttachPlanPoints >= 0, "good", "warning" ) )
+
+				VAR _Revenue = [Gross Revenue]
+				VAR _RevenueLy = [Gross Revenue LY]
+				VAR _RevenuePlan = [Revenue Plan Amount]
+				VAR _RevenueLyDelta = DIVIDE ( _Revenue - _RevenueLy, _RevenueLy )
+				VAR _RevenuePlanRatio = DIVIDE ( _Revenue, _RevenuePlan )
+				VAR _RevenueText =
+					SWITCH (
+						TRUE (),
+						ISBLANK ( _Revenue ), "--",
+						ABS ( _Revenue ) >= 1000000000, FORMAT ( DIVIDE ( _Revenue, 1000000000 ), "0.0" ) & "B",
+						ABS ( _Revenue ) >= 1000000, FORMAT ( DIVIDE ( _Revenue, 1000000 ), "0.0" ) & "M",
+						ABS ( _Revenue ) >= 1000, FORMAT ( DIVIDE ( _Revenue, 1000 ), "0.0" ) & "K",
+						FORMAT ( _Revenue, "#,##0" )
+					)
+				VAR _RevenueLyText = IF ( ISBLANK ( _RevenueLyDelta ), "n/a", FORMAT ( _RevenueLyDelta, "+0.0%;-0.0%;0.0%" ) )
+				VAR _RevenuePlanText = IF ( ISBLANK ( _RevenuePlanRatio ), "n/a", FORMAT ( _RevenuePlanRatio, "0.0%" ) )
+				VAR _RevenueLyClass = IF ( ISBLANK ( _RevenueLyDelta ), "na", IF ( _RevenueLyDelta >= 0, "good", "bad" ) )
+				VAR _RevenuePlanClass = IF ( ISBLANK ( _RevenuePlanRatio ), "na", IF ( _RevenuePlanRatio >= 1, "good", "warning" ) )
+
+				VAR _ActivePolicies = [Active Policies]
+				VAR _ActivePoliciesLy =
+					CALCULATE (
+						[Active Policies],
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						TREATAS (
+							SELECTCOLUMNS ( VALUES ( 'Date'[Date] ), "Date", EDATE ( 'Date'[Date], -12 ) ),
+							'Date'[Date]
+						)
+					)
+				VAR _ActivePoliciesDelta = DIVIDE ( _ActivePolicies - _ActivePoliciesLy, _ActivePoliciesLy )
+				VAR _ActivePoliciesText = IF ( ISBLANK ( _ActivePolicies ), "--", FORMAT ( _ActivePolicies, "#,##0" ) )
+				VAR _ActivePoliciesLyText = IF ( ISBLANK ( _ActivePoliciesDelta ), "n/a", FORMAT ( _ActivePoliciesDelta, "+0.0%;-0.0%;0.0%" ) )
+				VAR _ActivePoliciesLyClass = IF ( ISBLANK ( _ActivePoliciesDelta ), "na", IF ( _ActivePoliciesDelta >= 0, "good", "bad" ) )
+
+				VAR _Partners = IF ( _PartnersUnsupportedContext, BLANK (), [Active Channel Partners] )
+				VAR _PartnersLy =
+					IF (
+						_PartnersUnsupportedContext,
+						BLANK (),
+						CALCULATE (
+							[Active Channel Partners],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							TREATAS (
+								SELECTCOLUMNS ( VALUES ( 'Date'[Date] ), "Date", EDATE ( 'Date'[Date], -12 ) ),
+								'Date'[Date]
+							)
+						)
+					)
+				VAR _PartnersChange = _Partners - _PartnersLy
+				VAR _PartnersText = IF ( _PartnersUnsupportedContext, "n/a", IF ( ISBLANK ( _Partners ), "--", FORMAT ( _Partners, "#,##0" ) ) )
+				VAR _PartnersChangeText =
+					SWITCH (
+						TRUE (),
+						_PartnersUnsupportedContext, "Unavailable",
+						ISBLANK ( _PartnersLy ), "n/a",
+						_PartnersChange = 0, "No change",
+						FORMAT ( _PartnersChange, "+#,##0;-#,##0;0" ) & " vs LY"
+					)
+				VAR _PartnersClass = IF ( _PartnersUnsupportedContext || ISBLANK ( _PartnersLy ) || _PartnersChange = 0, "neutral", IF ( _PartnersChange > 0, "good", "warning" ) )
+
+				VAR _Subscribers = [Active Monthly Subscribers]
+				VAR _SubscribersLy = [Monthly Paid Revenue Units LY]
+				VAR _SubscribersDelta = DIVIDE ( _Subscribers - _SubscribersLy, _SubscribersLy )
+				VAR _SubscribersText = IF ( ISBLANK ( _Subscribers ), "--", FORMAT ( _Subscribers, "#,##0" ) )
+				VAR _SubscribersDeltaText = IF ( ISBLANK ( _SubscribersDelta ), "n/a", FORMAT ( _SubscribersDelta, "+0.0%;-0.0%;0.0%" ) )
+				VAR _SubscribersClass = IF ( ISBLANK ( _SubscribersDelta ), "neutral", IF ( _SubscribersDelta >= 0, "good", "warning" ) )
+
+				VAR _MonthlyCancel = [Monthly Cancellation Rate]
+				VAR _MonthlyCancelLy =
+					CALCULATE (
+						[Monthly Cancellation Rate],
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						TREATAS (
+							SELECTCOLUMNS ( VALUES ( 'Date'[Date] ), "Date", EDATE ( 'Date'[Date], -12 ) ),
+							'Date'[Date]
+						)
+					)
+				VAR _MonthlyCancelPoints = ( _MonthlyCancel - _MonthlyCancelLy ) * 100
+				VAR _MonthlyCancelText = IF ( ISBLANK ( _MonthlyCancel ), "--", FORMAT ( _MonthlyCancel, "0.0%" ) )
+				VAR _MonthlyCancelDeltaText = IF ( ISBLANK ( _MonthlyCancel ) || ISBLANK ( _MonthlyCancelLy ), "n/a", FORMAT ( _MonthlyCancelPoints, "+0.0 pts;-0.0 pts;0.0 pts" ) )
+				VAR _MonthlyCancelClass = IF ( ISBLANK ( _MonthlyCancel ) || ISBLANK ( _MonthlyCancelLy ), "neutral", IF ( _MonthlyCancelPoints <= 0, "good", "warning" ) )
+
+				VAR _MonthAxis =
+					FILTER (
+						SUMMARIZE ( ALLSELECTED ( 'Date' ), 'Date'[MonthNum], 'Date'[Month] ),
+						NOT ISBLANK ( 'Date'[MonthNum] )
+					)
+				VAR _SalesSeries =
+					ADDCOLUMNS (
+						_MonthAxis,
+						"__Label", 'Date'[Month],
+						"__CY", CALCULATE ( [Sales QTY CY] ),
+						"__LY", CALCULATE ( [Sales QTY LY] )
+					)
+				VAR _SalesVisible = FILTER ( _SalesSeries, NOT ISBLANK ( [__CY] ) || NOT ISBLANK ( [__LY] ) )
+				VAR _SalesValues =
+					FILTER (
+						UNION (
+							SELECTCOLUMNS ( _SalesVisible, "__V", [__CY] ),
+							SELECTCOLUMNS ( _SalesVisible, "__V", [__LY] )
+						),
+						NOT ISBLANK ( [__V] )
+					)
+				VAR _SalesMin = MINX ( _SalesValues, [__V] )
+				VAR _SalesMax = MAXX ( _SalesValues, [__V] )
+				VAR _SalesRange = IF ( _SalesMax = _SalesMin, IF ( _SalesMax = 0, 1, ABS ( _SalesMax ) ), _SalesMax - _SalesMin )
+				VAR _SalesCount = COUNTROWS ( _SalesVisible )
+				VAR _SalesPlot =
+					ADDCOLUMNS (
+						_SalesVisible,
+						"__Index", RANKX ( _SalesVisible, 'Date'[MonthNum],, ASC, DENSE ),
+						"__X", 48 + DIVIDE ( RANKX ( _SalesVisible, 'Date'[MonthNum],, ASC, DENSE ) - 1, MAX ( 1, _SalesCount - 1 ) ) * 492,
+						"__Y1", IF ( ISBLANK ( [__CY] ), BLANK (), 18 + DIVIDE ( _SalesMax - [__CY], _SalesRange, 0.5 ) * 128 ),
+						"__Y2", IF ( ISBLANK ( [__LY] ), BLANK (), 18 + DIVIDE ( _SalesMax - [__LY], _SalesRange, 0.5 ) * 128 )
+					)
+				VAR _SalesLabelStep = MAX ( 1, CEILING ( DIVIDE ( _SalesCount, 6 ), 1 ) )
+				VAR _SalesLabels =
+					CONCATENATEX (
+						FILTER ( _SalesPlot, [__Index] = 1 || [__Index] = _SalesCount || MOD ( [__Index] - 1, _SalesLabelStep ) = 0 ),
+						"<text class='axis-label' x='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' y='169' text-anchor='middle'>" & LEFT ( [__Label], 3 ) & "</text>",
+						"",
+						'Date'[MonthNum],
+						ASC
+					)
+				VAR _SalesCyPath = CONCATENATEX ( FILTER ( _SalesPlot, NOT ISBLANK ( [__CY] ) ), FORMAT ( ROUND ( [__X], 0 ), "0" ) & "," & FORMAT ( ROUND ( [__Y1], 0 ), "0" ), " ", 'Date'[MonthNum], ASC )
+				VAR _SalesLyPath = CONCATENATEX ( FILTER ( _SalesPlot, NOT ISBLANK ( [__LY] ) ), FORMAT ( ROUND ( [__X], 0 ), "0" ) & "," & FORMAT ( ROUND ( [__Y2], 0 ), "0" ), " ", 'Date'[MonthNum], ASC )
+				VAR _SalesDots =
+					CONCATENATEX (
+						FILTER ( _SalesPlot, NOT ISBLANK ( [__CY] ) ),
+						"<circle class='hit' cx='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' cy='" & FORMAT ( ROUND ( [__Y1], 0 ), "0" ) & "' r='7' fill='transparent'><title>" & [__Label] & " " & FORMAT ( _AnalysisYear, "0" ) & ": " & FORMAT ( [__CY], "#,##0" ) & "</title></circle>" &
+						"<circle class='series-dot' cx='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' cy='" & FORMAT ( ROUND ( [__Y1], 0 ), "0" ) & "' r='2.7'/>",
+						"",
+						'Date'[MonthNum],
+						ASC
+					)
+
+				VAR _AttachSeries =
+					ADDCOLUMNS (
+						_MonthAxis,
+						"__Label", 'Date'[Month],
+						"__CY", IF ( _AttachUnsupportedContext, BLANK (), CALCULATE ( [Attach Rate CY] ) ),
+						"__LY", IF ( _AttachUnsupportedContext, BLANK (), CALCULATE ( [Attach Rate LY Chart] ) )
+					)
+				VAR _AttachVisible = FILTER ( _AttachSeries, NOT ISBLANK ( [__CY] ) || NOT ISBLANK ( [__LY] ) )
+				VAR _AttachValues =
+					FILTER (
+						UNION (
+							SELECTCOLUMNS ( _AttachVisible, "__V", [__CY] ),
+							SELECTCOLUMNS ( _AttachVisible, "__V", [__LY] )
+						),
+						NOT ISBLANK ( [__V] )
+					)
+				VAR _AttachMin = MINX ( _AttachValues, [__V] )
+				VAR _AttachMax = MAXX ( _AttachValues, [__V] )
+				VAR _AttachRange = IF ( _AttachMax = _AttachMin, IF ( _AttachMax = 0, 1, ABS ( _AttachMax ) ), _AttachMax - _AttachMin )
+				VAR _AttachCount = COUNTROWS ( _AttachVisible )
+				VAR _AttachPlot =
+					ADDCOLUMNS (
+						_AttachVisible,
+						"__Index", RANKX ( _AttachVisible, 'Date'[MonthNum],, ASC, DENSE ),
+						"__X", 48 + DIVIDE ( RANKX ( _AttachVisible, 'Date'[MonthNum],, ASC, DENSE ) - 1, MAX ( 1, _AttachCount - 1 ) ) * 492,
+						"__Y1", IF ( ISBLANK ( [__CY] ), BLANK (), 18 + DIVIDE ( _AttachMax - [__CY], _AttachRange, 0.5 ) * 128 ),
+						"__Y2", IF ( ISBLANK ( [__LY] ), BLANK (), 18 + DIVIDE ( _AttachMax - [__LY], _AttachRange, 0.5 ) * 128 )
+					)
+				VAR _AttachLabelStep = MAX ( 1, CEILING ( DIVIDE ( _AttachCount, 6 ), 1 ) )
+				VAR _AttachLabels =
+					CONCATENATEX (
+						FILTER ( _AttachPlot, [__Index] = 1 || [__Index] = _AttachCount || MOD ( [__Index] - 1, _AttachLabelStep ) = 0 ),
+						"<text class='axis-label' x='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' y='169' text-anchor='middle'>" & LEFT ( [__Label], 3 ) & "</text>",
+						"",
+						'Date'[MonthNum],
+						ASC
+					)
+				VAR _AttachCyPath = CONCATENATEX ( FILTER ( _AttachPlot, NOT ISBLANK ( [__CY] ) ), FORMAT ( ROUND ( [__X], 0 ), "0" ) & "," & FORMAT ( ROUND ( [__Y1], 0 ), "0" ), " ", 'Date'[MonthNum], ASC )
+				VAR _AttachLyPath = CONCATENATEX ( FILTER ( _AttachPlot, NOT ISBLANK ( [__LY] ) ), FORMAT ( ROUND ( [__X], 0 ), "0" ) & "," & FORMAT ( ROUND ( [__Y2], 0 ), "0" ), " ", 'Date'[MonthNum], ASC )
+				VAR _AttachDots =
+					CONCATENATEX (
+						FILTER ( _AttachPlot, NOT ISBLANK ( [__CY] ) ),
+						"<circle class='hit' cx='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' cy='" & FORMAT ( ROUND ( [__Y1], 0 ), "0" ) & "' r='7' fill='transparent'><title>" & [__Label] & " " & FORMAT ( _AnalysisYear, "0" ) & ": " & FORMAT ( [__CY], "0.0%" ) & "</title></circle>" &
+						"<circle class='series-dot' cx='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' cy='" & FORMAT ( ROUND ( [__Y1], 0 ), "0" ) & "' r='2.7'/>",
+						"",
+						'Date'[MonthNum],
+						ASC
+					)
+
+				VAR _NetSeries =
+					ADDCOLUMNS (
+						_MonthAxis,
+						"__Label", 'Date'[Month],
+						"__CY", CALCULATE ( [Net Revenue CY] ),
+						"__LY", CALCULATE ( [Net Revenue LY Chart] )
+					)
+				VAR _NetVisible = FILTER ( _NetSeries, NOT ISBLANK ( [__CY] ) || NOT ISBLANK ( [__LY] ) )
+				VAR _NetValues =
+					FILTER (
+						UNION (
+							SELECTCOLUMNS ( _NetVisible, "__V", [__CY] ),
+							SELECTCOLUMNS ( _NetVisible, "__V", [__LY] )
+						),
+						NOT ISBLANK ( [__V] )
+					)
+				VAR _NetMin = MINX ( _NetValues, [__V] )
+				VAR _NetMax = MAXX ( _NetValues, [__V] )
+				VAR _NetRange = IF ( _NetMax = _NetMin, IF ( _NetMax = 0, 1, ABS ( _NetMax ) ), _NetMax - _NetMin )
+				VAR _NetCount = COUNTROWS ( _NetVisible )
+				VAR _NetPlot =
+					ADDCOLUMNS (
+						_NetVisible,
+						"__Index", RANKX ( _NetVisible, 'Date'[MonthNum],, ASC, DENSE ),
+						"__X", 48 + DIVIDE ( RANKX ( _NetVisible, 'Date'[MonthNum],, ASC, DENSE ) - 1, MAX ( 1, _NetCount - 1 ) ) * 492,
+						"__Y1", IF ( ISBLANK ( [__CY] ), BLANK (), 18 + DIVIDE ( _NetMax - [__CY], _NetRange, 0.5 ) * 128 ),
+						"__Y2", IF ( ISBLANK ( [__LY] ), BLANK (), 18 + DIVIDE ( _NetMax - [__LY], _NetRange, 0.5 ) * 128 )
+					)
+				VAR _NetLabelStep = MAX ( 1, CEILING ( DIVIDE ( _NetCount, 6 ), 1 ) )
+				VAR _NetLabels =
+					CONCATENATEX (
+						FILTER ( _NetPlot, [__Index] = 1 || [__Index] = _NetCount || MOD ( [__Index] - 1, _NetLabelStep ) = 0 ),
+						"<text class='axis-label' x='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' y='169' text-anchor='middle'>" & LEFT ( [__Label], 3 ) & "</text>",
+						"",
+						'Date'[MonthNum],
+						ASC
+					)
+				VAR _NetCyPath = CONCATENATEX ( FILTER ( _NetPlot, NOT ISBLANK ( [__CY] ) ), FORMAT ( ROUND ( [__X], 0 ), "0" ) & "," & FORMAT ( ROUND ( [__Y1], 0 ), "0" ), " ", 'Date'[MonthNum], ASC )
+				VAR _NetLyPath = CONCATENATEX ( FILTER ( _NetPlot, NOT ISBLANK ( [__LY] ) ), FORMAT ( ROUND ( [__X], 0 ), "0" ) & "," & FORMAT ( ROUND ( [__Y2], 0 ), "0" ), " ", 'Date'[MonthNum], ASC )
+				VAR _NetDots =
+					CONCATENATEX (
+						FILTER ( _NetPlot, NOT ISBLANK ( [__CY] ) ),
+						VAR _PointText =
+							SWITCH (
+								TRUE (),
+								ABS ( [__CY] ) >= 1000000000, FORMAT ( DIVIDE ( [__CY], 1000000000 ), "0.0" ) & "B",
+								ABS ( [__CY] ) >= 1000000, FORMAT ( DIVIDE ( [__CY], 1000000 ), "0.0" ) & "M",
+								ABS ( [__CY] ) >= 1000, FORMAT ( DIVIDE ( [__CY], 1000 ), "0.0" ) & "K",
+								FORMAT ( [__CY], "#,##0" )
+							)
+						RETURN
+							"<circle class='hit' cx='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' cy='" & FORMAT ( ROUND ( [__Y1], 0 ), "0" ) & "' r='7' fill='transparent'><title>" & [__Label] & " " & FORMAT ( _AnalysisYear, "0" ) & ": " & _PointText & "</title></circle>" &
+							"<circle class='series-dot' cx='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' cy='" & FORMAT ( ROUND ( [__Y1], 0 ), "0" ) & "' r='2.7'/>",
+						"",
+						'Date'[MonthNum],
+						ASC
+					)
+
+				VAR _ChannelBase =
+					FILTER (
+						ADDCOLUMNS (
+							ALLSELECTED ( Sales[Sales Channel] ),
+							"__Amount", CALCULATE ( [Sales Volume] )
+						),
+						NOT ISBLANK ( Sales[Sales Channel] )
+							&& TRIM ( Sales[Sales Channel] ) <> ""
+							&& Sales[Sales Channel] <> "__BLANK__"
+							&& NOT ISBLANK ( [__Amount] )
+							&& [__Amount] > 0
+					)
+				VAR _TopChannels = TOPN ( 5, _ChannelBase, [__Amount], DESC, Sales[Sales Channel], ASC )
+				VAR _ChannelTotal = CALCULATE ( [Sales Volume], ALLSELECTED ( Sales[Sales Channel] ) )
+				VAR _TopAmount = MAXX ( _TopChannels, [__Amount] )
+				VAR _ChannelCount = COUNTROWS ( _TopChannels )
+				VAR _ChannelTotalText =
+					SWITCH (
+						TRUE (),
+						ISBLANK ( _ChannelTotal ), "--",
+						ABS ( _ChannelTotal ) >= 1000000, FORMAT ( DIVIDE ( _ChannelTotal, 1000000 ), "0.0" ) & "M",
+						ABS ( _ChannelTotal ) >= 1000, FORMAT ( DIVIDE ( _ChannelTotal, 1000 ), "0" ) & "K",
+						FORMAT ( _ChannelTotal, "#,##0" )
+					)
+				VAR _ChannelSegments =
+					CONCATENATEX (
+						_TopChannels,
+						VAR _Name = Sales[Sales Channel]
+						VAR _SafeName = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _Name, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
+						VAR _Amount = [__Amount]
+						VAR _Share = DIVIDE ( _Amount, _ChannelTotal, 0 )
+						VAR _PriorAmount =
+							SUMX (
+								FILTER (
+									_TopChannels,
+									[__Amount] > _Amount
+										|| ( [__Amount] = _Amount && Sales[Sales Channel] < _Name )
+								),
+								[__Amount]
+							)
+						VAR _Offset = -100 * DIVIDE ( _PriorAmount, _ChannelTotal, 0 )
+						VAR _Rank = RANKX ( _TopChannels, [__Amount], _Amount, DESC, DENSE )
+						VAR _Color = SWITCH ( _Rank, 1, "#1428a0", 2, "#2f67d8", 3, "#2189ff", 4, "#00a6a6", "#7b6fd0" )
+						RETURN
+							"<circle class='donut-segment' cx='70' cy='70' r='48' pathLength='100' stroke='" & _Color & "' stroke-dasharray='" & FORMAT ( _Share * 100, "0.00" ) & " " & FORMAT ( 100 - _Share * 100, "0.00" ) & "' stroke-dashoffset='" & FORMAT ( _Offset, "0.00" ) & "'><title>" & _SafeName & ": " & FORMAT ( _Share, "0.0%" ) & "</title></circle>",
+						"",
+						[__Amount],
+						DESC
+					)
+				VAR _ChannelRows =
+					CONCATENATEX (
+						_TopChannels,
+						VAR _Name = Sales[Sales Channel]
+						VAR _SafeName = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _Name, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
+						VAR _Amount = [__Amount]
+						VAR _Share = DIVIDE ( _Amount, _ChannelTotal, 0 )
+						VAR _Width = DIVIDE ( _Amount, _TopAmount, 0 ) * 100
+						VAR _Rank = RANKX ( _TopChannels, [__Amount], _Amount, DESC, DENSE )
+						VAR _Color = SWITCH ( _Rank, 1, "#1428a0", 2, "#2f67d8", 3, "#2189ff", 4, "#00a6a6", "#7b6fd0" )
+						RETURN
+							"<div class='mix-row'><span class='mix-name' title='" & _SafeName & "'>" & _SafeName & "</span><span class='mix-bar'><span style='width:" & FORMAT ( _Width, "0.0" ) & "%;background:" & _Color & "'></span></span><span class='mix-share'>" & FORMAT ( _Share, "0.0%" ) & "</span><span class='mix-value'>" & FORMAT ( _Amount, "#,##0" ) & "</span></div>",
+						"",
+						[__Amount],
+						DESC
+					)
+
+				VAR _SalesMaxText =
+					SWITCH (
+						TRUE (),
+						ISBLANK ( _SalesMax ), "--",
+						ABS ( _SalesMax ) >= 1000000, FORMAT ( DIVIDE ( _SalesMax, 1000000 ), "0.0" ) & "M",
+						ABS ( _SalesMax ) >= 1000, FORMAT ( DIVIDE ( _SalesMax, 1000 ), "0" ) & "K",
+						FORMAT ( _SalesMax, "#,##0" )
+					)
+				VAR _SalesMidText =
+					VAR _V = DIVIDE ( _SalesMax + _SalesMin, 2 )
+					RETURN SWITCH ( TRUE (), ISBLANK ( _V ), "--", ABS ( _V ) >= 1000000, FORMAT ( DIVIDE ( _V, 1000000 ), "0.0" ) & "M", ABS ( _V ) >= 1000, FORMAT ( DIVIDE ( _V, 1000 ), "0" ) & "K", FORMAT ( _V, "#,##0" ) )
+				VAR _SalesMinText =
+					SWITCH (
+						TRUE (),
+						ISBLANK ( _SalesMin ), "--",
+						ABS ( _SalesMin ) >= 1000000, FORMAT ( DIVIDE ( _SalesMin, 1000000 ), "0.0" ) & "M",
+						ABS ( _SalesMin ) >= 1000, FORMAT ( DIVIDE ( _SalesMin, 1000 ), "0" ) & "K",
+						FORMAT ( _SalesMin, "#,##0" )
+					)
+				VAR _NetMaxText = SWITCH ( TRUE (), ISBLANK ( _NetMax ), "--", ABS ( _NetMax ) >= 1000000000, FORMAT ( DIVIDE ( _NetMax, 1000000000 ), "0.0" ) & "B", ABS ( _NetMax ) >= 1000000, FORMAT ( DIVIDE ( _NetMax, 1000000 ), "0.0" ) & "M", ABS ( _NetMax ) >= 1000, FORMAT ( DIVIDE ( _NetMax, 1000 ), "0" ) & "K", FORMAT ( _NetMax, "#,##0" ) )
+				VAR _NetMidText =
+					VAR _V = DIVIDE ( _NetMax + _NetMin, 2 )
+					RETURN SWITCH ( TRUE (), ISBLANK ( _V ), "--", ABS ( _V ) >= 1000000000, FORMAT ( DIVIDE ( _V, 1000000000 ), "0.0" ) & "B", ABS ( _V ) >= 1000000, FORMAT ( DIVIDE ( _V, 1000000 ), "0.0" ) & "M", ABS ( _V ) >= 1000, FORMAT ( DIVIDE ( _V, 1000 ), "0" ) & "K", FORMAT ( _V, "#,##0" ) )
+				VAR _NetMinText = SWITCH ( TRUE (), ISBLANK ( _NetMin ), "--", ABS ( _NetMin ) >= 1000000000, FORMAT ( DIVIDE ( _NetMin, 1000000000 ), "0.0" ) & "B", ABS ( _NetMin ) >= 1000000, FORMAT ( DIVIDE ( _NetMin, 1000000 ), "0.0" ) & "M", ABS ( _NetMin ) >= 1000, FORMAT ( DIVIDE ( _NetMin, 1000 ), "0" ) & "K", FORMAT ( _NetMin, "#,##0" ) )
+
+				VAR _Css =
+					"<style>" &
+					".scx,.scx *{box-sizing:border-box}.scx{--samsung:#1428a0;--action:#2189ff;--ink:#0b0b0f;--secondary:#4f5663;--muted:#697386;--border:#e1e5ee;--grid:#e8ecf3;--surface:#fff;--soft:#f8faff;--tint:#e9edff;--success:#087a67;--success-bg:#e9f7f4;--warning:#a45700;--warning-bg:#fff4e5;--danger:#b4232c;--danger-bg:#fff0f1;width:100%;height:100vh;min-height:680px;margin:0;padding:1px;overflow:hidden;color:var(--ink);font-family:SamsungOne,'Segoe UI',Arial,sans-serif;font-variant-numeric:tabular-nums lining-nums;background:transparent}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;height:180px}.metric-card,.signal-strip,.chart-card{border:1px solid var(--border);background:var(--surface);box-shadow:0 8px 24px rgba(20,40,160,.07)}.metric-card{min-width:0;height:100%;padding:14px 15px 12px;display:grid;grid-template-rows:auto auto minmax(38px,1fr) auto;gap:7px;border-radius:14px;overflow:hidden}.metric-card.focus{border-color:var(--samsung);background:radial-gradient(circle at 92% 15%,rgba(103,183,255,.24),transparent 38%),var(--samsung);box-shadow:0 10px 24px rgba(11,11,15,.12);color:#fff}.metric-head,.metric-value-row,.metric-footer,.signal,.chart-head,.legend{display:flex;align-items:center}.metric-head{min-width:0;justify-content:space-between;gap:8px}.metric-label{margin:0;overflow:hidden;color:var(--secondary);font-size:11px;line-height:1.2;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.focus .metric-label{color:rgba(255,255,255,.78)}.metric-status{flex:0 0 auto;padding:4px 7px;border-radius:999px;background:var(--tint);color:var(--samsung);font-size:8px;line-height:1;font-weight:800}.focus .metric-status{background:rgba(255,255,255,.15);color:#fff}.metric-value-row{min-width:0;align-items:baseline;gap:8px}.metric-value{margin:0;overflow:hidden;color:var(--ink);font-family:'Samsung Sharp Sans',SamsungOne,'Segoe UI',Arial,sans-serif;font-size:29px;line-height:1;font-weight:800;letter-spacing:-.025em;text-overflow:ellipsis;white-space:nowrap}.focus .metric-value{color:#fff}.metric-unit{color:var(--muted);font-size:9px;font-weight:700}.focus .metric-unit{color:rgba(255,255,255,.7)}.spark{width:100%;height:44px;display:block;overflow:visible}.spark-guide{stroke:var(--grid);stroke-width:1}.spark-area{fill:rgba(33,137,255,.11)}.spark-line{fill:none;stroke:var(--action);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}.focus .spark-guide{stroke:rgba(255,255,255,.17)}.focus .spark-area{fill:rgba(255,255,255,.09)}.focus .spark-line{stroke:#fff}.metric-footer{min-width:0;justify-content:space-between;gap:8px;padding-top:7px;border-top:1px solid var(--border)}.focus .metric-footer{border-color:rgba(255,255,255,.16)}.comparison{min-width:0;display:grid;gap:2px}.comparison span{color:var(--muted);font-size:8px;line-height:1;font-weight:650}.comparison strong{color:var(--ink);font-size:10px;line-height:1.1;font-weight:800}.comparison strong.good{color:var(--success)}.comparison strong.warning{color:var(--warning)}.comparison strong.bad{color:var(--danger)}.comparison strong.na{color:var(--muted)}.focus .comparison span{color:rgba(255,255,255,.64)}.focus .comparison strong{color:#fff!important}.signal-strip{height:86px;margin-top:12px;padding:10px 12px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;border-radius:14px;overflow:hidden}.signal{min-width:0;justify-content:space-between;gap:12px;padding:0 18px;border-right:1px solid var(--border)}.signal:first-child{padding-left:4px}.signal:last-child{border-right:0}.signal-copy{min-width:0}.signal-label{margin:0;overflow:hidden;color:var(--secondary);font-size:10px;line-height:1.2;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.signal-value{margin:5px 0 0;overflow:hidden;color:var(--ink);font-family:'Samsung Sharp Sans',SamsungOne,'Segoe UI',Arial,sans-serif;font-size:20px;line-height:1;font-weight:800;letter-spacing:-.02em;text-overflow:ellipsis;white-space:nowrap}.delta{flex:0 0 auto;min-width:62px;padding:6px 7px;border-radius:8px;font-size:9px;line-height:1;font-weight:800;text-align:center}.delta.good{background:var(--success-bg);color:var(--success)}.delta.warning{background:var(--warning-bg);color:var(--warning)}.delta.neutral{background:var(--tint);color:var(--samsung)}.chart-grid{min-width:0;min-height:0;height:calc(100vh - 303px);margin-top:12px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:12px}.chart-card{min-width:0;min-height:0;padding:12px 14px 10px;display:grid;grid-template-rows:auto minmax(0,1fr);gap:7px;border-radius:14px;overflow:hidden}.chart-head{min-width:0;justify-content:space-between;gap:10px}.chart-copy{min-width:0}.chart-title{margin:0;overflow:hidden;color:var(--ink);font-family:'Samsung Sharp Sans',SamsungOne,'Segoe UI',Arial,sans-serif;font-size:13px;line-height:1.15;font-weight:800;letter-spacing:-.01em;text-overflow:ellipsis;white-space:nowrap}.chart-subtitle{margin:3px 0 0;overflow:hidden;color:var(--muted);font-size:8.5px;line-height:1.15;text-overflow:ellipsis;white-space:nowrap}.legend{flex:0 0 auto;gap:10px;color:var(--secondary);font-size:8.5px;line-height:1;font-weight:700}.legend span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}.legend i{width:13px;height:3px;border-radius:99px;background:var(--samsung)}.legend i.ly{height:0;border-top:2px dashed #a9b2c3;border-radius:0;background:transparent}.line-chart{width:100%;height:100%;min-height:0;display:block;overflow:visible}.chart-gridline{stroke:var(--grid);stroke-width:1}.axis-label,.value-label{fill:var(--muted);font-family:SamsungOne,'Segoe UI',Arial,sans-serif;font-size:8.5px;font-weight:650}.series-line{fill:none;stroke:var(--samsung);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}.series-line.ly{stroke:#a9b2c3;stroke-width:1.8;stroke-dasharray:5 5}.series-dot{fill:var(--samsung);stroke:#fff;stroke-width:1.4;vector-effect:non-scaling-stroke}.hit{cursor:default}.no-data{height:100%;display:grid;place-items:center;color:var(--muted);font-size:11px;font-weight:700}.mix-layout{min-width:0;min-height:0;display:grid;grid-template-columns:minmax(130px,.72fr) minmax(220px,1.28fr);align-items:center;gap:14px}.donut-wrap{min-width:0;min-height:0;display:grid;place-items:center;position:relative}.donut{width:142px;height:142px;display:block;transform:rotate(-90deg)}.donut-track{fill:none;stroke:#edf0f5;stroke-width:18}.donut-segment{fill:none;stroke-width:18;stroke-linecap:butt}.donut-total{position:absolute;display:grid;place-items:center;text-align:center;pointer-events:none}.donut-total strong{color:var(--ink);font-family:'Samsung Sharp Sans',SamsungOne,'Segoe UI',Arial,sans-serif;font-size:18px;line-height:1;font-weight:800}.donut-total span{margin-top:4px;color:var(--muted);font-size:8px;line-height:1;font-weight:650}.mix-list{min-width:0;display:grid;gap:7px}.mix-row{min-width:0;display:grid;grid-template-columns:78px minmax(55px,1fr) 42px 58px;align-items:center;gap:7px}.mix-name,.mix-value,.mix-share{overflow:hidden;font-size:8.5px;line-height:1;text-overflow:ellipsis;white-space:nowrap}.mix-name{color:var(--secondary);font-weight:700}.mix-value{color:var(--secondary);font-weight:700;text-align:right}.mix-share{color:var(--ink);font-weight:800;text-align:right}.mix-bar{height:6px;overflow:hidden;border-radius:99px;background:#edf0f5}.mix-bar span{height:100%;display:block;border-radius:inherit}@media(max-width:900px){.scx{height:auto;min-height:0;overflow:visible}.metric-grid{height:auto;grid-template-columns:repeat(2,minmax(0,1fr))}.metric-card{min-height:176px}.signal-strip{height:auto}.chart-grid{height:auto;grid-template-columns:1fr;grid-template-rows:auto}.chart-card{min-height:250px}}@media(max-width:560px){.metric-grid,.signal-strip{grid-template-columns:1fr}.signal{min-height:64px;padding:8px 4px;border-right:0;border-bottom:1px solid var(--border)}.signal:last-child{border-bottom:0}.mix-layout{grid-template-columns:1fr}}" &
+					"</style>"
+				VAR _FullPageCss =
+					"<style>" &
+					".scx{--canvas:#f3f6fa;--sky:#67b7ff;--sea:#2f67d8;--teal:#00a6a6;--lavender:#7b6fd0;width:100vw;max-width:100%;height:100vh;min-height:720px;margin:0;padding:18px 22px 20px;display:grid;grid-template-rows:72px 72px 180px 88px minmax(0,1fr);gap:12px;overflow:hidden;background:radial-gradient(circle at 93% 5%,rgba(33,137,255,.07),transparent 23%),var(--canvas)}.topbar,.filter-context{min-width:0;border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:0 8px 24px rgba(20,40,160,.07)}.topbar{padding:10px 14px 10px 18px;display:grid;grid-template-columns:164px minmax(230px,1fr) auto 180px;align-items:center;gap:14px;position:relative;overflow:hidden}.topbar:before{content:'';position:absolute;inset:0 0 auto;height:3px;background:var(--samsung)}.brand-lockup{min-width:0;display:flex;align-items:center;gap:9px}.brand-name{color:var(--samsung);font-family:'Samsung Sharp Sans',SamsungOne,'Segoe UI',Arial,sans-serif;font-size:16px;line-height:1;font-weight:800;white-space:nowrap}.brand-product{min-width:42px;padding:5px 8px 6px;border-radius:999px;background:var(--tint);color:var(--samsung);font-size:11px;line-height:1;font-weight:800;text-align:center}.title-block{min-width:0}.title-block h1{margin:0;overflow:hidden;color:var(--ink);font-family:'Samsung Sharp Sans',SamsungOne,'Segoe UI',Arial,sans-serif;font-size:22px;line-height:1.08;font-weight:800;letter-spacing:-.02em;text-overflow:ellipsis;white-space:nowrap}.title-block p{margin:5px 0 0;overflow:hidden;color:var(--secondary);font-size:11px;line-height:1.25;text-overflow:ellipsis;white-space:nowrap}.page-tabs{min-width:0;padding:4px;display:flex;align-items:center;gap:3px;border:1px solid var(--border);border-radius:11px;background:var(--soft);pointer-events:none;user-select:none}.display-mode{padding:0 5px;color:var(--muted);font-size:7.5px;line-height:1.05;font-weight:800;text-align:center;white-space:nowrap}.page-tab{min-height:32px;padding:7px 8px;display:grid;place-items:center;border-radius:8px;color:var(--secondary);font-size:10.5px;line-height:1;font-weight:700;white-space:nowrap}.page-tab.active{background:var(--samsung);color:#fff}.model-meta{min-width:180px;padding-left:14px;display:grid;gap:5px;border-left:1px solid var(--border)}.model-meta-row{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:9px;line-height:1.15}.model-meta-row strong{min-width:0;overflow:hidden;color:var(--ink);font-size:10px;font-weight:700;text-align:right;text-overflow:ellipsis;white-space:nowrap}.model-state{display:inline-flex;align-items:center;justify-content:flex-end;gap:5px;color:var(--success)!important;font-weight:800!important}.model-state:before{content:'';width:6px;height:6px;border-radius:50%;background:var(--success);box-shadow:0 0 0 3px var(--success-bg)}.filter-context{padding:9px;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;pointer-events:none;user-select:none}.filter-item{min-width:0;min-height:52px;padding:8px 52px 8px 10px;display:grid;align-content:center;gap:4px;position:relative;border:1px solid var(--border);border-radius:10px;background:var(--soft)}.filter-label{overflow:hidden;color:var(--muted);font-size:8px;line-height:1;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.filter-value{overflow:hidden;color:var(--ink);font-size:10px;line-height:1.15;font-weight:800;text-overflow:ellipsis;white-space:nowrap}.view-only{position:absolute;top:8px;right:7px;padding:3px 4px;border-radius:5px;background:var(--tint);color:var(--samsung);font-size:6.5px;line-height:1;font-weight:800;white-space:nowrap}.spark-unavailable{height:44px;display:grid;place-items:center;color:var(--muted);font-size:8px;line-height:1.2;font-weight:700;text-align:center}.metric-grid{height:100%;margin:0}.signal-strip{height:100%;margin:0}.chart-grid{height:100%;margin:0}.metric-card,.signal-strip,.chart-card{box-shadow:0 5px 16px rgba(20,40,160,.055)}@media(max-width:1020px){.scx{height:100vh;min-height:720px;padding:12px;grid-template-rows:118px 118px 180px 88px minmax(0,1fr);overflow:auto}.topbar{grid-template-columns:1fr auto}.title-block,.page-tabs{grid-column:1/-1}.model-meta{grid-column:2;grid-row:1}.filter-context{grid-template-columns:repeat(3,minmax(0,1fr))}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr));overflow:auto}.chart-grid{grid-template-columns:repeat(2,minmax(320px,1fr));grid-template-rows:repeat(2,minmax(220px,1fr));overflow:auto}}@media(max-width:620px){.scx{grid-template-rows:auto auto auto auto auto;overflow:auto}.topbar{grid-template-columns:1fr}.model-meta{grid-column:1;grid-row:auto;padding:10px 0 0;border-top:1px solid var(--border);border-left:0}.filter-context,.metric-grid,.signal-strip,.chart-grid{grid-template-columns:1fr}.metric-grid,.signal-strip,.chart-grid{height:auto;overflow:visible}.signal{min-height:64px;padding:8px 4px;border-right:0;border-bottom:1px solid var(--border)}.signal:last-child{border-bottom:0}.chart-card{min-height:250px}.mix-layout{grid-template-columns:1fr}}" &
+					"</style>"
+
+				VAR _Header =
+					"<header class='topbar' aria-label='Samsung Care Plus executive summary header'>" &
+					"<div class='brand-lockup' aria-label='Samsung Care Plus'><span class='brand-name'>Samsung</span><span class='brand-product'>Care+</span></div>" &
+					"<div class='title-block'><h1>Executive Summary</h1><p>Model-driven executive performance.</p></div>" &
+					"<nav class='page-tabs' aria-label='Report page navigator, display only' data-display-only='true'><span class='page-tab active' aria-current='page'>Exec</span><span class='page-tab'>Sales</span><span class='page-tab'>Attach</span><span class='page-tab'>Revenue</span><span class='page-tab'>Plans</span><span class='page-tab'>Info</span></nav>" &
+					"<div class='model-meta'><div class='model-meta-row'><span>Owner</span><strong data-model-measure='Measures_table[Business Owner]'>" & _OwnerText & "</strong></div><div class='model-meta-row'><span>Evaluated</span><strong data-model-measure='Measures_table[Last Refreshed]'>" & _EvaluatedText & "</strong></div><div class='model-meta-row'><span>Model</span><strong class='model-state'>Connected</strong></div></div></header>"
+
+				VAR _Filters =
+					"<section class='filter-context' aria-label='Current Power BI filter context, display only' data-display-only='true'>" &
+					"<div class='filter-item' data-model-field='Date Filter[Period Type] > Date Filter[Period Label]' data-display-only='true'><span class='filter-label'>Period</span><strong class='filter-value' title='" & _PeriodText & "'>" & _PeriodText & "</strong><span class='view-only'>View only</span></div>" &
+					"<div class='filter-item' data-model-field='Subsidiary Master[Subsidiary]' data-display-only='true'><span class='filter-label'>Subsidiary</span><strong class='filter-value' title='" & _SubsidiaryText & "'>" & _SubsidiaryText & "</strong><span class='view-only'>View only</span></div>" &
+					"<div class='filter-item' data-model-field='Sales[Product Family] > Sales[Device Series] > Sales[Device Model]' data-display-only='true'><span class='filter-label'>Device</span><strong class='filter-value' title='" & _DeviceText & "'>" & _DeviceText & "</strong><span class='view-only'>View only</span></div>" &
+					"<div class='filter-item' data-model-field='Sales[Sales Channel] > Sales[Sub Sales Channel] > Sales[Account / Partner]' data-display-only='true'><span class='filter-label'>Channel / partner</span><strong class='filter-value' title='" & _ChannelText & "'>" & _ChannelText & "</strong><span class='view-only'>View only</span></div>" &
+					"<div class='filter-item' data-model-field='Sales[Product Type]' data-display-only='true'><span class='filter-label'>Service type</span><strong class='filter-value' title='" & _ServiceText & "'>" & _ServiceText & "</strong><span class='view-only'>View only</span></div>" &
+					"<div class='filter-item' data-model-field='Sales[Payment Type]' data-display-only='true'><span class='filter-label'>Payment type</span><strong class='filter-value' title='" & _PaymentText & "'>" & _PaymentText & "</strong><span class='view-only'>View only</span></div></section>"
+
+				VAR _SparkSvgStart = "<svg class='spark' viewBox='0 0 120 42' preserveAspectRatio='none' aria-hidden='true'><line class='spark-guide' x1='0' y1='37' x2='120' y2='37'/><polygon class='spark-area' points='0,42 "
+				VAR _SparkSvgMiddle = " 120,42'/><polyline class='spark-line' points='"
+				VAR _SparkSvgEnd = "'/></svg>"
+				VAR _AttachSparkMarkup = IF ( _AttachUnsupportedContext, "<div class='spark-unavailable'>Unavailable for this filter context</div>", _SparkSvgStart & _AttachSpark & _SparkSvgMiddle & _AttachSpark & _SparkSvgEnd )
+				VAR _Cards =
+					"<section class='metric-grid' aria-label='Primary performance indicators'>" &
+					"<article class='metric-card focus'><div class='metric-head'><p class='metric-label'>Sales volume</p><span class='metric-status'>Primary</span></div><div class='metric-value-row'><strong class='metric-value'>" & _SalesText & "</strong><span class='metric-unit'>units</span></div>" &
+					_SparkSvgStart & _SalesSpark & _SparkSvgMiddle & _SalesSpark & _SparkSvgEnd &
+					"<div class='metric-footer'><div class='comparison'><span>vs prior year</span><strong class='" & _SalesLyClass & "'>" & _SalesLyText & "</strong></div><div class='comparison'><span>of sales plan</span><strong class='" & _SalesPlanClass & "'>" & _SalesPlanText & "</strong></div></div></article>" &
+					"<article class='metric-card'><div class='metric-head'><p class='metric-label'>Raw attach rate</p><span class='metric-status'>Conversion</span></div><div class='metric-value-row'><strong class='metric-value'>" & _AttachText & "</strong><span class='metric-unit'>sales / stays</span></div>" &
+					_AttachSparkMarkup &
+					"<div class='metric-footer'><div class='comparison'><span>vs prior year</span><strong class='" & _AttachLyClass & "'>" & _AttachLyText & "</strong></div><div class='comparison'><span>vs attach plan</span><strong class='" & _AttachPlanClass & "'>" & _AttachPlanText & "</strong></div></div></article>" &
+					"<article class='metric-card'><div class='metric-head'><p class='metric-label'>Gross revenue</p><span class='metric-status'>Model currency</span></div><div class='metric-value-row'><strong class='metric-value'>" & _RevenueText & "</strong><span class='metric-unit'>total</span></div>" &
+					_SparkSvgStart & _RevenueSpark & _SparkSvgMiddle & _RevenueSpark & _SparkSvgEnd &
+					"<div class='metric-footer'><div class='comparison'><span>vs prior year</span><strong class='" & _RevenueLyClass & "'>" & _RevenueLyText & "</strong></div><div class='comparison'><span>of revenue plan</span><strong class='" & _RevenuePlanClass & "'>" & _RevenuePlanText & "</strong></div></div></article>" &
+					"<article class='metric-card'><div class='metric-head'><p class='metric-label'>Active policies</p><span class='metric-status'>Coverage</span></div><div class='metric-value-row'><strong class='metric-value'>" & _ActivePoliciesText & "</strong><span class='metric-unit'>policies</span></div>" &
+					_SparkSvgStart & _PolicySpark & _SparkSvgMiddle & _PolicySpark & _SparkSvgEnd &
+					"<div class='metric-footer'><div class='comparison'><span>vs prior year</span><strong class='" & _ActivePoliciesLyClass & "'>" & _ActivePoliciesLyText & "</strong></div><div class='comparison'><span>plan context</span><strong class='na'>n/a</strong></div></div></article></section>"
+
+				VAR _Signals =
+					"<section class='signal-strip' aria-label='Operating signals'>" &
+					"<article class='signal'><div class='signal-copy'><p class='signal-label'>Active channel partners</p><p class='signal-value'>" & _PartnersText & "</p></div><span class='delta " & _PartnersClass & "'>" & _PartnersChangeText & "</span></article>" &
+					"<article class='signal'><div class='signal-copy'><p class='signal-label'>Active monthly subscribers</p><p class='signal-value'>" & _SubscribersText & "</p></div><span class='delta " & _SubscribersClass & "'>" & _SubscribersDeltaText & "</span></article>" &
+					"<article class='signal'><div class='signal-copy'><p class='signal-label'>Monthly cancellation rate</p><p class='signal-value'>" & _MonthlyCancelText & "</p></div><span class='delta " & _MonthlyCancelClass & "'>" & _MonthlyCancelDeltaText & "</span></article></section>"
+
+				VAR _ChartGrid = "<line class='chart-gridline' x1='48' y1='18' x2='540' y2='18'/><line class='chart-gridline' x1='48' y1='82' x2='540' y2='82'/><line class='chart-gridline' x1='48' y1='146' x2='540' y2='146'/>"
+				VAR _SalesChart =
+					"<article class='chart-card'><div class='chart-head'><div class='chart-copy'><h2 class='chart-title'>Sales trend</h2><p class='chart-subtitle'>Analysis Year monthly units, CY compared with LY</p></div><div class='legend'><span><i></i>CY</span><span><i class='ly'></i>LY</span></div></div>" &
+					IF (
+						_SalesCount = 0,
+						"<div class='no-data'>No sales data in the selected context</div>",
+						"<svg class='line-chart' viewBox='0 0 560 178' preserveAspectRatio='none' role='img' aria-label='Sales trend by month'>" & _ChartGrid &
+						"<text class='value-label' x='2' y='21'>" & _SalesMaxText & "</text><text class='value-label' x='2' y='85'>" & _SalesMidText & "</text><text class='value-label' x='2' y='149'>" & _SalesMinText & "</text>" &
+						_SalesLabels & IF ( _SalesLyPath = "", "", "<polyline class='series-line ly' points='" & _SalesLyPath & "'/>") & IF ( _SalesCyPath = "", "", "<polyline class='series-line' points='" & _SalesCyPath & "'/>") & _SalesDots & "</svg>"
+					) & "</article>"
+				VAR _AttachChart =
+					"<article class='chart-card'><div class='chart-head'><div class='chart-copy'><h2 class='chart-title'>Attach rate trend</h2><p class='chart-subtitle'>Analysis Year rate, CY compared with LY</p></div><div class='legend'><span><i></i>CY</span><span><i class='ly'></i>LY</span></div></div>" &
+					IF (
+						_AttachUnsupportedContext,
+						"<div class='no-data'>Attach trend unavailable for the selected service, payment, partner, or device-group filter</div>",
+						IF (
+							_AttachCount = 0,
+							"<div class='no-data'>No attach-rate data in the selected context</div>",
+						"<svg class='line-chart' viewBox='0 0 560 178' preserveAspectRatio='none' role='img' aria-label='Attach rate trend by month'>" & _ChartGrid &
+						"<text class='value-label' x='2' y='21'>" & FORMAT ( _AttachMax, "0.0%" ) & "</text><text class='value-label' x='2' y='85'>" & FORMAT ( DIVIDE ( _AttachMax + _AttachMin, 2 ), "0.0%" ) & "</text><text class='value-label' x='2' y='149'>" & FORMAT ( _AttachMin, "0.0%" ) & "</text>" &
+						_AttachLabels & IF ( _AttachLyPath = "", "", "<polyline class='series-line ly' points='" & _AttachLyPath & "'/>") & IF ( _AttachCyPath = "", "", "<polyline class='series-line' points='" & _AttachCyPath & "'/>") & _AttachDots & "</svg>"
+						)
+					) & "</article>"
+				VAR _NetChart =
+					"<article class='chart-card'><div class='chart-head'><div class='chart-copy'><h2 class='chart-title'>Net revenue trend</h2><p class='chart-subtitle'>Analysis Year program margin, CY compared with LY</p></div><div class='legend'><span><i></i>CY</span><span><i class='ly'></i>LY</span></div></div>" &
+					IF (
+						_NetCount = 0,
+						"<div class='no-data'>No net-revenue data in the selected context</div>",
+						"<svg class='line-chart' viewBox='0 0 560 178' preserveAspectRatio='none' role='img' aria-label='Net revenue trend by month'>" & _ChartGrid &
+						"<text class='value-label' x='2' y='21'>" & _NetMaxText & "</text><text class='value-label' x='2' y='85'>" & _NetMidText & "</text><text class='value-label' x='2' y='149'>" & _NetMinText & "</text>" &
+						_NetLabels & IF ( _NetLyPath = "", "", "<polyline class='series-line ly' points='" & _NetLyPath & "'/>") & IF ( _NetCyPath = "", "", "<polyline class='series-line' points='" & _NetCyPath & "'/>") & _NetDots & "</svg>"
+					) & "</article>"
+				VAR _MixChart =
+					"<article class='chart-card'><div class='chart-head'><div class='chart-copy'><h2 class='chart-title'>Channel mix</h2><p class='chart-subtitle'>Share of selected-period sales volume, top five channels</p></div><div class='legend'><span>" & FORMAT ( _ChannelCount, "0" ) & " shown</span></div></div>" &
+					IF (
+						_ChannelCount = 0 || ISBLANK ( _ChannelTotal ),
+						"<div class='no-data'>No channel data in the selected context</div>",
+						"<div class='mix-layout'><div class='donut-wrap'><svg class='donut' viewBox='0 0 140 140' role='img' aria-label='Top five channel mix'><circle class='donut-track' cx='70' cy='70' r='48'/>" & _ChannelSegments & "</svg><div class='donut-total'><strong>" & _ChannelTotalText & "</strong><span>sales units</span></div></div><div class='mix-list'>" & _ChannelRows & "</div></div>"
+					) & "</article>"
+
+				RETURN
+					_Css & _FullPageCss & "<main class='scx' aria-label='Samsung Care Plus Executive Summary dashboard'>" & _Header & _Filters & _Cards & _Signals & "<section class='chart-grid' aria-label='Performance trends and channel mix'>" & _SalesChart & _AttachChart & _NetChart & _MixChart & "</section></main>"
+			displayFolder: Dashboard\HTML
