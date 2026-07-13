@@ -1,66 +1,263 @@
-SELECT
-  SALE_CHNL_CD,
-  PRTNR_NM,
-  SALE_PRTNR_KEY,
-  PROD_ID,
-  CP_STS_CD,
-  PMT_TP_CD,
-  SVC_DEL_YN_FG,
-  DEL_YN_FG,
-  SALE_TP,
-  PROD_SALE_TP,
-  COUNT(DISTINCT CP_SRL_NUM) AS distinct_policy_count
-FROM `bigdata-platform-data.scp_7cu.SMCDB_TCMC_PRTY_SVC_ec1_cntry_AM`
-WHERE COALESCE(
-    SAFE_CAST(CAST(INSR_PLCY_CRT_DT AS STRING) AS DATE),
-    DATE(SAFE_CAST(CAST(INSR_PLCY_CRT_DT AS STRING) AS TIMESTAMP)),
-    SAFE.PARSE_DATE(
-      '%Y%m%d',
-      REGEXP_REPLACE(CAST(INSR_PLCY_CRT_DT AS STRING), r'[^0-9]', '')
-    )
-  ) = DATE '2026-01-16'
-  AND cnty_cd_AM_cntry = 'COUNTRY_CODE'
-GROUP BY
-  SALE_CHNL_CD,
-  PRTNR_NM,
-  SALE_PRTNR_KEY,
-  PROD_ID,
-  CP_STS_CD,
-  PMT_TP_CD,
-  SVC_DEL_YN_FG,
-  DEL_YN_FG,
-  SALE_TP,
-  PROD_SALE_TP
-ORDER BY distinct_policy_count DESC;
+createOrReplace
 
+	ref table Sales
 
-SELECT
-  CNTY_CD,
-  SALE_CHNL_NM,
-  SUB_SALE_CHNL_NM,
-  PERKS_CTGY,
-  SVC_PRDCT_YN_FG,
-  DVCE_MODEL_NM,
-  PMT_TP_CD,
-  PFM_TP,
-  SUM(COALESCE(SAFE_CAST(SALE_CNT AS NUMERIC), 0)) AS aggregate_sales_count
-FROM `bigdata-platform-data.scp_7cu.SMCDB_TCMC_DSBD_SCP_STAT_CNTRCT_d5f9595b_ec1_cntry_AM`
-WHERE COALESCE(
-    SAFE_CAST(CAST(STAT_DD AS STRING) AS DATE),
-    SAFE.PARSE_DATE(
-      '%Y%m%d',
-      REGEXP_REPLACE(CAST(STAT_DD AS STRING), r'[^0-9]', '')
-    )
-  ) = DATE '2026-01-16'
-  AND CNTY_CD = 'COUNTRY_CODE'
-GROUP BY
-  CNTY_CD,
-  SALE_CHNL_NM,
-  SUB_SALE_CHNL_NM,
-  PERKS_CTGY,
-  SVC_PRDCT_YN_FG,
-  DVCE_MODEL_NM,
-  PMT_TP_CD,
-  PFM_TP
-HAVING aggregate_sales_count <> 0
-ORDER BY aggregate_sales_count DESC;
+		column 'Account / Partner' = BLANK ()
+			dataType: string
+			isHidden
+
+	ref table Policy
+
+		column Region = ```
+				
+				VAR _Country =
+					UPPER ( TRIM ( COALESCE ( [Country Code], "" ) ) )
+				RETURN
+					SWITCH (
+						TRUE (),
+						_Country = "", BLANK (),
+						_Country IN {
+							"ARE",
+							"SAU",
+							"TUR",
+							"UAE",
+							"BHR",
+							"QAT",
+							"OMN",
+							"KWT"
+						}, "MENA",
+						"Other"
+					)
+			```
+			dataType: string
+
+		column 'Sales Channel' = ```
+				
+				VAR _Code =
+					UPPER (
+						TRIM (
+							COALESCE ( [Sales Channel Code], "" )
+						)
+					)
+				RETURN
+					SWITCH (
+						_Code,
+						"", "Unmapped Channel",
+						"__BLANK__", "Unmapped Channel",
+
+						"POLICY_CODE_1", "SALES_CHANNEL_NAME_1",
+						"POLICY_CODE_2", "SALES_CHANNEL_NAME_2",
+						"POLICY_CODE_3", "SALES_CHANNEL_NAME_3",
+						"POLICY_CODE_4", "SALES_CHANNEL_NAME_4",
+
+						_Code
+					)
+			```
+			dataType: string
+
+		column 'Partner Name' = ```
+				
+				VAR _Partner =
+					TRIM ( COALESCE ( [Partner], "" ) )
+				RETURN
+					IF (
+						_Partner = ""
+							|| UPPER ( _Partner ) = "__BLANK__",
+						"Unmapped Partner",
+						_Partner
+					)
+			```
+			dataType: string
+
+		hierarchy 'New Policies Hierarchy'
+
+			level Region
+				column: Region
+
+			level Subsidiary
+				column: Subsidiary
+
+			level 'Sales Channel'
+				column: 'Sales Channel'
+
+			level Partner
+				column: 'Partner Name'
+
+	ref table Measures_table
+
+		measure 'New Policies' = ```
+				
+				COUNTROWS (
+					FILTER (
+						VALUES ( Policy[Policy ID] ),
+						NOT ISBLANK ( Policy[Policy ID] )
+							&& TRIM ( Policy[Policy ID] ) <> ""
+							&& UPPER ( TRIM ( Policy[Policy ID] ) ) <> "__BLANK__"
+					)
+				)
+			```
+			formatString: #,##0
+			displayFolder: New Policies
+
+		measure 'New Policies CY' = ```
+				
+				VAR _Year =
+					[Analysis Year]
+				VAR _Months =
+					VALUES ( 'Date'[MonthNum] )
+				RETURN
+					CALCULATE (
+						[New Policies],
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						TREATAS ( _Months, 'Date'[MonthNum] ),
+						'Date'[Year] = _Year
+					)
+			```
+			formatString: #,##0
+			displayFolder: New Policies
+
+		measure 'New Policies LY' = ```
+				
+				VAR _Year =
+					[Analysis Year] - 1
+				VAR _Months =
+					VALUES ( 'Date'[MonthNum] )
+				RETURN
+					CALCULATE (
+						[New Policies],
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						TREATAS ( _Months, 'Date'[MonthNum] ),
+						'Date'[Year] = _Year
+					)
+			```
+			formatString: #,##0
+			displayFolder: New Policies
+
+		measure 'New Policies YoY' = ```
+				
+				VAR _CY =
+					[New Policies CY]
+				VAR _LY =
+					[New Policies LY]
+				RETURN
+					IF (
+						ISBLANK ( _LY ) || _LY = 0,
+						BLANK (),
+						DIVIDE ( _CY - _LY, _LY )
+					)
+			```
+			formatString: +0.0%;-0.0%;0.0%
+			displayFolder: New Policies
+
+		measure 'Policy Detail Count' = ```
+				
+				CALCULATE (
+					[New Policies],
+					TREATAS (
+						VALUES ( Sales[Country Code] ),
+						Policy[Country Code]
+					),
+					TREATAS (
+						VALUES ( Sales[Sales Channel] ),
+						Policy[Sales Channel]
+					),
+					TREATAS (
+						VALUES ( Sales[Product Type] ),
+						Policy[Reference Product Type]
+					),
+					TREATAS (
+						VALUES ( Sales[Device Category] ),
+						Policy[Device Category]
+					),
+					TREATAS (
+						VALUES ( Sales[Device Model] ),
+						Policy[Device Model]
+					),
+					TREATAS (
+						VALUES ( Sales[Payment Type] ),
+						Policy[Payment Type]
+					),
+					TREATAS (
+						VALUES ( Sales[SC+ Plan Rollup] ),
+						Policy[SC+ Plan Rollup]
+					)
+				)
+			```
+			formatString: #,##0
+			displayFolder: Policy Diagnostics
+
+		measure 'Policy Cancel Date Count' = ```
+				
+				CALCULATE (
+					SUM ( Policy[cancelled_by_date_flag] ),
+					TREATAS (
+						VALUES ( Sales[Country Code] ),
+						Policy[Country Code]
+					),
+					TREATAS (
+						VALUES ( Sales[Sales Channel] ),
+						Policy[Sales Channel]
+					),
+					TREATAS (
+						VALUES ( Sales[Product Type] ),
+						Policy[Reference Product Type]
+					),
+					TREATAS (
+						VALUES ( Sales[Device Category] ),
+						Policy[Device Category]
+					),
+					TREATAS (
+						VALUES ( Sales[Device Model] ),
+						Policy[Device Model]
+					),
+					TREATAS (
+						VALUES ( Sales[Payment Type] ),
+						Policy[Payment Type]
+					),
+					TREATAS (
+						VALUES ( Sales[SC+ Plan Rollup] ),
+						Policy[SC+ Plan Rollup]
+					)
+				)
+			```
+			formatString: #,##0
+			displayFolder: Policy Diagnostics
+
+		measure 'Policy Warranty Expired Count' = ```
+				
+				CALCULATE (
+					SUM ( Policy[warranty_expired_by_date_flag] ),
+					TREATAS (
+						VALUES ( Sales[Country Code] ),
+						Policy[Country Code]
+					),
+					TREATAS (
+						VALUES ( Sales[Sales Channel] ),
+						Policy[Sales Channel]
+					),
+					TREATAS (
+						VALUES ( Sales[Product Type] ),
+						Policy[Reference Product Type]
+					),
+					TREATAS (
+						VALUES ( Sales[Device Category] ),
+						Policy[Device Category]
+					),
+					TREATAS (
+						VALUES ( Sales[Device Model] ),
+						Policy[Device Model]
+					),
+					TREATAS (
+						VALUES ( Sales[Payment Type] ),
+						Policy[Payment Type]
+					),
+					TREATAS (
+						VALUES ( Sales[SC+ Plan Rollup] ),
+						Policy[SC+ Plan Rollup]
+					)
+				)
+			```
+			formatString: #,##0
+			displayFolder: Policy Diagnostics
