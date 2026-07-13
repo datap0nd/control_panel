@@ -1,106 +1,222 @@
--- Aggregated new-policy extract for the Power BI sales hierarchy matrix.
---
--- Output grain:
---   policy_created_date
---   country_code
---   region
---   sales_channel_code / sales_channel_name
---   partner_name
---
--- Metric:
---   new_policy_count = distinct CP_SRL_NUM after latest-row deduplication.
---
--- Privacy contract:
---   CP_SRL_NUM is used only inside BigQuery to deduplicate and count. No
---   policy, insurance-policy, user, device, or partner identifier is exported.
---
--- Export the result as aggregated_policy.csv. Keep at least the current and
--- previous calendar year so the Power BI YoY measures have comparable data.
+/// Paste-ready TMDL for aggregated_policy.csv.
+/// Apply after exporting sql/aggregated_policy.sql to aggregated_policy.csv.
+/// This creates a separate aggregate fact table and does not replace Policy.
 
-WITH params AS (
-  SELECT
-    DATE_SUB(DATE_TRUNC(CURRENT_DATE(), YEAR), INTERVAL 1 YEAR) AS start_date,
-    CURRENT_DATE() AS end_date
-),
+createOrReplace
 
--- Add only approved 1:1 code-to-name mappings here. The empty seed keeps the
--- query valid before mappings are supplied. Example:
---   UNION ALL SELECT '1', 'Retail'
-channel_map AS (
-  SELECT
-    CAST(NULL AS STRING) AS sales_channel_code,
-    CAST(NULL AS STRING) AS sales_channel_name
-  WHERE FALSE
-),
+	table 'Aggregated Policy'
 
-policy_normalized AS (
-  SELECT
-    NULLIF(TRIM(CAST(CP_SRL_NUM AS STRING)), '') AS policy_key_for_aggregation,
-    COALESCE(
-      SAFE_CAST(CAST(INSR_PLCY_CRT_DT AS STRING) AS DATE),
-      DATE(SAFE_CAST(CAST(INSR_PLCY_CRT_DT AS STRING) AS TIMESTAMP)),
-      SAFE.PARSE_DATE(
-        '%Y%m%d',
-        REGEXP_REPLACE(CAST(INSR_PLCY_CRT_DT AS STRING), r'[^0-9]', '')
-      )
-    ) AS policy_created_date,
-    NULLIF(TRIM(CAST(cnty_cd_AM_cntry AS STRING)), '') AS country_code,
-    NULLIF(TRIM(CAST(SALE_CHNL_CD AS STRING)), '') AS sales_channel_code,
-    NULLIF(TRIM(CAST(PRTNR_NM AS STRING)), '') AS partner_name,
-    SAFE_CAST(CAST(sdw_ld_dt AS STRING) AS TIMESTAMP) AS load_timestamp
-  FROM `bigdata-platform-data.scp_7cu`.`SMCDB_TCMC_PRTY_SVC_ec1_cntry_AM`
-),
+		column 'Policy Created Date'
+			dataType: dateTime
+			formatString: yyyy-mm-dd
+			sourceColumn: policy_created_date
 
-policy_ranked AS (
-  SELECT
-    *,
-    COUNT(*) OVER (PARTITION BY policy_key_for_aggregation) AS source_policy_rows,
-    ROW_NUMBER() OVER (
-      PARTITION BY policy_key_for_aggregation
-      ORDER BY
-        load_timestamp DESC NULLS LAST,
-        policy_created_date DESC NULLS LAST,
-        sales_channel_code DESC NULLS LAST,
-        partner_name DESC NULLS LAST
-    ) AS policy_row_rank
-  FROM policy_normalized
-  WHERE policy_key_for_aggregation IS NOT NULL
-),
+			annotation UnderlyingDateTimeDataType = Date
 
-policy_deduped AS (
-  SELECT
-    policy_created_date,
-    country_code,
-    sales_channel_code,
-    partner_name,
-    source_policy_rows
-  FROM policy_ranked
-  CROSS JOIN params
-  WHERE policy_row_rank = 1
-    AND policy_created_date BETWEEN params.start_date AND params.end_date
-)
+		column 'Policy Created Month Key'
+			dataType: string
+			isHidden
+			sourceColumn: policy_created_month_key
 
-SELECT
-  p.policy_created_date,
-  FORMAT_DATE('%Y-%m', p.policy_created_date) AS policy_created_month_key,
-  COALESCE(p.country_code, '__BLANK__') AS country_code,
-  CASE
-    WHEN p.country_code IS NULL THEN 'Unmapped Region'
-    WHEN p.country_code IN ('ARE', 'SAU', 'TUR', 'UAE', 'BHR', 'QAT', 'OMN', 'KWT') THEN 'MENA'
-    ELSE 'Other'
-  END AS region,
-  COALESCE(p.sales_channel_code, '__BLANK__') AS sales_channel_code,
-  COALESCE(
-    m.sales_channel_name,
-    p.sales_channel_code,
-    'Unmapped Channel'
-  ) AS sales_channel_name,
-  COALESCE(p.partner_name, 'Unmapped Partner') AS partner_name,
-  COUNT(*) AS new_policy_count,
-  SUM(p.source_policy_rows) AS source_policy_rows,
-  COUNTIF(p.source_policy_rows > 1) AS duplicate_policy_count
-FROM policy_deduped AS p
-LEFT JOIN channel_map AS m
-  ON m.sales_channel_code = p.sales_channel_code
-GROUP BY 1, 2, 3, 4, 5, 6, 7
-ORDER BY 1, 3, 5, 7;
+		column 'Country Code'
+			dataType: string
+			sourceColumn: country_code
+
+		column Region
+			dataType: string
+			sourceColumn: region
+
+		column 'Sales Channel Code'
+			dataType: string
+			sourceColumn: sales_channel_code
+
+		column 'Sales Channel'
+			dataType: string
+			sourceColumn: sales_channel_name
+
+		column 'Partner Name'
+			dataType: string
+			sourceColumn: partner_name
+
+		column 'New Policy Count'
+			dataType: int64
+			isHidden
+			formatString: #,##0
+			summarizeBy: sum
+			sourceColumn: new_policy_count
+
+		column 'Source Policy Rows'
+			dataType: int64
+			isHidden
+			formatString: #,##0
+			summarizeBy: sum
+			sourceColumn: source_policy_rows
+
+		column 'Duplicate Policy Count'
+			dataType: int64
+			isHidden
+			formatString: #,##0
+			summarizeBy: sum
+			sourceColumn: duplicate_policy_count
+
+		column 'Source File Path'
+			dataType: string
+			isHidden
+			sourceColumn: source_file_path
+
+		column Subsidiary =
+				COALESCE (
+					RELATED ( 'Subsidiary Master'[Subsidiary] ),
+					"Unmapped"
+				)
+			dataType: string
+
+		hierarchy 'New Policies Hierarchy'
+
+			level Region
+				column: Region
+
+			level Subsidiary
+				column: Subsidiary
+
+			level 'Sales Channel'
+				column: 'Sales Channel'
+
+			level 'Partner Name'
+				column: 'Partner Name'
+
+		partition 'Aggregated Policy' = m
+			mode: import
+			source =
+					let
+					    FileName = "aggregated_policy.csv",
+					    CandidatePaths = {
+					        DataPath & FileName,
+					        "C:\Users\r.cunha\Documents\Home\Projects\care+\Data Sources\" & FileName,
+					        "//Mac/Home/Documents/care/powerbi/data_sources/" & FileName,
+					        "Y:/Documents/care/powerbi/data_sources/" & FileName
+					    },
+					    CandidateFiles = List.Transform(
+					        CandidatePaths,
+					        (CandidatePath) => [
+					            Path = CandidatePath,
+					            Content = try File.Contents(CandidatePath) otherwise null
+					        ]
+					    ),
+					    ExistingFiles = List.Select(CandidateFiles, each [Content] <> null),
+					    SelectedFile =
+					        if List.Count(ExistingFiles) > 0 then ExistingFiles{0}
+					        else error "Could not load " & FileName,
+					    Source = Csv.Document(
+					        SelectedFile[Content],
+					        [Delimiter=",", Encoding=65001, QuoteStyle=QuoteStyle.Csv]
+					    ),
+					    #"Removed Numbers Title Row" =
+					        if (try Text.StartsWith(Text.From(Source{0}[Column1]), "Table ") otherwise false)
+					        then Table.Skip(Source, 1)
+					        else Source,
+					    #"Promoted Headers" = Table.PromoteHeaders(
+					        #"Removed Numbers Title Row",
+					        [PromoteAllScalars=true]
+					    ),
+					    RequiredColumns = {
+					        "policy_created_date",
+					        "policy_created_month_key",
+					        "country_code",
+					        "region",
+					        "sales_channel_code",
+					        "sales_channel_name",
+					        "partner_name",
+					        "new_policy_count",
+					        "source_policy_rows",
+					        "duplicate_policy_count"
+					    },
+					    MissingRequiredColumns = List.Difference(
+					        RequiredColumns,
+					        Table.ColumnNames(#"Promoted Headers")
+					    ),
+					    #"Validated Schema" =
+					        if List.Count(MissingRequiredColumns) = 0 then #"Promoted Headers"
+					        else error "Aggregated Policy schema mismatch. Missing: " & Text.Combine(MissingRequiredColumns, ", "),
+					    #"Changed Type" = Table.TransformColumnTypes(
+					        #"Validated Schema",
+					        {
+					            {"policy_created_date", type date},
+					            {"policy_created_month_key", type text},
+					            {"country_code", type text},
+					            {"region", type text},
+					            {"sales_channel_code", type text},
+					            {"sales_channel_name", type text},
+					            {"partner_name", type text},
+					            {"new_policy_count", Int64.Type},
+					            {"source_policy_rows", Int64.Type},
+					            {"duplicate_policy_count", Int64.Type}
+					        },
+					        [Culture="en-US", MissingField=MissingField.Error]
+					    ),
+					    #"Added Source File Path" = Table.AddColumn(
+					        #"Changed Type",
+					        "source_file_path",
+					        each SelectedFile[Path],
+					        type text
+					    )
+					in
+					    #"Added Source File Path"
+
+	ref table Measures_table
+
+		measure 'New Policies' = SUM ( 'Aggregated Policy'[New Policy Count] )
+			formatString: #,##0
+			displayFolder: New Policies
+
+		measure 'New Policies CY' =
+				VAR _Year = [Analysis Year]
+				VAR _Months = VALUES ( 'Date'[MonthNum] )
+				RETURN
+					CALCULATE (
+						[New Policies],
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						TREATAS ( _Months, 'Date'[MonthNum] ),
+						'Date'[Year] = _Year
+					)
+			formatString: #,##0
+			displayFolder: New Policies
+
+		measure 'New Policies LY' =
+				VAR _Year = [Analysis Year] - 1
+				VAR _Months = VALUES ( 'Date'[MonthNum] )
+				RETURN
+					CALCULATE (
+						[New Policies],
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						TREATAS ( _Months, 'Date'[MonthNum] ),
+						'Date'[Year] = _Year
+					)
+			formatString: #,##0
+			displayFolder: New Policies
+
+		measure 'New Policies YoY' =
+				DIVIDE (
+					[New Policies CY] - [New Policies LY],
+					[New Policies LY]
+				)
+			formatString: +0.0%;-0.0%;0.0%
+			displayFolder: New Policies
+
+		measure 'Aggregated Policy Source Rows' = SUM ( 'Aggregated Policy'[Source Policy Rows] )
+			formatString: #,##0
+			displayFolder: New Policies\Quality
+
+		measure 'Aggregated Policy Duplicate Policies' = SUM ( 'Aggregated Policy'[Duplicate Policy Count] )
+			formatString: #,##0
+			displayFolder: New Policies\Quality
+
+	relationship 32dbd55d-feac-430a-8a1d-4bce939681e4
+		fromColumn: 'Aggregated Policy'.'Policy Created Date'
+		toColumn: Date.Date
+
+	relationship 848f29c4-e7c6-4854-a6c5-b83add9e8459
+		fromColumn: 'Aggregated Policy'.'Country Code'
+		toColumn: 'Subsidiary Master'.'Country ID'
