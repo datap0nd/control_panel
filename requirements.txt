@@ -1,681 +1,628 @@
-/// Paste-ready TMDL createOrReplace script for the full-page Samsung executive-summary HTML Content visual.
-/// The single measure returns the title, display-only page tabs, display-only filter context, KPIs, signals, trends, and channel mix.
-/// The tabs and filter chips mirror report state only. They do not navigate or set filters. No scripts, links, web fonts, images, or other external assets are used.
+-- Task 5 semantic model and measure validation pack.
+-- Dialect: BigQuery GoogleSQL.
+--
+-- Run sections independently. Sections that use the first validation period
+-- use January 2026:
+--   start_date = DATE '2026-01-01'
+--   end_date   = DATE '2026-01-31'
+--
+-- This pack does not query sellout because the sellout source is external to
+-- BigQuery. Section 09 defines the required output contract for the external
+-- source so Task 6 can validate attach rate once sellout is staged or imported.
 
-createOrReplace
-	ref table Measures_table
+-- ======================================================================
+-- 01. Measure Validation Register
+-- ======================================================================
 
-		measure 'HTML Executive Summary Samsung' =
-				VAR _AnalysisYear = [Analysis Year]
-				VAR _AsOfDate = COALESCE ( [KPI Executive Sparkline Anchor Date], MAX ( 'Date'[Date] ), TODAY () )
-				VAR _OwnerRaw = COALESCE ( [Business Owner], "Not assigned" )
-				VAR _OwnerText = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _OwnerRaw, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
-				VAR _EvaluatedAt = [Last Refreshed]
-				VAR _EvaluatedText = IF ( ISBLANK ( _EvaluatedAt ), "Not evaluated", FORMAT ( _EvaluatedAt, "dd mmm yyyy HH:mm" ) )
+SELECT *
+FROM UNNEST([
+  STRUCT('sales_volume' AS measure_family, 'Sales Volume = SUM(FactPolicyDailyAggregate[SalesCount])' AS model_expression, '02 official aggregate sales; 03 policy detail parity' AS sql_counterpart, 'Use aggregate as official numerator until policy parity is proven.' AS note),
+  STRUCT('active_policies', 'Count policy rows mapped to active status', '04 status and lifecycle profile', 'Blocked until CP_STS_CD mapping is approved.'),
+  STRUCT('cancelled_policies', 'SUM(FactPolicyDailyAggregate[CancellationCount]) or approved policy cancellation logic', '04 status and lifecycle profile', 'Aggregate is usable for source-of-truth style counts; policy detail needs mapping.'),
+  STRUCT('expired_policies', 'SUM(FactPolicyDailyAggregate[ExpirationCount]) or approved policy expiry logic', '04 status and lifecycle profile', 'Aggregate is usable for source-of-truth style counts; policy detail needs mapping.'),
+  STRUCT('gross_revenue', 'SUMX(FactRevenue, RVN_AMT + INSR_PRMUM_AMT + CHNL_AMT + DISTRBTR_AMT)', '06 revenue formula totals; 07 revenue grain quality', 'Formula confirmed by answers.rtf; source fields still need live confirmation.'),
+  STRUCT('net_revenue_program_margin', 'SUM(FactRevenue[RVN_AMT])', '06 revenue formula totals; 07 revenue grain quality', 'Formula confirmed by answers.rtf; source fields still need live confirmation.'),
+  STRUCT('subsidiary_revenue', 'Paid RVN_TP_CD 11 and 12 plus CNTRBTN_RVN', '06 revenue formula totals; 07 revenue grain quality', 'Formula confirmed by answers.rtf; source fields still need live confirmation.'),
+  STRUCT('average_revenue_per_policy', 'DIVIDE([Gross Revenue], [Sales Volume])', '08 revenue to sales shared-grain check', 'Only valid at shared date/country/product/device/channel/payment grain.'),
+  STRUCT('sellout_units', 'SUM(FactSellout[SelloutUnits])', '09 external sellout output contract', 'Blocked until external sellout is staged or imported.'),
+  STRUCT('attach_rate', 'DIVIDE([Sales Volume], [Sellout Units])', '09 external sellout output contract', 'Raw full denominator; no eligibility filter.'),
+  STRUCT('prior_period_prior_year', 'Date-intelligence measures after coverage check', '11 history coverage check', 'Do not publish prior-year measures until history is comparable.'),
+  STRUCT('data_quality_flags', 'Counts/flags for missing keys, duplicates, unmapped dimensions, invalid dates, null or negative amounts', '10 data quality facts; 12 model readiness summary', 'Required for Task 6 validation pages.')
+])
+ORDER BY measure_family;
 
-				VAR _PeriodLabelFilters = FILTERS ( 'Date Filter'[Period Label] )
-				VAR _PeriodLabelCount = COUNTROWS ( _PeriodLabelFilters )
-				VAR _PeriodTypeFilters = FILTERS ( 'Date Filter'[Period Type] )
-				VAR _PeriodTypeCount = COUNTROWS ( _PeriodTypeFilters )
-				VAR _PeriodRaw =
-					SWITCH (
-						TRUE (),
-						_PeriodLabelCount = 1, COALESCE ( MAXX ( _PeriodLabelFilters, 'Date Filter'[Period Label] ), "No period" ),
-						_PeriodLabelCount > 1, FORMAT ( _PeriodLabelCount, "#,##0" ) & " periods",
-						_PeriodTypeCount = 1, COALESCE ( MAXX ( _PeriodTypeFilters, 'Date Filter'[Period Type] ), "No period type" ),
-						_PeriodTypeCount > 1, FORMAT ( _PeriodTypeCount, "#,##0" ) & " period types",
-						"All periods"
-					)
-				VAR _PeriodText = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _PeriodRaw, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
+-- ======================================================================
+-- 02. Official Sales, Cancellation, And Expiry Aggregate
+-- ======================================================================
+-- This is the official reconciled numerator pattern from Task 4. For Task 6,
+-- the January 2026 TUR total from this query must match the Power BI measure
+-- [Sales Volume] under the same filters.
 
-				VAR _SubsidiaryFilters = FILTERS ( 'Subsidiary Master'[Subsidiary] )
-				VAR _SubsidiaryCount = COUNTROWS ( _SubsidiaryFilters )
-				VAR _SubsidiaryRaw =
-					SWITCH (
-						TRUE (),
-						_SubsidiaryCount = 1, COALESCE ( MAXX ( _SubsidiaryFilters, 'Subsidiary Master'[Subsidiary] ), "No subsidiary" ),
-						_SubsidiaryCount > 1, FORMAT ( _SubsidiaryCount, "#,##0" ) & " subsidiaries",
-						"All subsidiaries"
-					)
-				VAR _SubsidiaryText = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _SubsidiaryRaw, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
+WITH params AS (
+  SELECT DATE '2026-01-01' AS start_date, DATE '2026-01-31' AS end_date
+),
+aggregate_sales AS (
+  SELECT
+    COALESCE(
+      SAFE_CAST(CAST(STAT_DD AS STRING) AS DATE),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(STAT_DD AS STRING), r'[^0-9]', ''))
+    ) AS sales_date,
+    COALESCE(NULLIF(TRIM(CAST(CNTY_CD AS STRING)), ''), '__BLANK__') AS country_code,
+    COALESCE(NULLIF(TRIM(CAST(SALE_CHNL_NM AS STRING)), ''), '__BLANK__') AS sale_channel_name,
+    COALESCE(NULLIF(TRIM(CAST(SUB_SALE_CHNL_NM AS STRING)), ''), '__BLANK__') AS sub_sale_channel_name,
+    COALESCE(NULLIF(TRIM(CAST(PERKS_CTGY AS STRING)), ''), '__BLANK__') AS product_type,
+    COALESCE(NULLIF(TRIM(CAST(SVC_PRDCT_YN_FG AS STRING)), ''), '__BLANK__') AS service_product_flag,
+    COALESCE(NULLIF(TRIM(CAST(DVCE_CTGY_CD AS STRING)), ''), '__BLANK__') AS device_category_code,
+    COALESCE(NULLIF(TRIM(CAST(DVCE_MODEL_NM AS STRING)), ''), '__BLANK__') AS device_model_name,
+    COALESCE(NULLIF(TRIM(CAST(SALE_MTHD_CD AS STRING)), ''), '__BLANK__') AS sale_method_code,
+    COALESCE(NULLIF(TRIM(CAST(PFM_TP AS STRING)), ''), '__BLANK__') AS performance_type,
+    COALESCE(NULLIF(TRIM(CAST(PMT_TP_CD AS STRING)), ''), '__BLANK__') AS payment_type_code,
+    SAFE_CAST(SALE_CNT AS NUMERIC) AS sales_count,
+    SAFE_CAST(CNCL_CNT AS NUMERIC) AS cancellation_count,
+    SAFE_CAST(EPRD_CNT AS NUMERIC) AS expiration_count
+  FROM `bigdata-platform-data.scp_7cu`.`SMCDB_TCMC_DSBD_SCP_STAT_CNTRCT_d5f9595b_ec1_cntry_AM`
+)
+SELECT
+  country_code,
+  FORMAT_DATE('%Y-%m', sales_date) AS sales_month,
+  sale_channel_name,
+  sub_sale_channel_name,
+  product_type,
+  service_product_flag,
+  device_category_code,
+  device_model_name,
+  sale_method_code,
+  performance_type,
+  payment_type_code,
+  SUM(COALESCE(sales_count, 0)) AS sales_volume,
+  SUM(COALESCE(cancellation_count, 0)) AS cancelled_policies_aggregate,
+  SUM(COALESCE(expiration_count, 0)) AS expired_policies_aggregate,
+  COUNT(*) AS source_rows,
+  COUNTIF(sales_count IS NULL) AS uncastable_sales_count_rows
+FROM aggregate_sales
+JOIN params ON TRUE
+WHERE sales_date BETWEEN params.start_date AND params.end_date
+GROUP BY
+  country_code,
+  sales_month,
+  sale_channel_name,
+  sub_sale_channel_name,
+  product_type,
+  service_product_flag,
+  device_category_code,
+  device_model_name,
+  sale_method_code,
+  performance_type,
+  payment_type_code
+ORDER BY sales_volume DESC;
 
-				VAR _DeviceModelFilters = FILTERS ( Sales[Device Model] )
-				VAR _DeviceModelCount = COUNTROWS ( _DeviceModelFilters )
-				VAR _DeviceSeriesFilters = FILTERS ( Sales[Device Series] )
-				VAR _DeviceSeriesCount = COUNTROWS ( _DeviceSeriesFilters )
-				VAR _DeviceFamilyFilters = FILTERS ( Sales[Product Family] )
-				VAR _DeviceFamilyCount = COUNTROWS ( _DeviceFamilyFilters )
-				VAR _DeviceRaw =
-					SWITCH (
-						TRUE (),
-						_DeviceModelCount = 1, COALESCE ( MAXX ( _DeviceModelFilters, Sales[Device Model] ), "No device" ),
-						_DeviceModelCount > 1, FORMAT ( _DeviceModelCount, "#,##0" ) & " device models",
-						_DeviceSeriesCount = 1, COALESCE ( MAXX ( _DeviceSeriesFilters, Sales[Device Series] ), "No series" ) & " series",
-						_DeviceSeriesCount > 1, FORMAT ( _DeviceSeriesCount, "#,##0" ) & " device series",
-						_DeviceFamilyCount = 1, COALESCE ( MAXX ( _DeviceFamilyFilters, Sales[Product Family] ), "No family" ),
-						_DeviceFamilyCount > 1, FORMAT ( _DeviceFamilyCount, "#,##0" ) & " device families",
-						"All devices"
-					)
-				VAR _DeviceText = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _DeviceRaw, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
+-- ======================================================================
+-- 03. Policy Detail Parity Against Daily Aggregate
+-- ======================================================================
+-- Proves whether FactPolicySales can be used for [Sales Volume] at shared
+-- grain. If this query shows material variance, Power BI should keep aggregate
+-- sales as the official sales fact and use policy rows for diagnostics/detail.
 
-				VAR _PartnerFilters = FILTERS ( Sales[Account / Partner] )
-				VAR _PartnerCount = COUNTROWS ( _PartnerFilters )
-				VAR _SubChannelFilters = FILTERS ( Sales[Sub Sales Channel] )
-				VAR _SubChannelCount = COUNTROWS ( _SubChannelFilters )
-				VAR _SalesChannelFilters = FILTERS ( Sales[Sales Channel] )
-				VAR _ChannelCountContext = COUNTROWS ( _SalesChannelFilters )
-				VAR _ChannelRaw =
-					SWITCH (
-						TRUE (),
-						_PartnerCount = 1, COALESCE ( MAXX ( _PartnerFilters, Sales[Account / Partner] ), "No partner" ),
-						_PartnerCount > 1, FORMAT ( _PartnerCount, "#,##0" ) & " partners",
-						_SubChannelCount = 1, COALESCE ( MAXX ( _SubChannelFilters, Sales[Sub Sales Channel] ), "No sub-channel" ),
-						_SubChannelCount > 1, FORMAT ( _SubChannelCount, "#,##0" ) & " sub-channels",
-						_ChannelCountContext = 1, COALESCE ( MAXX ( _SalesChannelFilters, Sales[Sales Channel] ), "No channel" ),
-						_ChannelCountContext > 1, FORMAT ( _ChannelCountContext, "#,##0" ) & " channels",
-						"All channels"
-					)
-				VAR _ChannelText = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _ChannelRaw, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
+WITH params AS (
+  SELECT DATE '2026-01-01' AS start_date, DATE '2026-01-31' AS end_date
+),
+aggregate_sales AS (
+  SELECT
+    COALESCE(
+      SAFE_CAST(CAST(STAT_DD AS STRING) AS DATE),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(STAT_DD AS STRING), r'[^0-9]', ''))
+    ) AS sales_date,
+    COALESCE(NULLIF(TRIM(CAST(CNTY_CD AS STRING)), ''), '__BLANK__') AS country_code,
+    COALESCE(NULLIF(TRIM(CAST(DVCE_MODEL_NM AS STRING)), ''), '__BLANK__') AS device_model_name,
+    COALESCE(NULLIF(TRIM(CAST(PMT_TP_CD AS STRING)), ''), '__BLANK__') AS payment_type_code,
+    SUM(COALESCE(SAFE_CAST(SALE_CNT AS NUMERIC), 0)) AS aggregate_sales_count
+  FROM `bigdata-platform-data.scp_7cu`.`SMCDB_TCMC_DSBD_SCP_STAT_CNTRCT_d5f9595b_ec1_cntry_AM`
+  GROUP BY sales_date, country_code, device_model_name, payment_type_code
+),
+policy_sales AS (
+  SELECT
+    COALESCE(
+      SAFE_CAST(CAST(INSR_PLCY_CRT_DT AS STRING) AS DATE),
+      DATE(SAFE_CAST(CAST(INSR_PLCY_CRT_DT AS STRING) AS TIMESTAMP)),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(INSR_PLCY_CRT_DT AS STRING), r'[^0-9]', ''))
+    ) AS policy_date,
+    COALESCE(NULLIF(TRIM(CAST(cnty_cd_AM_cntry AS STRING)), ''), '__BLANK__') AS country_code,
+    COALESCE(NULLIF(TRIM(CAST(DVCE_MODEL_NM AS STRING)), ''), '__BLANK__') AS device_model_name,
+    COALESCE(NULLIF(TRIM(CAST(PMT_TP_CD AS STRING)), ''), '__BLANK__') AS payment_type_code,
+    COUNT(DISTINCT NULLIF(TRIM(CAST(CP_SRL_NUM AS STRING)), '')) AS distinct_policy_count,
+    COUNT(*) AS policy_source_rows
+  FROM `bigdata-platform-data.scp_7cu`.`SMCDB_TCMC_PRTY_SVC_ec1_cntry_AM`
+  GROUP BY policy_date, country_code, device_model_name, payment_type_code
+)
+SELECT
+  COALESCE(aggregate_sales.sales_date, policy_sales.policy_date) AS validation_date,
+  COALESCE(aggregate_sales.country_code, policy_sales.country_code) AS country_code,
+  COALESCE(aggregate_sales.device_model_name, policy_sales.device_model_name) AS device_model_name,
+  COALESCE(aggregate_sales.payment_type_code, policy_sales.payment_type_code) AS payment_type_code,
+  aggregate_sales.aggregate_sales_count,
+  policy_sales.distinct_policy_count,
+  COALESCE(aggregate_sales.aggregate_sales_count, 0)
+    - COALESCE(policy_sales.distinct_policy_count, 0) AS sales_count_variance,
+  policy_sales.policy_source_rows,
+  aggregate_sales.sales_date IS NULL AS missing_from_aggregate,
+  policy_sales.policy_date IS NULL AS missing_from_policy
+FROM aggregate_sales
+FULL OUTER JOIN policy_sales
+  ON policy_sales.policy_date = aggregate_sales.sales_date
+ AND policy_sales.country_code = aggregate_sales.country_code
+ AND policy_sales.device_model_name = aggregate_sales.device_model_name
+ AND policy_sales.payment_type_code = aggregate_sales.payment_type_code
+JOIN params ON TRUE
+WHERE COALESCE(aggregate_sales.sales_date, policy_sales.policy_date)
+  BETWEEN params.start_date AND params.end_date
+ORDER BY
+  ABS(COALESCE(aggregate_sales.aggregate_sales_count, 0)
+    - COALESCE(policy_sales.distinct_policy_count, 0)) DESC,
+  validation_date,
+  country_code,
+  device_model_name
+LIMIT 500;
 
-				VAR _ServiceFilters = FILTERS ( Sales[Product Type] )
-				VAR _ServiceCount = COUNTROWS ( _ServiceFilters )
-				VAR _ServiceRaw =
-					SWITCH (
-						TRUE (),
-						_ServiceCount = 1, COALESCE ( MAXX ( _ServiceFilters, Sales[Product Type] ), "No service type" ),
-						_ServiceCount > 1, FORMAT ( _ServiceCount, "#,##0" ) & " service types",
-						"All services"
-					)
-				VAR _ServiceText = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _ServiceRaw, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
+-- ======================================================================
+-- 04. Policy Status And Lifecycle Profile
+-- ======================================================================
+-- Supports active, cancelled, and expired policy definitions. This is not a
+-- final business mapping. It profiles source codes and date availability so a
+-- mapping table can be approved before Task 6 publishes these measures.
 
-				VAR _PaymentFilters = FILTERS ( Sales[Payment Type] )
-				VAR _PaymentCount = COUNTROWS ( _PaymentFilters )
-				VAR _PaymentRaw =
-					SWITCH (
-						TRUE (),
-						_PaymentCount = 1, COALESCE ( MAXX ( _PaymentFilters, Sales[Payment Type] ), "No payment type" ),
-						_PaymentCount > 1, FORMAT ( _PaymentCount, "#,##0" ) & " payment types",
-						"All payments"
-					)
-				VAR _PaymentText = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _PaymentRaw, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
+WITH params AS (
+  SELECT DATE '2026-01-01' AS start_date, DATE '2026-01-31' AS end_date
+),
+policy AS (
+  SELECT
+    COALESCE(
+      SAFE_CAST(CAST(INSR_PLCY_CRT_DT AS STRING) AS DATE),
+      DATE(SAFE_CAST(CAST(INSR_PLCY_CRT_DT AS STRING) AS TIMESTAMP)),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(INSR_PLCY_CRT_DT AS STRING), r'[^0-9]', ''))
+    ) AS policy_date,
+    COALESCE(
+      SAFE_CAST(CAST(CNCL_DT AS STRING) AS DATE),
+      DATE(SAFE_CAST(CAST(CNCL_DT AS STRING) AS TIMESTAMP)),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(CNCL_DT AS STRING), r'[^0-9]', ''))
+    ) AS cancellation_date,
+    COALESCE(
+      SAFE_CAST(CAST(WRNT_END_DT AS STRING) AS DATE),
+      DATE(SAFE_CAST(CAST(WRNT_END_DT AS STRING) AS TIMESTAMP)),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(WRNT_END_DT AS STRING), r'[^0-9]', ''))
+    ) AS warranty_end_date,
+    COALESCE(NULLIF(TRIM(CAST(cnty_cd_AM_cntry AS STRING)), ''), '__BLANK__') AS country_code,
+    COALESCE(NULLIF(TRIM(CAST(CP_STS_CD AS STRING)), ''), '__BLANK__') AS policy_status_code,
+    COALESCE(NULLIF(TRIM(CAST(PMT_TP_CD AS STRING)), ''), '__BLANK__') AS payment_type_code,
+    COALESCE(NULLIF(TRIM(CAST(LST_PMT_STS_TXT AS STRING)), ''), '__BLANK__') AS last_payment_status_text,
+    COALESCE(NULLIF(TRIM(CAST(INSR_CMPNY_TP_CD AS STRING)), ''), '__BLANK__') AS insurer_company_type_code,
+    NULLIF(TRIM(CAST(CP_SRL_NUM AS STRING)), '') AS policy_id
+  FROM `bigdata-platform-data.scp_7cu`.`SMCDB_TCMC_PRTY_SVC_ec1_cntry_AM`
+)
+SELECT
+  country_code,
+  policy_status_code,
+  payment_type_code,
+  last_payment_status_text,
+  insurer_company_type_code,
+  COUNT(*) AS source_rows,
+  COUNT(DISTINCT policy_id) AS distinct_policies,
+  COUNTIF(cancellation_date IS NOT NULL) AS rows_with_cancellation_date,
+  COUNTIF(warranty_end_date IS NOT NULL) AS rows_with_warranty_end_date,
+  COUNTIF(warranty_end_date < CURRENT_DATE()) AS rows_with_past_warranty_end_date,
+  MIN(policy_date) AS min_policy_date,
+  MAX(policy_date) AS max_policy_date,
+  MIN(cancellation_date) AS min_cancellation_date,
+  MAX(cancellation_date) AS max_cancellation_date,
+  MIN(warranty_end_date) AS min_warranty_end_date,
+  MAX(warranty_end_date) AS max_warranty_end_date
+FROM policy
+JOIN params ON TRUE
+WHERE policy_date BETWEEN params.start_date AND params.end_date
+GROUP BY
+  country_code,
+  policy_status_code,
+  payment_type_code,
+  last_payment_status_text,
+  insurer_company_type_code
+ORDER BY distinct_policies DESC, country_code, policy_status_code;
 
-				VAR _AttachUnsupportedContext =
-					( ( _DeviceFamilyCount > 0 || _DeviceSeriesCount > 0 ) && _DeviceModelCount = 0 )
-						|| _PartnerCount > 0
-						|| _ServiceCount > 0
-						|| _PaymentCount > 0
-				VAR _PartnersUnsupportedContext =
-					_ChannelCountContext > 0
-						|| _SubChannelCount > 0
-						|| _PartnerCount > 0
-						|| _DeviceFamilyCount > 0
-						|| _DeviceSeriesCount > 0
-						|| _DeviceModelCount > 0
-						|| _ServiceCount > 0
-						|| _PaymentCount > 0
-				VAR _SparkStart = DATE ( YEAR ( EDATE ( _AsOfDate, -5 ) ), MONTH ( EDATE ( _AsOfDate, -5 ) ), 1 )
-				VAR _SparkSeries =
-					ADDCOLUMNS (
-						GENERATESERIES ( 0, 5, 1 ),
-						"__Sales",
-							VAR _MonthStart = EDATE ( _SparkStart, [Value] )
-							RETURN
-								COALESCE (
-									CALCULATE (
-										[Sales Volume],
-										REMOVEFILTERS ( 'Date' ),
-										REMOVEFILTERS ( 'Date Filter' ),
-										DATESBETWEEN ( 'Date'[Date], _MonthStart, EOMONTH ( _MonthStart, 0 ) )
-									),
-									0
-								),
-						"__Attach",
-							VAR _MonthStart = EDATE ( _SparkStart, [Value] )
-							RETURN
-								IF (
-									_AttachUnsupportedContext,
-									BLANK (),
-									COALESCE (
-										CALCULATE (
-											[Raw Attach Rate],
-											REMOVEFILTERS ( 'Date' ),
-											REMOVEFILTERS ( 'Date Filter' ),
-											DATESBETWEEN ( 'Date'[Date], _MonthStart, EOMONTH ( _MonthStart, 0 ) )
-										),
-										0
-									)
-								),
-						"__Revenue",
-							VAR _MonthStart = EDATE ( _SparkStart, [Value] )
-							RETURN
-								COALESCE (
-									CALCULATE (
-										[Gross Revenue],
-										REMOVEFILTERS ( 'Date' ),
-										REMOVEFILTERS ( 'Date Filter' ),
-										DATESBETWEEN ( 'Date'[Date], _MonthStart, EOMONTH ( _MonthStart, 0 ) )
-									),
-									0
-								),
-						"__Policies",
-							VAR _MonthStart = EDATE ( _SparkStart, [Value] )
-							RETURN
-								COALESCE (
-									CALCULATE (
-										[Active Policies],
-										REMOVEFILTERS ( 'Date' ),
-										REMOVEFILTERS ( 'Date Filter' ),
-										DATESBETWEEN ( 'Date'[Date], _MonthStart, EOMONTH ( _MonthStart, 0 ) )
-									),
-									0
-								)
-					)
-				VAR _SalesSparkMin = MINX ( _SparkSeries, [__Sales] )
-				VAR _SalesSparkMax = MAXX ( _SparkSeries, [__Sales] )
-				VAR _SalesSparkRange = IF ( _SalesSparkMax = _SalesSparkMin, 1, _SalesSparkMax - _SalesSparkMin )
-				VAR _SalesSpark =
-					CONCATENATEX (
-						_SparkSeries,
-						VAR _X = 4 + [Value] * 22.4
-						VAR _Y = 5 + DIVIDE ( _SalesSparkMax - [__Sales], _SalesSparkRange, 0.5 ) * 30
-						RETURN FORMAT ( _X, "0.0" ) & "," & FORMAT ( _Y, "0.0" ),
-						" ",
-						[Value],
-						ASC
-					)
-				VAR _AttachSparkMin = MINX ( _SparkSeries, [__Attach] )
-				VAR _AttachSparkMax = MAXX ( _SparkSeries, [__Attach] )
-				VAR _AttachSparkRange = IF ( _AttachSparkMax = _AttachSparkMin, 1, _AttachSparkMax - _AttachSparkMin )
-				VAR _AttachSpark =
-					IF (
-						_AttachUnsupportedContext,
-						"",
-						CONCATENATEX (
-							_SparkSeries,
-							VAR _X = 4 + [Value] * 22.4
-							VAR _Y = 5 + DIVIDE ( _AttachSparkMax - [__Attach], _AttachSparkRange, 0.5 ) * 30
-							RETURN FORMAT ( _X, "0.0" ) & "," & FORMAT ( _Y, "0.0" ),
-							" ",
-							[Value],
-							ASC
-						)
-					)
-				VAR _RevenueSparkMin = MINX ( _SparkSeries, [__Revenue] )
-				VAR _RevenueSparkMax = MAXX ( _SparkSeries, [__Revenue] )
-				VAR _RevenueSparkRange = IF ( _RevenueSparkMax = _RevenueSparkMin, 1, _RevenueSparkMax - _RevenueSparkMin )
-				VAR _RevenueSpark =
-					CONCATENATEX (
-						_SparkSeries,
-						VAR _X = 4 + [Value] * 22.4
-						VAR _Y = 5 + DIVIDE ( _RevenueSparkMax - [__Revenue], _RevenueSparkRange, 0.5 ) * 30
-						RETURN FORMAT ( _X, "0.0" ) & "," & FORMAT ( _Y, "0.0" ),
-						" ",
-						[Value],
-						ASC
-					)
-				VAR _PolicySparkMin = MINX ( _SparkSeries, [__Policies] )
-				VAR _PolicySparkMax = MAXX ( _SparkSeries, [__Policies] )
-				VAR _PolicySparkRange = IF ( _PolicySparkMax = _PolicySparkMin, 1, _PolicySparkMax - _PolicySparkMin )
-				VAR _PolicySpark =
-					CONCATENATEX (
-						_SparkSeries,
-						VAR _X = 4 + [Value] * 22.4
-						VAR _Y = 5 + DIVIDE ( _PolicySparkMax - [__Policies], _PolicySparkRange, 0.5 ) * 30
-						RETURN FORMAT ( _X, "0.0" ) & "," & FORMAT ( _Y, "0.0" ),
-						" ",
-						[Value],
-						ASC
-					)
+-- ======================================================================
+-- 06. Revenue Formula Totals
+-- ======================================================================
+-- Confirmed formulas from answers.rtf:
+-- - Gross revenue = RVN_AMT + INSR_PRMUM_AMT + CHNL_AMT + DISTRBTR_AMT.
+-- - Net revenue / program margin = RVN_AMT.
+-- - Subsidiary revenue = paid RVN_TP_CD values 11 and 12 plus CNTRBTN_RVN.
+--
+-- Run only after the live revenue table confirms these columns are present.
 
-				VAR _Sales = [Sales Volume]
-				VAR _SalesLy = [Sales Volume LY]
-				VAR _SalesPlan = [Sales Plan QTY]
-				VAR _SalesLyDelta = DIVIDE ( _Sales - _SalesLy, _SalesLy )
-				VAR _SalesPlanRatio = DIVIDE ( _Sales, _SalesPlan )
-				VAR _SalesText = IF ( ISBLANK ( _Sales ), "--", FORMAT ( _Sales, "#,##0" ) )
-				VAR _SalesLyText = IF ( ISBLANK ( _SalesLyDelta ), "n/a", FORMAT ( _SalesLyDelta, "+0.0%;-0.0%;0.0%" ) )
-				VAR _SalesPlanText = IF ( ISBLANK ( _SalesPlanRatio ), "n/a", FORMAT ( _SalesPlanRatio, "0.0%" ) )
-				VAR _SalesLyClass = IF ( ISBLANK ( _SalesLyDelta ), "na", IF ( _SalesLyDelta >= 0, "good", "bad" ) )
-				VAR _SalesPlanClass = IF ( ISBLANK ( _SalesPlanRatio ), "na", IF ( _SalesPlanRatio >= 1, "good", "warning" ) )
+WITH params AS (
+  SELECT DATE '2026-01-01' AS start_date, DATE '2026-01-31' AS end_date
+),
+revenue AS (
+  SELECT
+    COALESCE(
+      SAFE_CAST(CAST(RVN_DD AS STRING) AS DATE),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(RVN_DD AS STRING), r'[^0-9]', ''))
+    ) AS revenue_date,
+    COALESCE(NULLIF(TRIM(CAST(CNTY_CD AS STRING)), ''), '__BLANK__') AS country_code,
+    COALESCE(NULLIF(TRIM(CAST(SALE_CHNL_NM AS STRING)), ''), '__BLANK__') AS sale_channel_name,
+    COALESCE(NULLIF(TRIM(CAST(PERKS_CTGY AS STRING)), ''), '__BLANK__') AS product_type,
+    COALESCE(NULLIF(TRIM(CAST(SVC_PRDCT_YN_FG AS STRING)), ''), '__BLANK__') AS service_product_flag,
+    COALESCE(NULLIF(TRIM(CAST(DVCE_MODEL_NM AS STRING)), ''), '__BLANK__') AS device_model_name,
+    COALESCE(NULLIF(TRIM(CAST(PMT_TP_CD AS STRING)), ''), '__BLANK__') AS payment_type_code,
+    COALESCE(NULLIF(TRIM(CAST(RVN_TP_CD AS STRING)), ''), '__BLANK__') AS revenue_type_code,
+    SAFE_CAST(RVN_AMT AS NUMERIC) AS program_margin_amount,
+    SAFE_CAST(INSR_PRMUM_AMT AS NUMERIC) AS insurer_premium_amount,
+    SAFE_CAST(CHNL_AMT AS NUMERIC) AS channel_amount,
+    SAFE_CAST(DISTRBTR_AMT AS NUMERIC) AS distributor_amount,
+    SAFE_CAST(CNTRBTN_RVN AS NUMERIC) AS contribution_revenue,
+    SAFE_CAST(RVN_CNT AS NUMERIC) AS revenue_units,
+    SAFE_CAST(CNVRN_CNT AS NUMERIC) AS conversion_units
+  FROM `bigdata-platform-data.scp_7cu`.`SMCDB_TCMC_DSBD_SCP_RVN_d5f9595b_ec1_cntry_AM`
+)
+SELECT
+  country_code,
+  FORMAT_DATE('%Y-%m', revenue_date) AS revenue_month,
+  sale_channel_name,
+  product_type,
+  service_product_flag,
+  device_model_name,
+  payment_type_code,
+  SUM(COALESCE(program_margin_amount, 0)) AS net_revenue_program_margin,
+  SUM(COALESCE(insurer_premium_amount, 0)) AS insurer_premium,
+  SUM(COALESCE(channel_amount, 0)) AS channel_amount,
+  SUM(COALESCE(distributor_amount, 0)) AS distributor_amount,
+  SUM(COALESCE(contribution_revenue, 0)) AS contribution_revenue,
+  SUM(COALESCE(program_margin_amount, 0)
+    + COALESCE(insurer_premium_amount, 0)
+    + COALESCE(channel_amount, 0)
+    + COALESCE(distributor_amount, 0)) AS gross_revenue,
+  SUM(
+    CASE
+      WHEN revenue_type_code IN ('11', '12') THEN COALESCE(program_margin_amount, 0)
+      ELSE 0
+    END
+    + COALESCE(contribution_revenue, 0)
+  ) AS subsidiary_revenue,
+  SUM(COALESCE(revenue_units, 0)) AS revenue_units,
+  SUM(COALESCE(conversion_units, 0)) AS conversion_units,
+  COUNT(*) AS source_rows
+FROM revenue
+JOIN params ON TRUE
+WHERE revenue_date BETWEEN params.start_date AND params.end_date
+GROUP BY
+  country_code,
+  revenue_month,
+  sale_channel_name,
+  product_type,
+  service_product_flag,
+  device_model_name,
+  payment_type_code
+ORDER BY gross_revenue DESC;
 
-				VAR _Attach = IF ( _AttachUnsupportedContext, BLANK (), [Raw Attach Rate] )
-				VAR _AttachLy = IF ( _AttachUnsupportedContext, BLANK (), [Raw Attach Rate LY] )
-				VAR _AttachPlan = IF ( _AttachUnsupportedContext, BLANK (), [Sales Plan Attach Rate] )
-				VAR _AttachLyPoints = ( _Attach - _AttachLy ) * 100
-				VAR _AttachPlanPoints = ( _Attach - _AttachPlan ) * 100
-				VAR _AttachText = IF ( ISBLANK ( _Attach ), "--", FORMAT ( _Attach, "0.0%" ) )
-				VAR _AttachLyText = IF ( ISBLANK ( _Attach ) || ISBLANK ( _AttachLy ), "n/a", FORMAT ( _AttachLyPoints, "+0.0 pts;-0.0 pts;0.0 pts" ) )
-				VAR _AttachPlanText = IF ( ISBLANK ( _Attach ) || ISBLANK ( _AttachPlan ), "n/a", FORMAT ( _AttachPlanPoints, "+0.0 pts;-0.0 pts;0.0 pts" ) )
-				VAR _AttachLyClass = IF ( ISBLANK ( _Attach ) || ISBLANK ( _AttachLy ), "na", IF ( _AttachLyPoints >= 0, "good", "bad" ) )
-				VAR _AttachPlanClass = IF ( ISBLANK ( _Attach ) || ISBLANK ( _AttachPlan ), "na", IF ( _AttachPlanPoints >= 0, "good", "warning" ) )
+-- ======================================================================
+-- 07. Revenue Grain And Amount Quality
+-- ======================================================================
+-- Checks duplicate grain rows, null amount components, and negative amounts.
+-- Duplicate rows are not automatically wrong, but they define what FactRevenue
+-- grain actually is.
 
-				VAR _Revenue = [Gross Revenue]
-				VAR _RevenueLy = [Gross Revenue LY]
-				VAR _RevenuePlan = [Revenue Plan Amount]
-				VAR _RevenueLyDelta = DIVIDE ( _Revenue - _RevenueLy, _RevenueLy )
-				VAR _RevenuePlanRatio = DIVIDE ( _Revenue, _RevenuePlan )
-				VAR _RevenueText =
-					SWITCH (
-						TRUE (),
-						ISBLANK ( _Revenue ), "--",
-						ABS ( _Revenue ) >= 1000000000, FORMAT ( DIVIDE ( _Revenue, 1000000000 ), "0.0" ) & "B",
-						ABS ( _Revenue ) >= 1000000, FORMAT ( DIVIDE ( _Revenue, 1000000 ), "0.0" ) & "M",
-						ABS ( _Revenue ) >= 1000, FORMAT ( DIVIDE ( _Revenue, 1000 ), "0.0" ) & "K",
-						FORMAT ( _Revenue, "#,##0" )
-					)
-				VAR _RevenueLyText = IF ( ISBLANK ( _RevenueLyDelta ), "n/a", FORMAT ( _RevenueLyDelta, "+0.0%;-0.0%;0.0%" ) )
-				VAR _RevenuePlanText = IF ( ISBLANK ( _RevenuePlanRatio ), "n/a", FORMAT ( _RevenuePlanRatio, "0.0%" ) )
-				VAR _RevenueLyClass = IF ( ISBLANK ( _RevenueLyDelta ), "na", IF ( _RevenueLyDelta >= 0, "good", "bad" ) )
-				VAR _RevenuePlanClass = IF ( ISBLANK ( _RevenuePlanRatio ), "na", IF ( _RevenuePlanRatio >= 1, "good", "warning" ) )
+WITH params AS (
+  SELECT DATE '2026-01-01' AS start_date, DATE '2026-01-31' AS end_date
+),
+revenue AS (
+  SELECT
+    COALESCE(
+      SAFE_CAST(CAST(RVN_DD AS STRING) AS DATE),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(RVN_DD AS STRING), r'[^0-9]', ''))
+    ) AS revenue_date,
+    COALESCE(NULLIF(TRIM(CAST(CNTY_CD AS STRING)), ''), '__BLANK__') AS country_code,
+    COALESCE(NULLIF(TRIM(CAST(SALE_CHNL_NM AS STRING)), ''), '__BLANK__') AS sale_channel_name,
+    COALESCE(NULLIF(TRIM(CAST(PERKS_CTGY AS STRING)), ''), '__BLANK__') AS product_type,
+    COALESCE(NULLIF(TRIM(CAST(SVC_PRDCT_YN_FG AS STRING)), ''), '__BLANK__') AS service_product_flag,
+    COALESCE(NULLIF(TRIM(CAST(DVCE_MODEL_NM AS STRING)), ''), '__BLANK__') AS device_model_name,
+    COALESCE(NULLIF(TRIM(CAST(PMT_TP_CD AS STRING)), ''), '__BLANK__') AS payment_type_code,
+    COALESCE(NULLIF(TRIM(CAST(RVN_TP_CD AS STRING)), ''), '__BLANK__') AS revenue_type_code,
+    SAFE_CAST(RVN_AMT AS NUMERIC) AS program_margin_amount,
+    SAFE_CAST(INSR_PRMUM_AMT AS NUMERIC) AS insurer_premium_amount,
+    SAFE_CAST(CHNL_AMT AS NUMERIC) AS channel_amount,
+    SAFE_CAST(DISTRBTR_AMT AS NUMERIC) AS distributor_amount,
+    SAFE_CAST(CNTRBTN_RVN AS NUMERIC) AS contribution_revenue
+  FROM `bigdata-platform-data.scp_7cu`.`SMCDB_TCMC_DSBD_SCP_RVN_d5f9595b_ec1_cntry_AM`
+),
+grain AS (
+  SELECT
+    revenue_date,
+    country_code,
+    sale_channel_name,
+    product_type,
+    service_product_flag,
+    device_model_name,
+    payment_type_code,
+    revenue_type_code,
+    COUNT(*) AS source_rows
+  FROM revenue
+  JOIN params ON TRUE
+  WHERE revenue_date BETWEEN params.start_date AND params.end_date
+  GROUP BY
+    revenue_date,
+    country_code,
+    sale_channel_name,
+    product_type,
+    service_product_flag,
+    device_model_name,
+    payment_type_code,
+    revenue_type_code
+)
+SELECT
+  'amount_quality' AS check_name,
+  COUNT(*) AS rows_checked,
+  COUNTIF(program_margin_amount IS NULL) AS null_program_margin_rows,
+  COUNTIF(insurer_premium_amount IS NULL) AS null_insurer_premium_rows,
+  COUNTIF(channel_amount IS NULL) AS null_channel_amount_rows,
+  COUNTIF(distributor_amount IS NULL) AS null_distributor_amount_rows,
+  COUNTIF(contribution_revenue IS NULL) AS null_contribution_revenue_rows,
+  COUNTIF(program_margin_amount < 0) AS negative_program_margin_rows,
+  COUNTIF(insurer_premium_amount < 0) AS negative_insurer_premium_rows,
+  COUNTIF(channel_amount < 0) AS negative_channel_amount_rows,
+  COUNTIF(distributor_amount < 0) AS negative_distributor_amount_rows,
+  COUNTIF(contribution_revenue < 0) AS negative_contribution_revenue_rows
+FROM revenue
+JOIN params ON TRUE
+WHERE revenue_date BETWEEN params.start_date AND params.end_date
 
-				VAR _ActivePolicies = [Active Policies]
-				VAR _ActivePoliciesLy =
-					CALCULATE (
-						[Active Policies],
-						REMOVEFILTERS ( 'Date' ),
-						REMOVEFILTERS ( 'Date Filter' ),
-						TREATAS (
-							SELECTCOLUMNS ( VALUES ( 'Date'[Date] ), "Date", EDATE ( 'Date'[Date], -12 ) ),
-							'Date'[Date]
-						)
-					)
-				VAR _ActivePoliciesDelta = DIVIDE ( _ActivePolicies - _ActivePoliciesLy, _ActivePoliciesLy )
-				VAR _ActivePoliciesText = IF ( ISBLANK ( _ActivePolicies ), "--", FORMAT ( _ActivePolicies, "#,##0" ) )
-				VAR _ActivePoliciesLyText = IF ( ISBLANK ( _ActivePoliciesDelta ), "n/a", FORMAT ( _ActivePoliciesDelta, "+0.0%;-0.0%;0.0%" ) )
-				VAR _ActivePoliciesLyClass = IF ( ISBLANK ( _ActivePoliciesDelta ), "na", IF ( _ActivePoliciesDelta >= 0, "good", "bad" ) )
+UNION ALL
 
-				VAR _Partners = IF ( _PartnersUnsupportedContext, BLANK (), [Active Channel Partners] )
-				VAR _PartnersLy =
-					IF (
-						_PartnersUnsupportedContext,
-						BLANK (),
-						CALCULATE (
-							[Active Channel Partners],
-							REMOVEFILTERS ( 'Date' ),
-							REMOVEFILTERS ( 'Date Filter' ),
-							TREATAS (
-								SELECTCOLUMNS ( VALUES ( 'Date'[Date] ), "Date", EDATE ( 'Date'[Date], -12 ) ),
-								'Date'[Date]
-							)
-						)
-					)
-				VAR _PartnersChange = _Partners - _PartnersLy
-				VAR _PartnersText = IF ( _PartnersUnsupportedContext, "n/a", IF ( ISBLANK ( _Partners ), "--", FORMAT ( _Partners, "#,##0" ) ) )
-				VAR _PartnersChangeText =
-					SWITCH (
-						TRUE (),
-						_PartnersUnsupportedContext, "Unavailable",
-						ISBLANK ( _PartnersLy ), "n/a",
-						_PartnersChange = 0, "No change",
-						FORMAT ( _PartnersChange, "+#,##0;-#,##0;0" ) & " vs LY"
-					)
-				VAR _PartnersClass = IF ( _PartnersUnsupportedContext || ISBLANK ( _PartnersLy ) || _PartnersChange = 0, "neutral", IF ( _PartnersChange > 0, "good", "warning" ) )
+SELECT
+  'duplicate_revenue_grain_rows',
+  COUNT(*) AS rows_checked,
+  COUNTIF(source_rows > 1) AS duplicate_grain_groups,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL
+FROM grain;
 
-				VAR _Subscribers = [Active Monthly Subscribers]
-				VAR _SubscribersLy = [Monthly Paid Revenue Units LY]
-				VAR _SubscribersDelta = DIVIDE ( _Subscribers - _SubscribersLy, _SubscribersLy )
-				VAR _SubscribersText = IF ( ISBLANK ( _Subscribers ), "--", FORMAT ( _Subscribers, "#,##0" ) )
-				VAR _SubscribersDeltaText = IF ( ISBLANK ( _SubscribersDelta ), "n/a", FORMAT ( _SubscribersDelta, "+0.0%;-0.0%;0.0%" ) )
-				VAR _SubscribersClass = IF ( ISBLANK ( _SubscribersDelta ), "neutral", IF ( _SubscribersDelta >= 0, "good", "warning" ) )
+-- ======================================================================
+-- 08. Revenue To Sales Shared-Grain Check
+-- ======================================================================
+-- Supports Average Revenue Per Policy and combined sales/revenue reporting.
+-- If channel or product labels differ between sources, create a mapping table
+-- before using shared slicers for both facts.
 
-				VAR _MonthlyCancel = [Monthly Cancellation Rate]
-				VAR _MonthlyCancelLy =
-					CALCULATE (
-						[Monthly Cancellation Rate],
-						REMOVEFILTERS ( 'Date' ),
-						REMOVEFILTERS ( 'Date Filter' ),
-						TREATAS (
-							SELECTCOLUMNS ( VALUES ( 'Date'[Date] ), "Date", EDATE ( 'Date'[Date], -12 ) ),
-							'Date'[Date]
-						)
-					)
-				VAR _MonthlyCancelPoints = ( _MonthlyCancel - _MonthlyCancelLy ) * 100
-				VAR _MonthlyCancelText = IF ( ISBLANK ( _MonthlyCancel ), "--", FORMAT ( _MonthlyCancel, "0.0%" ) )
-				VAR _MonthlyCancelDeltaText = IF ( ISBLANK ( _MonthlyCancel ) || ISBLANK ( _MonthlyCancelLy ), "n/a", FORMAT ( _MonthlyCancelPoints, "+0.0 pts;-0.0 pts;0.0 pts" ) )
-				VAR _MonthlyCancelClass = IF ( ISBLANK ( _MonthlyCancel ) || ISBLANK ( _MonthlyCancelLy ), "neutral", IF ( _MonthlyCancelPoints <= 0, "good", "warning" ) )
+WITH params AS (
+  SELECT DATE '2026-01-01' AS start_date, DATE '2026-01-31' AS end_date
+),
+sales AS (
+  SELECT
+    FORMAT_DATE('%Y-%m', COALESCE(
+      SAFE_CAST(CAST(STAT_DD AS STRING) AS DATE),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(STAT_DD AS STRING), r'[^0-9]', ''))
+    )) AS month_key,
+    COALESCE(NULLIF(TRIM(CAST(CNTY_CD AS STRING)), ''), '__BLANK__') AS country_code,
+    COALESCE(NULLIF(TRIM(CAST(SALE_CHNL_NM AS STRING)), ''), '__BLANK__') AS sale_channel_name,
+    COALESCE(NULLIF(TRIM(CAST(PERKS_CTGY AS STRING)), ''), '__BLANK__') AS product_type,
+    COALESCE(NULLIF(TRIM(CAST(SVC_PRDCT_YN_FG AS STRING)), ''), '__BLANK__') AS service_product_flag,
+    COALESCE(NULLIF(TRIM(CAST(DVCE_MODEL_NM AS STRING)), ''), '__BLANK__') AS device_model_name,
+    COALESCE(NULLIF(TRIM(CAST(PMT_TP_CD AS STRING)), ''), '__BLANK__') AS payment_type_code,
+    SUM(COALESCE(SAFE_CAST(SALE_CNT AS NUMERIC), 0)) AS sales_volume
+  FROM `bigdata-platform-data.scp_7cu`.`SMCDB_TCMC_DSBD_SCP_STAT_CNTRCT_d5f9595b_ec1_cntry_AM`
+  WHERE COALESCE(
+      SAFE_CAST(CAST(STAT_DD AS STRING) AS DATE),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(STAT_DD AS STRING), r'[^0-9]', ''))
+    ) BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+  GROUP BY
+    month_key,
+    country_code,
+    sale_channel_name,
+    product_type,
+    service_product_flag,
+    device_model_name,
+    payment_type_code
+),
+revenue AS (
+  SELECT
+    FORMAT_DATE('%Y-%m', COALESCE(
+      SAFE_CAST(CAST(RVN_DD AS STRING) AS DATE),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(RVN_DD AS STRING), r'[^0-9]', ''))
+    )) AS month_key,
+    COALESCE(NULLIF(TRIM(CAST(CNTY_CD AS STRING)), ''), '__BLANK__') AS country_code,
+    COALESCE(NULLIF(TRIM(CAST(SALE_CHNL_NM AS STRING)), ''), '__BLANK__') AS sale_channel_name,
+    COALESCE(NULLIF(TRIM(CAST(PERKS_CTGY AS STRING)), ''), '__BLANK__') AS product_type,
+    COALESCE(NULLIF(TRIM(CAST(SVC_PRDCT_YN_FG AS STRING)), ''), '__BLANK__') AS service_product_flag,
+    COALESCE(NULLIF(TRIM(CAST(DVCE_MODEL_NM AS STRING)), ''), '__BLANK__') AS device_model_name,
+    COALESCE(NULLIF(TRIM(CAST(PMT_TP_CD AS STRING)), ''), '__BLANK__') AS payment_type_code,
+    SUM(COALESCE(SAFE_CAST(RVN_AMT AS NUMERIC), 0)
+      + COALESCE(SAFE_CAST(INSR_PRMUM_AMT AS NUMERIC), 0)
+      + COALESCE(SAFE_CAST(CHNL_AMT AS NUMERIC), 0)
+      + COALESCE(SAFE_CAST(DISTRBTR_AMT AS NUMERIC), 0)) AS gross_revenue
+  FROM `bigdata-platform-data.scp_7cu`.`SMCDB_TCMC_DSBD_SCP_RVN_d5f9595b_ec1_cntry_AM`
+  WHERE COALESCE(
+      SAFE_CAST(CAST(RVN_DD AS STRING) AS DATE),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(RVN_DD AS STRING), r'[^0-9]', ''))
+    ) BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+  GROUP BY
+    month_key,
+    country_code,
+    sale_channel_name,
+    product_type,
+    service_product_flag,
+    device_model_name,
+    payment_type_code
+)
+SELECT
+  COALESCE(sales.month_key, revenue.month_key) AS month_key,
+  COALESCE(sales.country_code, revenue.country_code) AS country_code,
+  COALESCE(sales.sale_channel_name, revenue.sale_channel_name) AS sale_channel_name,
+  COALESCE(sales.product_type, revenue.product_type) AS product_type,
+  COALESCE(sales.service_product_flag, revenue.service_product_flag) AS service_product_flag,
+  COALESCE(sales.device_model_name, revenue.device_model_name) AS device_model_name,
+  COALESCE(sales.payment_type_code, revenue.payment_type_code) AS payment_type_code,
+  sales.sales_volume,
+  revenue.gross_revenue,
+  SAFE_DIVIDE(revenue.gross_revenue, NULLIF(sales.sales_volume, 0)) AS average_revenue_per_policy,
+  sales.month_key IS NULL AS missing_from_sales,
+  revenue.month_key IS NULL AS missing_from_revenue
+FROM sales
+FULL OUTER JOIN revenue
+  ON sales.month_key = revenue.month_key
+ AND sales.country_code = revenue.country_code
+ AND sales.sale_channel_name = revenue.sale_channel_name
+ AND sales.product_type = revenue.product_type
+ AND sales.service_product_flag = revenue.service_product_flag
+ AND sales.device_model_name = revenue.device_model_name
+ AND sales.payment_type_code = revenue.payment_type_code
+ORDER BY
+  missing_from_sales DESC,
+  missing_from_revenue DESC,
+  gross_revenue DESC,
+  sales_volume DESC
+LIMIT 500;
 
-				VAR _MonthAxis =
-					FILTER (
-						SUMMARIZE ( ALLSELECTED ( 'Date' ), 'Date'[MonthNum], 'Date'[Month] ),
-						NOT ISBLANK ( 'Date'[MonthNum] )
-					)
-				VAR _SalesSeries =
-					ADDCOLUMNS (
-						_MonthAxis,
-						"__Label", 'Date'[Month],
-						"__CY", CALCULATE ( [Sales QTY CY] ),
-						"__LY", CALCULATE ( [Sales QTY LY] )
-					)
-				VAR _SalesVisible = FILTER ( _SalesSeries, NOT ISBLANK ( [__CY] ) || NOT ISBLANK ( [__LY] ) )
-				VAR _SalesValues =
-					FILTER (
-						UNION (
-							SELECTCOLUMNS ( _SalesVisible, "__V", [__CY] ),
-							SELECTCOLUMNS ( _SalesVisible, "__V", [__LY] )
-						),
-						NOT ISBLANK ( [__V] )
-					)
-				VAR _SalesMin = MINX ( _SalesValues, [__V] )
-				VAR _SalesMax = MAXX ( _SalesValues, [__V] )
-				VAR _SalesRange = IF ( _SalesMax = _SalesMin, IF ( _SalesMax = 0, 1, ABS ( _SalesMax ) ), _SalesMax - _SalesMin )
-				VAR _SalesCount = COUNTROWS ( _SalesVisible )
-				VAR _SalesPlot =
-					ADDCOLUMNS (
-						_SalesVisible,
-						"__Index", RANKX ( _SalesVisible, 'Date'[MonthNum],, ASC, DENSE ),
-						"__X", 48 + DIVIDE ( RANKX ( _SalesVisible, 'Date'[MonthNum],, ASC, DENSE ) - 1, MAX ( 1, _SalesCount - 1 ) ) * 492,
-						"__Y1", IF ( ISBLANK ( [__CY] ), BLANK (), 18 + DIVIDE ( _SalesMax - [__CY], _SalesRange, 0.5 ) * 128 ),
-						"__Y2", IF ( ISBLANK ( [__LY] ), BLANK (), 18 + DIVIDE ( _SalesMax - [__LY], _SalesRange, 0.5 ) * 128 )
-					)
-				VAR _SalesLabelStep = MAX ( 1, CEILING ( DIVIDE ( _SalesCount, 6 ), 1 ) )
-				VAR _SalesLabels =
-					CONCATENATEX (
-						FILTER ( _SalesPlot, [__Index] = 1 || [__Index] = _SalesCount || MOD ( [__Index] - 1, _SalesLabelStep ) = 0 ),
-						"<text class='axis-label' x='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' y='169' text-anchor='middle'>" & LEFT ( [__Label], 3 ) & "</text>",
-						"",
-						'Date'[MonthNum],
-						ASC
-					)
-				VAR _SalesCyPath = CONCATENATEX ( FILTER ( _SalesPlot, NOT ISBLANK ( [__CY] ) ), FORMAT ( ROUND ( [__X], 0 ), "0" ) & "," & FORMAT ( ROUND ( [__Y1], 0 ), "0" ), " ", 'Date'[MonthNum], ASC )
-				VAR _SalesLyPath = CONCATENATEX ( FILTER ( _SalesPlot, NOT ISBLANK ( [__LY] ) ), FORMAT ( ROUND ( [__X], 0 ), "0" ) & "," & FORMAT ( ROUND ( [__Y2], 0 ), "0" ), " ", 'Date'[MonthNum], ASC )
-				VAR _SalesDots =
-					CONCATENATEX (
-						FILTER ( _SalesPlot, NOT ISBLANK ( [__CY] ) ),
-						"<circle class='hit' cx='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' cy='" & FORMAT ( ROUND ( [__Y1], 0 ), "0" ) & "' r='7' fill='transparent'><title>" & [__Label] & " " & FORMAT ( _AnalysisYear, "0" ) & ": " & FORMAT ( [__CY], "#,##0" ) & "</title></circle>" &
-						"<circle class='series-dot' cx='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' cy='" & FORMAT ( ROUND ( [__Y1], 0 ), "0" ) & "' r='2.7'/>",
-						"",
-						'Date'[MonthNum],
-						ASC
-					)
+-- ======================================================================
+-- 09. External Sellout And Attach Rate Output Contract
+-- ======================================================================
+-- Sellout is in an external Postgres source, so BigQuery cannot validate it
+-- until the data is staged or imported. The external source must produce this
+-- grain before Task 6 can trust [Sellout Units] or [Attach Rate].
 
-				VAR _AttachSeries =
-					ADDCOLUMNS (
-						_MonthAxis,
-						"__Label", 'Date'[Month],
-						"__CY", IF ( _AttachUnsupportedContext, BLANK (), CALCULATE ( [Attach Rate CY] ) ),
-						"__LY", IF ( _AttachUnsupportedContext, BLANK (), CALCULATE ( [Attach Rate LY Chart] ) )
-					)
-				VAR _AttachVisible = FILTER ( _AttachSeries, NOT ISBLANK ( [__CY] ) || NOT ISBLANK ( [__LY] ) )
-				VAR _AttachValues =
-					FILTER (
-						UNION (
-							SELECTCOLUMNS ( _AttachVisible, "__V", [__CY] ),
-							SELECTCOLUMNS ( _AttachVisible, "__V", [__LY] )
-						),
-						NOT ISBLANK ( [__V] )
-					)
-				VAR _AttachMin = MINX ( _AttachValues, [__V] )
-				VAR _AttachMax = MAXX ( _AttachValues, [__V] )
-				VAR _AttachRange = IF ( _AttachMax = _AttachMin, IF ( _AttachMax = 0, 1, ABS ( _AttachMax ) ), _AttachMax - _AttachMin )
-				VAR _AttachCount = COUNTROWS ( _AttachVisible )
-				VAR _AttachPlot =
-					ADDCOLUMNS (
-						_AttachVisible,
-						"__Index", RANKX ( _AttachVisible, 'Date'[MonthNum],, ASC, DENSE ),
-						"__X", 48 + DIVIDE ( RANKX ( _AttachVisible, 'Date'[MonthNum],, ASC, DENSE ) - 1, MAX ( 1, _AttachCount - 1 ) ) * 492,
-						"__Y1", IF ( ISBLANK ( [__CY] ), BLANK (), 18 + DIVIDE ( _AttachMax - [__CY], _AttachRange, 0.5 ) * 128 ),
-						"__Y2", IF ( ISBLANK ( [__LY] ), BLANK (), 18 + DIVIDE ( _AttachMax - [__LY], _AttachRange, 0.5 ) * 128 )
-					)
-				VAR _AttachLabelStep = MAX ( 1, CEILING ( DIVIDE ( _AttachCount, 6 ), 1 ) )
-				VAR _AttachLabels =
-					CONCATENATEX (
-						FILTER ( _AttachPlot, [__Index] = 1 || [__Index] = _AttachCount || MOD ( [__Index] - 1, _AttachLabelStep ) = 0 ),
-						"<text class='axis-label' x='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' y='169' text-anchor='middle'>" & LEFT ( [__Label], 3 ) & "</text>",
-						"",
-						'Date'[MonthNum],
-						ASC
-					)
-				VAR _AttachCyPath = CONCATENATEX ( FILTER ( _AttachPlot, NOT ISBLANK ( [__CY] ) ), FORMAT ( ROUND ( [__X], 0 ), "0" ) & "," & FORMAT ( ROUND ( [__Y1], 0 ), "0" ), " ", 'Date'[MonthNum], ASC )
-				VAR _AttachLyPath = CONCATENATEX ( FILTER ( _AttachPlot, NOT ISBLANK ( [__LY] ) ), FORMAT ( ROUND ( [__X], 0 ), "0" ) & "," & FORMAT ( ROUND ( [__Y2], 0 ), "0" ), " ", 'Date'[MonthNum], ASC )
-				VAR _AttachDots =
-					CONCATENATEX (
-						FILTER ( _AttachPlot, NOT ISBLANK ( [__CY] ) ),
-						"<circle class='hit' cx='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' cy='" & FORMAT ( ROUND ( [__Y1], 0 ), "0" ) & "' r='7' fill='transparent'><title>" & [__Label] & " " & FORMAT ( _AnalysisYear, "0" ) & ": " & FORMAT ( [__CY], "0.0%" ) & "</title></circle>" &
-						"<circle class='series-dot' cx='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' cy='" & FORMAT ( ROUND ( [__Y1], 0 ), "0" ) & "' r='2.7'/>",
-						"",
-						'Date'[MonthNum],
-						ASC
-					)
+SELECT *
+FROM UNNEST([
+  STRUCT('sellout_units' AS measure_family, 'blocked_external_source' AS validation_status, 'Required external output columns: sellout_date, country_code, channel_key, account_key, device_model_key, sellout_units.' AS required_output),
+  STRUCT('attach_rate', 'blocked_external_source', 'Required comparison output: month_key, country_code, shared channel/device keys, sales_volume, sellout_units, raw_attach_rate = sales_volume / sellout_units.'),
+  STRUCT('eligibility_filtered_attach_rate', 'deferred', 'Keep separate from raw attach rate. Requires approved eligible product/device mapping before use.')
+])
+ORDER BY measure_family;
 
-				VAR _NetSeries =
-					ADDCOLUMNS (
-						_MonthAxis,
-						"__Label", 'Date'[Month],
-						"__CY", CALCULATE ( [Net Revenue CY] ),
-						"__LY", CALCULATE ( [Net Revenue LY Chart] )
-					)
-				VAR _NetVisible = FILTER ( _NetSeries, NOT ISBLANK ( [__CY] ) || NOT ISBLANK ( [__LY] ) )
-				VAR _NetValues =
-					FILTER (
-						UNION (
-							SELECTCOLUMNS ( _NetVisible, "__V", [__CY] ),
-							SELECTCOLUMNS ( _NetVisible, "__V", [__LY] )
-						),
-						NOT ISBLANK ( [__V] )
-					)
-				VAR _NetMin = MINX ( _NetValues, [__V] )
-				VAR _NetMax = MAXX ( _NetValues, [__V] )
-				VAR _NetRange = IF ( _NetMax = _NetMin, IF ( _NetMax = 0, 1, ABS ( _NetMax ) ), _NetMax - _NetMin )
-				VAR _NetCount = COUNTROWS ( _NetVisible )
-				VAR _NetPlot =
-					ADDCOLUMNS (
-						_NetVisible,
-						"__Index", RANKX ( _NetVisible, 'Date'[MonthNum],, ASC, DENSE ),
-						"__X", 48 + DIVIDE ( RANKX ( _NetVisible, 'Date'[MonthNum],, ASC, DENSE ) - 1, MAX ( 1, _NetCount - 1 ) ) * 492,
-						"__Y1", IF ( ISBLANK ( [__CY] ), BLANK (), 18 + DIVIDE ( _NetMax - [__CY], _NetRange, 0.5 ) * 128 ),
-						"__Y2", IF ( ISBLANK ( [__LY] ), BLANK (), 18 + DIVIDE ( _NetMax - [__LY], _NetRange, 0.5 ) * 128 )
-					)
-				VAR _NetLabelStep = MAX ( 1, CEILING ( DIVIDE ( _NetCount, 6 ), 1 ) )
-				VAR _NetLabels =
-					CONCATENATEX (
-						FILTER ( _NetPlot, [__Index] = 1 || [__Index] = _NetCount || MOD ( [__Index] - 1, _NetLabelStep ) = 0 ),
-						"<text class='axis-label' x='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' y='169' text-anchor='middle'>" & LEFT ( [__Label], 3 ) & "</text>",
-						"",
-						'Date'[MonthNum],
-						ASC
-					)
-				VAR _NetCyPath = CONCATENATEX ( FILTER ( _NetPlot, NOT ISBLANK ( [__CY] ) ), FORMAT ( ROUND ( [__X], 0 ), "0" ) & "," & FORMAT ( ROUND ( [__Y1], 0 ), "0" ), " ", 'Date'[MonthNum], ASC )
-				VAR _NetLyPath = CONCATENATEX ( FILTER ( _NetPlot, NOT ISBLANK ( [__LY] ) ), FORMAT ( ROUND ( [__X], 0 ), "0" ) & "," & FORMAT ( ROUND ( [__Y2], 0 ), "0" ), " ", 'Date'[MonthNum], ASC )
-				VAR _NetDots =
-					CONCATENATEX (
-						FILTER ( _NetPlot, NOT ISBLANK ( [__CY] ) ),
-						VAR _PointText =
-							SWITCH (
-								TRUE (),
-								ABS ( [__CY] ) >= 1000000000, FORMAT ( DIVIDE ( [__CY], 1000000000 ), "0.0" ) & "B",
-								ABS ( [__CY] ) >= 1000000, FORMAT ( DIVIDE ( [__CY], 1000000 ), "0.0" ) & "M",
-								ABS ( [__CY] ) >= 1000, FORMAT ( DIVIDE ( [__CY], 1000 ), "0.0" ) & "K",
-								FORMAT ( [__CY], "#,##0" )
-							)
-						RETURN
-							"<circle class='hit' cx='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' cy='" & FORMAT ( ROUND ( [__Y1], 0 ), "0" ) & "' r='7' fill='transparent'><title>" & [__Label] & " " & FORMAT ( _AnalysisYear, "0" ) & ": " & _PointText & "</title></circle>" &
-							"<circle class='series-dot' cx='" & FORMAT ( ROUND ( [__X], 0 ), "0" ) & "' cy='" & FORMAT ( ROUND ( [__Y1], 0 ), "0" ) & "' r='2.7'/>",
-						"",
-						'Date'[MonthNum],
-						ASC
-					)
+-- ======================================================================
+-- 10. Data Quality Facts For Validation Pages
+-- ======================================================================
 
-				VAR _ChannelBase =
-					FILTER (
-						ADDCOLUMNS (
-							ALLSELECTED ( Sales[Sales Channel] ),
-							"__Amount", CALCULATE ( [Sales Volume] )
-						),
-						NOT ISBLANK ( Sales[Sales Channel] )
-							&& TRIM ( Sales[Sales Channel] ) <> ""
-							&& Sales[Sales Channel] <> "__BLANK__"
-							&& NOT ISBLANK ( [__Amount] )
-							&& [__Amount] > 0
-					)
-				VAR _TopChannels = TOPN ( 5, _ChannelBase, [__Amount], DESC, Sales[Sales Channel], ASC )
-				VAR _ChannelTotal = CALCULATE ( [Sales Volume], ALLSELECTED ( Sales[Sales Channel] ) )
-				VAR _TopAmount = MAXX ( _TopChannels, [__Amount] )
-				VAR _ChannelCount = COUNTROWS ( _TopChannels )
-				VAR _ChannelTotalText =
-					SWITCH (
-						TRUE (),
-						ISBLANK ( _ChannelTotal ), "--",
-						ABS ( _ChannelTotal ) >= 1000000, FORMAT ( DIVIDE ( _ChannelTotal, 1000000 ), "0.0" ) & "M",
-						ABS ( _ChannelTotal ) >= 1000, FORMAT ( DIVIDE ( _ChannelTotal, 1000 ), "0" ) & "K",
-						FORMAT ( _ChannelTotal, "#,##0" )
-					)
-				VAR _ChannelSegments =
-					CONCATENATEX (
-						_TopChannels,
-						VAR _Name = Sales[Sales Channel]
-						VAR _SafeName = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _Name, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
-						VAR _Amount = [__Amount]
-						VAR _Share = DIVIDE ( _Amount, _ChannelTotal, 0 )
-						VAR _PriorAmount =
-							SUMX (
-								FILTER (
-									_TopChannels,
-									[__Amount] > _Amount
-										|| ( [__Amount] = _Amount && Sales[Sales Channel] < _Name )
-								),
-								[__Amount]
-							)
-						VAR _Offset = -100 * DIVIDE ( _PriorAmount, _ChannelTotal, 0 )
-						VAR _Rank = RANKX ( _TopChannels, [__Amount], _Amount, DESC, DENSE )
-						VAR _Color = SWITCH ( _Rank, 1, "#1428a0", 2, "#2f67d8", 3, "#2189ff", 4, "#00a6a6", "#7b6fd0" )
-						RETURN
-							"<circle class='donut-segment' cx='70' cy='70' r='48' pathLength='100' stroke='" & _Color & "' stroke-dasharray='" & FORMAT ( _Share * 100, "0.00" ) & " " & FORMAT ( 100 - _Share * 100, "0.00" ) & "' stroke-dashoffset='" & FORMAT ( _Offset, "0.00" ) & "'><title>" & _SafeName & ": " & FORMAT ( _Share, "0.0%" ) & "</title></circle>",
-						"",
-						[__Amount],
-						DESC
-					)
-				VAR _ChannelRows =
-					CONCATENATEX (
-						_TopChannels,
-						VAR _Name = Sales[Sales Channel]
-						VAR _SafeName = SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( SUBSTITUTE ( _Name, "&", "&amp;" ), "<", "&lt;" ), ">", "&gt;" ), "'", "&#39;" ), """", "&quot;" )
-						VAR _Amount = [__Amount]
-						VAR _Share = DIVIDE ( _Amount, _ChannelTotal, 0 )
-						VAR _Width = DIVIDE ( _Amount, _TopAmount, 0 ) * 100
-						VAR _Rank = RANKX ( _TopChannels, [__Amount], _Amount, DESC, DENSE )
-						VAR _Color = SWITCH ( _Rank, 1, "#1428a0", 2, "#2f67d8", 3, "#2189ff", 4, "#00a6a6", "#7b6fd0" )
-						RETURN
-							"<div class='mix-row'><span class='mix-name' title='" & _SafeName & "'>" & _SafeName & "</span><span class='mix-bar'><span style='width:" & FORMAT ( _Width, "0.0" ) & "%;background:" & _Color & "'></span></span><span class='mix-share'>" & FORMAT ( _Share, "0.0%" ) & "</span><span class='mix-value'>" & FORMAT ( _Amount, "#,##0" ) & "</span></div>",
-						"",
-						[__Amount],
-						DESC
-					)
+WITH params AS (
+  SELECT DATE '2026-01-01' AS start_date, DATE '2026-01-31' AS end_date
+),
+policy AS (
+  SELECT
+    COALESCE(
+      SAFE_CAST(CAST(INSR_PLCY_CRT_DT AS STRING) AS DATE),
+      DATE(SAFE_CAST(CAST(INSR_PLCY_CRT_DT AS STRING) AS TIMESTAMP)),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(INSR_PLCY_CRT_DT AS STRING), r'[^0-9]', ''))
+    ) AS policy_date,
+    NULLIF(TRIM(CAST(CP_SRL_NUM AS STRING)), '') AS policy_id,
+    NULLIF(TRIM(CAST(INSR_PLCY_ID AS STRING)), '') AS insurance_policy_id,
+    NULLIF(TRIM(CAST(USR_ID AS STRING)), '') AS user_id,
+    NULLIF(TRIM(CAST(PROD_ID AS STRING)), '') AS product_id,
+    NULLIF(TRIM(CAST(DVCE_UNQ_ID AS STRING)), '') AS device_unique_id,
+    NULLIF(TRIM(CAST(cnty_cd_AM_cntry AS STRING)), '') AS country_code,
+    NULLIF(TRIM(CAST(CP_STS_CD AS STRING)), '') AS policy_status_code,
+    NULLIF(TRIM(CAST(DVCE_MODEL_NM AS STRING)), '') AS device_model_name,
+    NULLIF(TRIM(CAST(SALE_CHNL_CD AS STRING)), '') AS sale_channel_code,
+    NULLIF(TRIM(CAST(PMT_TP_CD AS STRING)), '') AS payment_type_code
+  FROM `bigdata-platform-data.scp_7cu`.`SMCDB_TCMC_PRTY_SVC_ec1_cntry_AM`
+),
+policy_dupes AS (
+  SELECT
+    policy_id,
+    COUNT(*) AS source_rows
+  FROM policy
+  WHERE policy_id IS NOT NULL
+  GROUP BY policy_id
+  HAVING COUNT(*) > 1
+)
+SELECT
+  'FactPolicySales' AS model_table,
+  COUNT(*) AS rows_checked,
+  COUNTIF(policy_id IS NULL) AS blank_policy_id_rows,
+  COUNTIF(insurance_policy_id IS NULL) AS blank_insurance_policy_id_rows,
+  COUNTIF(user_id IS NULL) AS blank_user_id_rows,
+  COUNTIF(product_id IS NULL) AS blank_product_id_rows,
+  COUNTIF(country_code IS NULL) AS blank_country_code_rows,
+  COUNTIF(policy_status_code IS NULL) AS blank_policy_status_rows,
+  COUNTIF(device_model_name IS NULL) AS blank_device_model_rows,
+  COUNTIF(sale_channel_code IS NULL) AS blank_sale_channel_rows,
+  COUNTIF(payment_type_code IS NULL) AS blank_payment_type_rows,
+  COUNTIF(policy_date IS NULL) AS invalid_policy_date_rows,
+  (SELECT COUNT(*) FROM policy_dupes) AS duplicate_policy_id_groups
+FROM policy
+JOIN params ON TRUE
+WHERE policy_date BETWEEN params.start_date AND params.end_date;
 
-				VAR _SalesMaxText =
-					SWITCH (
-						TRUE (),
-						ISBLANK ( _SalesMax ), "--",
-						ABS ( _SalesMax ) >= 1000000, FORMAT ( DIVIDE ( _SalesMax, 1000000 ), "0.0" ) & "M",
-						ABS ( _SalesMax ) >= 1000, FORMAT ( DIVIDE ( _SalesMax, 1000 ), "0" ) & "K",
-						FORMAT ( _SalesMax, "#,##0" )
-					)
-				VAR _SalesMidText =
-					VAR _V = DIVIDE ( _SalesMax + _SalesMin, 2 )
-					RETURN SWITCH ( TRUE (), ISBLANK ( _V ), "--", ABS ( _V ) >= 1000000, FORMAT ( DIVIDE ( _V, 1000000 ), "0.0" ) & "M", ABS ( _V ) >= 1000, FORMAT ( DIVIDE ( _V, 1000 ), "0" ) & "K", FORMAT ( _V, "#,##0" ) )
-				VAR _SalesMinText =
-					SWITCH (
-						TRUE (),
-						ISBLANK ( _SalesMin ), "--",
-						ABS ( _SalesMin ) >= 1000000, FORMAT ( DIVIDE ( _SalesMin, 1000000 ), "0.0" ) & "M",
-						ABS ( _SalesMin ) >= 1000, FORMAT ( DIVIDE ( _SalesMin, 1000 ), "0" ) & "K",
-						FORMAT ( _SalesMin, "#,##0" )
-					)
-				VAR _NetMaxText = SWITCH ( TRUE (), ISBLANK ( _NetMax ), "--", ABS ( _NetMax ) >= 1000000000, FORMAT ( DIVIDE ( _NetMax, 1000000000 ), "0.0" ) & "B", ABS ( _NetMax ) >= 1000000, FORMAT ( DIVIDE ( _NetMax, 1000000 ), "0.0" ) & "M", ABS ( _NetMax ) >= 1000, FORMAT ( DIVIDE ( _NetMax, 1000 ), "0" ) & "K", FORMAT ( _NetMax, "#,##0" ) )
-				VAR _NetMidText =
-					VAR _V = DIVIDE ( _NetMax + _NetMin, 2 )
-					RETURN SWITCH ( TRUE (), ISBLANK ( _V ), "--", ABS ( _V ) >= 1000000000, FORMAT ( DIVIDE ( _V, 1000000000 ), "0.0" ) & "B", ABS ( _V ) >= 1000000, FORMAT ( DIVIDE ( _V, 1000000 ), "0.0" ) & "M", ABS ( _V ) >= 1000, FORMAT ( DIVIDE ( _V, 1000 ), "0" ) & "K", FORMAT ( _V, "#,##0" ) )
-				VAR _NetMinText = SWITCH ( TRUE (), ISBLANK ( _NetMin ), "--", ABS ( _NetMin ) >= 1000000000, FORMAT ( DIVIDE ( _NetMin, 1000000000 ), "0.0" ) & "B", ABS ( _NetMin ) >= 1000000, FORMAT ( DIVIDE ( _NetMin, 1000000 ), "0.0" ) & "M", ABS ( _NetMin ) >= 1000, FORMAT ( DIVIDE ( _NetMin, 1000 ), "0" ) & "K", FORMAT ( _NetMin, "#,##0" ) )
+-- ======================================================================
+-- 11. History Coverage For Prior Period And Prior Year Measures
+-- ======================================================================
+-- Prior-year measures are publishable only when both the current period and
+-- matching prior-year period exist for the fact used by the measure.
 
-				VAR _Css =
-					"<style>" &
-					".scx,.scx *{box-sizing:border-box}.scx{--samsung:#1428a0;--action:#2189ff;--ink:#0b0b0f;--secondary:#4f5663;--muted:#697386;--border:#e1e5ee;--grid:#e8ecf3;--surface:#fff;--soft:#f8faff;--tint:#e9edff;--success:#087a67;--success-bg:#e9f7f4;--warning:#a45700;--warning-bg:#fff4e5;--danger:#b4232c;--danger-bg:#fff0f1;width:100%;height:100vh;min-height:680px;margin:0;padding:1px;overflow:hidden;color:var(--ink);font-family:SamsungOne,'Segoe UI',Arial,sans-serif;font-variant-numeric:tabular-nums lining-nums;background:transparent}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;height:180px}.metric-card,.signal-strip,.chart-card{border:1px solid var(--border);background:var(--surface);box-shadow:0 8px 24px rgba(20,40,160,.07)}.metric-card{min-width:0;height:100%;padding:14px 15px 12px;display:grid;grid-template-rows:auto auto minmax(38px,1fr) auto;gap:7px;border-radius:14px;overflow:hidden}.metric-card.focus{border-color:var(--samsung);background:radial-gradient(circle at 92% 15%,rgba(103,183,255,.24),transparent 38%),var(--samsung);box-shadow:0 10px 24px rgba(11,11,15,.12);color:#fff}.metric-head,.metric-value-row,.metric-footer,.signal,.chart-head,.legend{display:flex;align-items:center}.metric-head{min-width:0;justify-content:space-between;gap:8px}.metric-label{margin:0;overflow:hidden;color:var(--secondary);font-size:11px;line-height:1.2;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.focus .metric-label{color:rgba(255,255,255,.78)}.metric-status{flex:0 0 auto;padding:4px 7px;border-radius:999px;background:var(--tint);color:var(--samsung);font-size:8px;line-height:1;font-weight:800}.focus .metric-status{background:rgba(255,255,255,.15);color:#fff}.metric-value-row{min-width:0;align-items:baseline;gap:8px}.metric-value{margin:0;overflow:hidden;color:var(--ink);font-family:'Samsung Sharp Sans',SamsungOne,'Segoe UI',Arial,sans-serif;font-size:29px;line-height:1;font-weight:800;letter-spacing:-.025em;text-overflow:ellipsis;white-space:nowrap}.focus .metric-value{color:#fff}.metric-unit{color:var(--muted);font-size:9px;font-weight:700}.focus .metric-unit{color:rgba(255,255,255,.7)}.spark{width:100%;height:44px;display:block;overflow:visible}.spark-guide{stroke:var(--grid);stroke-width:1}.spark-area{fill:rgba(33,137,255,.11)}.spark-line{fill:none;stroke:var(--action);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}.focus .spark-guide{stroke:rgba(255,255,255,.17)}.focus .spark-area{fill:rgba(255,255,255,.09)}.focus .spark-line{stroke:#fff}.metric-footer{min-width:0;justify-content:space-between;gap:8px;padding-top:7px;border-top:1px solid var(--border)}.focus .metric-footer{border-color:rgba(255,255,255,.16)}.comparison{min-width:0;display:grid;gap:2px}.comparison span{color:var(--muted);font-size:8px;line-height:1;font-weight:650}.comparison strong{color:var(--ink);font-size:10px;line-height:1.1;font-weight:800}.comparison strong.good{color:var(--success)}.comparison strong.warning{color:var(--warning)}.comparison strong.bad{color:var(--danger)}.comparison strong.na{color:var(--muted)}.focus .comparison span{color:rgba(255,255,255,.64)}.focus .comparison strong{color:#fff!important}.signal-strip{height:86px;margin-top:12px;padding:10px 12px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;border-radius:14px;overflow:hidden}.signal{min-width:0;justify-content:space-between;gap:12px;padding:0 18px;border-right:1px solid var(--border)}.signal:first-child{padding-left:4px}.signal:last-child{border-right:0}.signal-copy{min-width:0}.signal-label{margin:0;overflow:hidden;color:var(--secondary);font-size:10px;line-height:1.2;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.signal-value{margin:5px 0 0;overflow:hidden;color:var(--ink);font-family:'Samsung Sharp Sans',SamsungOne,'Segoe UI',Arial,sans-serif;font-size:20px;line-height:1;font-weight:800;letter-spacing:-.02em;text-overflow:ellipsis;white-space:nowrap}.delta{flex:0 0 auto;min-width:62px;padding:6px 7px;border-radius:8px;font-size:9px;line-height:1;font-weight:800;text-align:center}.delta.good{background:var(--success-bg);color:var(--success)}.delta.warning{background:var(--warning-bg);color:var(--warning)}.delta.neutral{background:var(--tint);color:var(--samsung)}.chart-grid{min-width:0;min-height:0;height:calc(100vh - 303px);margin-top:12px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:12px}.chart-card{min-width:0;min-height:0;padding:12px 14px 10px;display:grid;grid-template-rows:auto minmax(0,1fr);gap:7px;border-radius:14px;overflow:hidden}.chart-head{min-width:0;justify-content:space-between;gap:10px}.chart-copy{min-width:0}.chart-title{margin:0;overflow:hidden;color:var(--ink);font-family:'Samsung Sharp Sans',SamsungOne,'Segoe UI',Arial,sans-serif;font-size:13px;line-height:1.15;font-weight:800;letter-spacing:-.01em;text-overflow:ellipsis;white-space:nowrap}.chart-subtitle{margin:3px 0 0;overflow:hidden;color:var(--muted);font-size:8.5px;line-height:1.15;text-overflow:ellipsis;white-space:nowrap}.legend{flex:0 0 auto;gap:10px;color:var(--secondary);font-size:8.5px;line-height:1;font-weight:700}.legend span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}.legend i{width:13px;height:3px;border-radius:99px;background:var(--samsung)}.legend i.ly{height:0;border-top:2px dashed #a9b2c3;border-radius:0;background:transparent}.line-chart{width:100%;height:100%;min-height:0;display:block;overflow:visible}.chart-gridline{stroke:var(--grid);stroke-width:1}.axis-label,.value-label{fill:var(--muted);font-family:SamsungOne,'Segoe UI',Arial,sans-serif;font-size:8.5px;font-weight:650}.series-line{fill:none;stroke:var(--samsung);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}.series-line.ly{stroke:#a9b2c3;stroke-width:1.8;stroke-dasharray:5 5}.series-dot{fill:var(--samsung);stroke:#fff;stroke-width:1.4;vector-effect:non-scaling-stroke}.hit{cursor:default}.no-data{height:100%;display:grid;place-items:center;color:var(--muted);font-size:11px;font-weight:700}.mix-layout{min-width:0;min-height:0;display:grid;grid-template-columns:minmax(130px,.72fr) minmax(220px,1.28fr);align-items:center;gap:14px}.donut-wrap{min-width:0;min-height:0;display:grid;place-items:center;position:relative}.donut{width:142px;height:142px;display:block;transform:rotate(-90deg)}.donut-track{fill:none;stroke:#edf0f5;stroke-width:18}.donut-segment{fill:none;stroke-width:18;stroke-linecap:butt}.donut-total{position:absolute;display:grid;place-items:center;text-align:center;pointer-events:none}.donut-total strong{color:var(--ink);font-family:'Samsung Sharp Sans',SamsungOne,'Segoe UI',Arial,sans-serif;font-size:18px;line-height:1;font-weight:800}.donut-total span{margin-top:4px;color:var(--muted);font-size:8px;line-height:1;font-weight:650}.mix-list{min-width:0;display:grid;gap:7px}.mix-row{min-width:0;display:grid;grid-template-columns:78px minmax(55px,1fr) 42px 58px;align-items:center;gap:7px}.mix-name,.mix-value,.mix-share{overflow:hidden;font-size:8.5px;line-height:1;text-overflow:ellipsis;white-space:nowrap}.mix-name{color:var(--secondary);font-weight:700}.mix-value{color:var(--secondary);font-weight:700;text-align:right}.mix-share{color:var(--ink);font-weight:800;text-align:right}.mix-bar{height:6px;overflow:hidden;border-radius:99px;background:#edf0f5}.mix-bar span{height:100%;display:block;border-radius:inherit}@media(max-width:900px){.scx{height:auto;min-height:0;overflow:visible}.metric-grid{height:auto;grid-template-columns:repeat(2,minmax(0,1fr))}.metric-card{min-height:176px}.signal-strip{height:auto}.chart-grid{height:auto;grid-template-columns:1fr;grid-template-rows:auto}.chart-card{min-height:250px}}@media(max-width:560px){.metric-grid,.signal-strip{grid-template-columns:1fr}.signal{min-height:64px;padding:8px 4px;border-right:0;border-bottom:1px solid var(--border)}.signal:last-child{border-bottom:0}.mix-layout{grid-template-columns:1fr}}" &
-					"</style>"
-				VAR _FullPageCss =
-					"<style>" &
-					".scx{--canvas:#f3f6fa;--sky:#67b7ff;--sea:#2f67d8;--teal:#00a6a6;--lavender:#7b6fd0;width:100vw;max-width:100%;height:100vh;min-height:720px;margin:0;padding:18px 22px 20px;display:grid;grid-template-rows:72px 72px 180px 88px minmax(0,1fr);gap:12px;overflow:hidden;background:radial-gradient(circle at 93% 5%,rgba(33,137,255,.07),transparent 23%),var(--canvas)}.topbar,.filter-context{min-width:0;border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:0 8px 24px rgba(20,40,160,.07)}.topbar{padding:10px 14px 10px 18px;display:grid;grid-template-columns:164px minmax(230px,1fr) auto 180px;align-items:center;gap:14px;position:relative;overflow:hidden}.topbar:before{content:'';position:absolute;inset:0 0 auto;height:3px;background:var(--samsung)}.brand-lockup{min-width:0;display:flex;align-items:center;gap:9px}.brand-name{color:var(--samsung);font-family:'Samsung Sharp Sans',SamsungOne,'Segoe UI',Arial,sans-serif;font-size:16px;line-height:1;font-weight:800;white-space:nowrap}.brand-product{min-width:42px;padding:5px 8px 6px;border-radius:999px;background:var(--tint);color:var(--samsung);font-size:11px;line-height:1;font-weight:800;text-align:center}.title-block{min-width:0}.title-block h1{margin:0;overflow:hidden;color:var(--ink);font-family:'Samsung Sharp Sans',SamsungOne,'Segoe UI',Arial,sans-serif;font-size:22px;line-height:1.08;font-weight:800;letter-spacing:-.02em;text-overflow:ellipsis;white-space:nowrap}.title-block p{margin:5px 0 0;overflow:hidden;color:var(--secondary);font-size:11px;line-height:1.25;text-overflow:ellipsis;white-space:nowrap}.page-tabs{min-width:0;padding:4px;display:flex;align-items:center;gap:3px;border:1px solid var(--border);border-radius:11px;background:var(--soft);pointer-events:none;user-select:none}.display-mode{padding:0 5px;color:var(--muted);font-size:7.5px;line-height:1.05;font-weight:800;text-align:center;white-space:nowrap}.page-tab{min-height:32px;padding:7px 8px;display:grid;place-items:center;border-radius:8px;color:var(--secondary);font-size:10.5px;line-height:1;font-weight:700;white-space:nowrap}.page-tab.active{background:var(--samsung);color:#fff}.model-meta{min-width:180px;padding-left:14px;display:grid;gap:5px;border-left:1px solid var(--border)}.model-meta-row{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:9px;line-height:1.15}.model-meta-row strong{min-width:0;overflow:hidden;color:var(--ink);font-size:10px;font-weight:700;text-align:right;text-overflow:ellipsis;white-space:nowrap}.model-state{display:inline-flex;align-items:center;justify-content:flex-end;gap:5px;color:var(--success)!important;font-weight:800!important}.model-state:before{content:'';width:6px;height:6px;border-radius:50%;background:var(--success);box-shadow:0 0 0 3px var(--success-bg)}.filter-context{padding:9px;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;pointer-events:none;user-select:none}.filter-item{min-width:0;min-height:52px;padding:8px 52px 8px 10px;display:grid;align-content:center;gap:4px;position:relative;border:1px solid var(--border);border-radius:10px;background:var(--soft)}.filter-label{overflow:hidden;color:var(--muted);font-size:8px;line-height:1;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.filter-value{overflow:hidden;color:var(--ink);font-size:10px;line-height:1.15;font-weight:800;text-overflow:ellipsis;white-space:nowrap}.view-only{position:absolute;top:8px;right:7px;padding:3px 4px;border-radius:5px;background:var(--tint);color:var(--samsung);font-size:6.5px;line-height:1;font-weight:800;white-space:nowrap}.spark-unavailable{height:44px;display:grid;place-items:center;color:var(--muted);font-size:8px;line-height:1.2;font-weight:700;text-align:center}.metric-grid{height:100%;margin:0}.signal-strip{height:100%;margin:0}.chart-grid{height:100%;margin:0}.metric-card,.signal-strip,.chart-card{box-shadow:0 5px 16px rgba(20,40,160,.055)}@media(max-width:1020px){.scx{height:100vh;min-height:720px;padding:12px;grid-template-rows:118px 118px 180px 88px minmax(0,1fr);overflow:auto}.topbar{grid-template-columns:1fr auto}.title-block,.page-tabs{grid-column:1/-1}.model-meta{grid-column:2;grid-row:1}.filter-context{grid-template-columns:repeat(3,minmax(0,1fr))}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr));overflow:auto}.chart-grid{grid-template-columns:repeat(2,minmax(320px,1fr));grid-template-rows:repeat(2,minmax(220px,1fr));overflow:auto}}@media(max-width:620px){.scx{grid-template-rows:auto auto auto auto auto;overflow:auto}.topbar{grid-template-columns:1fr}.model-meta{grid-column:1;grid-row:auto;padding:10px 0 0;border-top:1px solid var(--border);border-left:0}.filter-context,.metric-grid,.signal-strip,.chart-grid{grid-template-columns:1fr}.metric-grid,.signal-strip,.chart-grid{height:auto;overflow:visible}.signal{min-height:64px;padding:8px 4px;border-right:0;border-bottom:1px solid var(--border)}.signal:last-child{border-bottom:0}.chart-card{min-height:250px}.mix-layout{grid-template-columns:1fr}}" &
-					"</style>"
+WITH date_ranges AS (
+  SELECT
+    'FactPolicyDailyAggregate' AS model_table,
+    MIN(COALESCE(
+      SAFE_CAST(CAST(STAT_DD AS STRING) AS DATE),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(STAT_DD AS STRING), r'[^0-9]', ''))
+    )) AS min_business_date,
+    MAX(COALESCE(
+      SAFE_CAST(CAST(STAT_DD AS STRING) AS DATE),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(STAT_DD AS STRING), r'[^0-9]', ''))
+    )) AS max_business_date
+  FROM `bigdata-platform-data.scp_7cu`.`SMCDB_TCMC_DSBD_SCP_STAT_CNTRCT_d5f9595b_ec1_cntry_AM`
 
-				VAR _Header =
-					"<header class='topbar' aria-label='Samsung Care Plus executive summary header'>" &
-					"<div class='brand-lockup' aria-label='Samsung Care Plus'><span class='brand-name'>Samsung</span><span class='brand-product'>Care+</span></div>" &
-					"<div class='title-block'><h1>Executive Summary</h1><p>Model-driven executive performance.</p></div>" &
-					"<nav class='page-tabs' aria-label='Report page navigator, display only' data-display-only='true'><span class='page-tab active' aria-current='page'>Exec</span><span class='page-tab'>Sales</span><span class='page-tab'>Attach</span><span class='page-tab'>Revenue</span><span class='page-tab'>Plans</span><span class='page-tab'>Info</span></nav>" &
-					"<div class='model-meta'><div class='model-meta-row'><span>Owner</span><strong data-model-measure='Measures_table[Business Owner]'>" & _OwnerText & "</strong></div><div class='model-meta-row'><span>Evaluated</span><strong data-model-measure='Measures_table[Last Refreshed]'>" & _EvaluatedText & "</strong></div><div class='model-meta-row'><span>Model</span><strong class='model-state'>Connected</strong></div></div></header>"
+  UNION ALL
+  SELECT
+    'FactPolicySales',
+    MIN(COALESCE(
+      SAFE_CAST(CAST(INSR_PLCY_CRT_DT AS STRING) AS DATE),
+      DATE(SAFE_CAST(CAST(INSR_PLCY_CRT_DT AS STRING) AS TIMESTAMP)),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(INSR_PLCY_CRT_DT AS STRING), r'[^0-9]', ''))
+    )),
+    MAX(COALESCE(
+      SAFE_CAST(CAST(INSR_PLCY_CRT_DT AS STRING) AS DATE),
+      DATE(SAFE_CAST(CAST(INSR_PLCY_CRT_DT AS STRING) AS TIMESTAMP)),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(INSR_PLCY_CRT_DT AS STRING), r'[^0-9]', ''))
+    ))
+  FROM `bigdata-platform-data.scp_7cu`.`SMCDB_TCMC_PRTY_SVC_ec1_cntry_AM`
 
-				VAR _Filters =
-					"<section class='filter-context' aria-label='Current Power BI filter context, display only' data-display-only='true'>" &
-					"<div class='filter-item' data-model-field='Date Filter[Period Type] > Date Filter[Period Label]' data-display-only='true'><span class='filter-label'>Period</span><strong class='filter-value' title='" & _PeriodText & "'>" & _PeriodText & "</strong><span class='view-only'>View only</span></div>" &
-					"<div class='filter-item' data-model-field='Subsidiary Master[Subsidiary]' data-display-only='true'><span class='filter-label'>Subsidiary</span><strong class='filter-value' title='" & _SubsidiaryText & "'>" & _SubsidiaryText & "</strong><span class='view-only'>View only</span></div>" &
-					"<div class='filter-item' data-model-field='Sales[Product Family] > Sales[Device Series] > Sales[Device Model]' data-display-only='true'><span class='filter-label'>Device</span><strong class='filter-value' title='" & _DeviceText & "'>" & _DeviceText & "</strong><span class='view-only'>View only</span></div>" &
-					"<div class='filter-item' data-model-field='Sales[Sales Channel] > Sales[Sub Sales Channel] > Sales[Account / Partner]' data-display-only='true'><span class='filter-label'>Channel / partner</span><strong class='filter-value' title='" & _ChannelText & "'>" & _ChannelText & "</strong><span class='view-only'>View only</span></div>" &
-					"<div class='filter-item' data-model-field='Sales[Product Type]' data-display-only='true'><span class='filter-label'>Service type</span><strong class='filter-value' title='" & _ServiceText & "'>" & _ServiceText & "</strong><span class='view-only'>View only</span></div>" &
-					"<div class='filter-item' data-model-field='Sales[Payment Type]' data-display-only='true'><span class='filter-label'>Payment type</span><strong class='filter-value' title='" & _PaymentText & "'>" & _PaymentText & "</strong><span class='view-only'>View only</span></div></section>"
+  UNION ALL
+  SELECT
+    'FactRevenue',
+    MIN(COALESCE(
+      SAFE_CAST(CAST(RVN_DD AS STRING) AS DATE),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(RVN_DD AS STRING), r'[^0-9]', ''))
+    )),
+    MAX(COALESCE(
+      SAFE_CAST(CAST(RVN_DD AS STRING) AS DATE),
+      SAFE.PARSE_DATE('%Y%m%d', REGEXP_REPLACE(CAST(RVN_DD AS STRING), r'[^0-9]', ''))
+    ))
+  FROM `bigdata-platform-data.scp_7cu`.`SMCDB_TCMC_DSBD_SCP_RVN_d5f9595b_ec1_cntry_AM`
+)
+SELECT
+  model_table,
+  min_business_date,
+  max_business_date,
+  min_business_date <= DATE '2025-01-01'
+    AND max_business_date >= DATE '2026-01-31' AS can_support_january_2026_prior_year,
+  min_business_date <= DATE '2025-12-01'
+    AND max_business_date >= DATE '2026-01-31' AS can_support_january_2026_prior_month
+FROM date_ranges
+ORDER BY model_table;
 
-				VAR _SparkSvgStart = "<svg class='spark' viewBox='0 0 120 42' preserveAspectRatio='none' aria-hidden='true'><line class='spark-guide' x1='0' y1='37' x2='120' y2='37'/><polygon class='spark-area' points='0,42 "
-				VAR _SparkSvgMiddle = " 120,42'/><polyline class='spark-line' points='"
-				VAR _SparkSvgEnd = "'/></svg>"
-				VAR _AttachSparkMarkup = IF ( _AttachUnsupportedContext, "<div class='spark-unavailable'>Unavailable for this filter context</div>", _SparkSvgStart & _AttachSpark & _SparkSvgMiddle & _AttachSpark & _SparkSvgEnd )
-				VAR _Cards =
-					"<section class='metric-grid' aria-label='Primary performance indicators'>" &
-					"<article class='metric-card focus'><div class='metric-head'><p class='metric-label'>Sales volume</p><span class='metric-status'>Primary</span></div><div class='metric-value-row'><strong class='metric-value'>" & _SalesText & "</strong><span class='metric-unit'>units</span></div>" &
-					_SparkSvgStart & _SalesSpark & _SparkSvgMiddle & _SalesSpark & _SparkSvgEnd &
-					"<div class='metric-footer'><div class='comparison'><span>vs prior year</span><strong class='" & _SalesLyClass & "'>" & _SalesLyText & "</strong></div><div class='comparison'><span>of sales plan</span><strong class='" & _SalesPlanClass & "'>" & _SalesPlanText & "</strong></div></div></article>" &
-					"<article class='metric-card'><div class='metric-head'><p class='metric-label'>Raw attach rate</p><span class='metric-status'>Conversion</span></div><div class='metric-value-row'><strong class='metric-value'>" & _AttachText & "</strong><span class='metric-unit'>sales / stays</span></div>" &
-					_AttachSparkMarkup &
-					"<div class='metric-footer'><div class='comparison'><span>vs prior year</span><strong class='" & _AttachLyClass & "'>" & _AttachLyText & "</strong></div><div class='comparison'><span>vs attach plan</span><strong class='" & _AttachPlanClass & "'>" & _AttachPlanText & "</strong></div></div></article>" &
-					"<article class='metric-card'><div class='metric-head'><p class='metric-label'>Gross revenue</p><span class='metric-status'>Model currency</span></div><div class='metric-value-row'><strong class='metric-value'>" & _RevenueText & "</strong><span class='metric-unit'>total</span></div>" &
-					_SparkSvgStart & _RevenueSpark & _SparkSvgMiddle & _RevenueSpark & _SparkSvgEnd &
-					"<div class='metric-footer'><div class='comparison'><span>vs prior year</span><strong class='" & _RevenueLyClass & "'>" & _RevenueLyText & "</strong></div><div class='comparison'><span>of revenue plan</span><strong class='" & _RevenuePlanClass & "'>" & _RevenuePlanText & "</strong></div></div></article>" &
-					"<article class='metric-card'><div class='metric-head'><p class='metric-label'>Active policies</p><span class='metric-status'>Coverage</span></div><div class='metric-value-row'><strong class='metric-value'>" & _ActivePoliciesText & "</strong><span class='metric-unit'>policies</span></div>" &
-					_SparkSvgStart & _PolicySpark & _SparkSvgMiddle & _PolicySpark & _SparkSvgEnd &
-					"<div class='metric-footer'><div class='comparison'><span>vs prior year</span><strong class='" & _ActivePoliciesLyClass & "'>" & _ActivePoliciesLyText & "</strong></div><div class='comparison'><span>plan context</span><strong class='na'>n/a</strong></div></div></article></section>"
+-- ======================================================================
+-- 12. Model Readiness Summary
+-- ======================================================================
 
-				VAR _Signals =
-					"<section class='signal-strip' aria-label='Operating signals'>" &
-					"<article class='signal'><div class='signal-copy'><p class='signal-label'>Active channel partners</p><p class='signal-value'>" & _PartnersText & "</p></div><span class='delta " & _PartnersClass & "'>" & _PartnersChangeText & "</span></article>" &
-					"<article class='signal'><div class='signal-copy'><p class='signal-label'>Active monthly subscribers</p><p class='signal-value'>" & _SubscribersText & "</p></div><span class='delta " & _SubscribersClass & "'>" & _SubscribersDeltaText & "</span></article>" &
-					"<article class='signal'><div class='signal-copy'><p class='signal-label'>Monthly cancellation rate</p><p class='signal-value'>" & _MonthlyCancelText & "</p></div><span class='delta " & _MonthlyCancelClass & "'>" & _MonthlyCancelDeltaText & "</span></article></section>"
-
-				VAR _ChartGrid = "<line class='chart-gridline' x1='48' y1='18' x2='540' y2='18'/><line class='chart-gridline' x1='48' y1='82' x2='540' y2='82'/><line class='chart-gridline' x1='48' y1='146' x2='540' y2='146'/>"
-				VAR _SalesChart =
-					"<article class='chart-card'><div class='chart-head'><div class='chart-copy'><h2 class='chart-title'>Sales trend</h2><p class='chart-subtitle'>Analysis Year monthly units, CY compared with LY</p></div><div class='legend'><span><i></i>CY</span><span><i class='ly'></i>LY</span></div></div>" &
-					IF (
-						_SalesCount = 0,
-						"<div class='no-data'>No sales data in the selected context</div>",
-						"<svg class='line-chart' viewBox='0 0 560 178' preserveAspectRatio='none' role='img' aria-label='Sales trend by month'>" & _ChartGrid &
-						"<text class='value-label' x='2' y='21'>" & _SalesMaxText & "</text><text class='value-label' x='2' y='85'>" & _SalesMidText & "</text><text class='value-label' x='2' y='149'>" & _SalesMinText & "</text>" &
-						_SalesLabels & IF ( _SalesLyPath = "", "", "<polyline class='series-line ly' points='" & _SalesLyPath & "'/>") & IF ( _SalesCyPath = "", "", "<polyline class='series-line' points='" & _SalesCyPath & "'/>") & _SalesDots & "</svg>"
-					) & "</article>"
-				VAR _AttachChart =
-					"<article class='chart-card'><div class='chart-head'><div class='chart-copy'><h2 class='chart-title'>Attach rate trend</h2><p class='chart-subtitle'>Analysis Year rate, CY compared with LY</p></div><div class='legend'><span><i></i>CY</span><span><i class='ly'></i>LY</span></div></div>" &
-					IF (
-						_AttachUnsupportedContext,
-						"<div class='no-data'>Attach trend unavailable for the selected service, payment, partner, or device-group filter</div>",
-						IF (
-							_AttachCount = 0,
-							"<div class='no-data'>No attach-rate data in the selected context</div>",
-						"<svg class='line-chart' viewBox='0 0 560 178' preserveAspectRatio='none' role='img' aria-label='Attach rate trend by month'>" & _ChartGrid &
-						"<text class='value-label' x='2' y='21'>" & FORMAT ( _AttachMax, "0.0%" ) & "</text><text class='value-label' x='2' y='85'>" & FORMAT ( DIVIDE ( _AttachMax + _AttachMin, 2 ), "0.0%" ) & "</text><text class='value-label' x='2' y='149'>" & FORMAT ( _AttachMin, "0.0%" ) & "</text>" &
-						_AttachLabels & IF ( _AttachLyPath = "", "", "<polyline class='series-line ly' points='" & _AttachLyPath & "'/>") & IF ( _AttachCyPath = "", "", "<polyline class='series-line' points='" & _AttachCyPath & "'/>") & _AttachDots & "</svg>"
-						)
-					) & "</article>"
-				VAR _NetChart =
-					"<article class='chart-card'><div class='chart-head'><div class='chart-copy'><h2 class='chart-title'>Net revenue trend</h2><p class='chart-subtitle'>Analysis Year program margin, CY compared with LY</p></div><div class='legend'><span><i></i>CY</span><span><i class='ly'></i>LY</span></div></div>" &
-					IF (
-						_NetCount = 0,
-						"<div class='no-data'>No net-revenue data in the selected context</div>",
-						"<svg class='line-chart' viewBox='0 0 560 178' preserveAspectRatio='none' role='img' aria-label='Net revenue trend by month'>" & _ChartGrid &
-						"<text class='value-label' x='2' y='21'>" & _NetMaxText & "</text><text class='value-label' x='2' y='85'>" & _NetMidText & "</text><text class='value-label' x='2' y='149'>" & _NetMinText & "</text>" &
-						_NetLabels & IF ( _NetLyPath = "", "", "<polyline class='series-line ly' points='" & _NetLyPath & "'/>") & IF ( _NetCyPath = "", "", "<polyline class='series-line' points='" & _NetCyPath & "'/>") & _NetDots & "</svg>"
-					) & "</article>"
-				VAR _MixChart =
-					"<article class='chart-card'><div class='chart-head'><div class='chart-copy'><h2 class='chart-title'>Channel mix</h2><p class='chart-subtitle'>Share of selected-period sales volume, top five channels</p></div><div class='legend'><span>" & FORMAT ( _ChannelCount, "0" ) & " shown</span></div></div>" &
-					IF (
-						_ChannelCount = 0 || ISBLANK ( _ChannelTotal ),
-						"<div class='no-data'>No channel data in the selected context</div>",
-						"<div class='mix-layout'><div class='donut-wrap'><svg class='donut' viewBox='0 0 140 140' role='img' aria-label='Top five channel mix'><circle class='donut-track' cx='70' cy='70' r='48'/>" & _ChannelSegments & "</svg><div class='donut-total'><strong>" & _ChannelTotalText & "</strong><span>sales units</span></div></div><div class='mix-list'>" & _ChannelRows & "</div></div>"
-					) & "</article>"
-
-				RETURN
-					_Css & _FullPageCss & "<main class='scx' aria-label='Samsung Care Plus Executive Summary dashboard'>" & _Header & _Filters & _Cards & _Signals & "<section class='chart-grid' aria-label='Performance trends and channel mix'>" & _SalesChart & _AttachChart & _NetChart & _MixChart & "</section></main>"
-			displayFolder: Dashboard\HTML
+SELECT *
+FROM UNNEST([
+  STRUCT('FactPolicyDailyAggregate' AS model_table, 'ready_for_task_6' AS readiness, 'January 2026 TUR total sales is the confirmed source-of-truth numerator.' AS note),
+  STRUCT('FactPolicySales', 'diagnostic_until_reconciled', 'Policy rows are required for status/detail analysis, but sales counts must be compared to aggregate SALE_CNT before becoming official.'),
+  STRUCT('FactRevenue', 'pending_live_column_confirmation', 'Revenue formulas are confirmed, but the live BigQuery table was not present in schema.rtf by exact name.'),
+  STRUCT('FactSellout', 'blocked_external_source', 'Sellout is outside BigQuery and must be staged or imported before attach rate can be validated.'),
+  STRUCT('DimChannelAccount', 'mapping_required', 'Policy, revenue, and sellout channel/account labels may not share keys.'),
+  STRUCT('DimDevice', 'raw_mapping_first', 'Device master is unavailable; keep raw device fields and approve mappings separately.'),
+  STRUCT('PriorYearMeasures', 'coverage_check_required', 'Publish only after Section 11 confirms comparable history.')
+])
+ORDER BY model_table;
