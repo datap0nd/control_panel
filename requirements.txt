@@ -1,74 +1,250 @@
-# Run this in PowerShell on the work PC.
-# Open PowerShell from the data_governance repository root before pasting it.
+# Run this entire block in PowerShell on the work PC.
+# It can be run from any folder. It creates pbi_query_test.py in that folder.
 
-if (-not (Test-Path ".\app\scanner\pbi_auth.py")) {
-    throw "Open PowerShell in the data_governance repository root, then run this command again."
-}
+$ErrorActionPreference = "Stop"
 
-$ReportName = Read-Host "Enter the report name exactly as shown in Data Governance"
-$Python = if (Test-Path ".\venv\Scripts\python.exe") {
-    ".\venv\Scripts\python.exe"
-} else {
-    "python"
-}
+python -m pip install msal msal-extensions requests truststore
 
 @'
+from __future__ import annotations
+
 import json
+import os
+import re
 import sys
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
-import httpx
-
-from app.database import get_db
-from app.scanner.pbi_auth import get_access_token, resolve_proxy
-
-
-report_name = sys.argv[1]
-
-with get_db() as db:
-    report = db.execute(
-        """
-        SELECT name, pbi_dataset_id
-        FROM reports
-        WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))
-          AND pbi_dataset_id IS NOT NULL
-        LIMIT 1
-        """,
-        (report_name,),
-    ).fetchone()
-
-if report is None:
-    raise SystemExit(
-        "No synced report with that name was found. Run the Power BI refresh sync first."
-    )
-
-dataset_id = report["pbi_dataset_id"]
-auth = get_access_token()
-url = f"https://api.powerbi.com/v1.0/myorg/datasets/{dataset_id}/executeQueries"
-payload = {
-    "queries": [{"query": 'EVALUATE ROW("QueryAccess", "OK")'}],
-    "serializerSettings": {"includeNulls": True},
-}
-
-with httpx.Client(timeout=120, proxy=resolve_proxy(url)) as client:
-    response = client.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {auth['access_token']}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-    )
-
-print(f"HTTP {response.status_code}")
 try:
-    print(json.dumps(response.json(), indent=2))
-except ValueError:
-    print(response.text)
+    import truststore
 
-if response.status_code == 403:
-    raise SystemExit(
-        "Authentication worked, but Execute Queries is disabled or you lack Build permission."
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
+import msal
+import requests
+from msal_extensions import PersistedTokenCache, build_encrypted_persistence
+
+
+POWER_BI_API = "https://api.powerbi.com/v1.0/myorg"
+POWER_BI_SCOPE = ["https://analysis.windows.net/powerbi/api/.default"]
+AUTHORITY = "https://login.microsoftonline.com/organizations"
+
+# Microsoft Azure CLI public-client application ID for device-code sign-in.
+CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
+
+UUID_PATTERN = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def stop(message: str, exit_code: int = 1) -> None:
+    print(f"\nERROR: {message}")
+    raise SystemExit(exit_code)
+
+
+def parse_report_url(raw_url: str) -> tuple[str, str]:
+    url = raw_url.strip().strip('"').strip("'")
+    parsed = urlparse(url)
+
+    if parsed.netloc.lower() != "app.powerbi.com":
+        stop("Use a report URL copied from app.powerbi.com.")
+
+    query = {
+        key.lower(): values[0]
+        for key, values in parse_qs(parsed.query).items()
+        if values
+    }
+    group_id = query.get("groupid")
+    report_id = query.get("reportid")
+
+    parts = [part for part in parsed.path.split("/") if part]
+    lower_parts = [part.lower() for part in parts]
+
+    if "groups" in lower_parts:
+        index = lower_parts.index("groups")
+        if index + 1 < len(parts):
+            group_id = group_id or parts[index + 1]
+
+    if "reports" in lower_parts:
+        index = lower_parts.index("reports")
+        if index + 1 < len(parts):
+            report_id = report_id or parts[index + 1]
+
+    if not report_id or not UUID_PATTERN.fullmatch(report_id):
+        stop(
+            "The URL does not expose a report ID. Open the report directly in "
+            "the Power BI workspace, then copy that browser URL."
+        )
+
+    if not group_id:
+        stop(
+            "The URL does not expose a workspace ID. Open the report directly "
+            "in the Power BI workspace, then copy that browser URL."
+        )
+
+    if group_id.lower() != "me" and not UUID_PATTERN.fullmatch(group_id):
+        stop(f"The workspace value in the URL is not valid: {group_id}")
+
+    return group_id, report_id
+
+
+def build_token_cache() -> PersistedTokenCache:
+    base = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
+    cache_folder = base / "PowerBIQueryTest"
+    cache_folder.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_folder / "msal_cache.bin"
+
+    try:
+        persistence = build_encrypted_persistence(str(cache_path))
+    except Exception as exc:
+        stop(
+            "Windows could not create the encrypted MSAL token cache. "
+            f"Details: {exc}"
+        )
+
+    return PersistedTokenCache(persistence)
+
+
+def get_access_token() -> str:
+    app = msal.PublicClientApplication(
+        client_id=CLIENT_ID,
+        authority=AUTHORITY,
+        token_cache=build_token_cache(),
     )
 
-response.raise_for_status()
-'@ | & $Python - "$ReportName"
+    result = None
+    accounts = app.get_accounts()
+    if accounts:
+        result = app.acquire_token_silent(POWER_BI_SCOPE, account=accounts[0])
+
+    if not result:
+        flow = app.initiate_device_flow(scopes=POWER_BI_SCOPE)
+        if "user_code" not in flow:
+            stop(f"Microsoft did not start device sign-in: {json.dumps(flow)}")
+
+        print("\nMicrosoft sign-in is required once. Follow this instruction:")
+        print(flow["message"])
+        result = app.acquire_token_by_device_flow(flow)
+
+    access_token = result.get("access_token") if result else None
+    if not access_token:
+        stop(
+            "Microsoft authentication failed. "
+            f"{result.get('error_description', result) if result else 'No response'}"
+        )
+
+    return access_token
+
+
+def response_details(response: requests.Response) -> str:
+    try:
+        return json.dumps(response.json(), indent=2, ensure_ascii=False)
+    except ValueError:
+        return response.text.strip() or "No response body"
+
+
+def require_success(
+    response: requests.Response,
+    operation: str,
+    forbidden_hint: str,
+) -> dict:
+    if response.ok:
+        return response.json()
+
+    details = response_details(response)
+    if response.status_code == 401:
+        stop(
+            f"{operation} returned HTTP 401. The token was not accepted by "
+            f"Power BI.\n\n{details}"
+        )
+    if response.status_code == 403:
+        stop(f"{operation} returned HTTP 403. {forbidden_hint}\n\n{details}")
+    if response.status_code == 404:
+        stop(
+            f"{operation} returned HTTP 404. Check that the copied URL is the "
+            f"workspace report URL and that your account can open it.\n\n{details}"
+        )
+
+    stop(f"{operation} returned HTTP {response.status_code}.\n\n{details}")
+
+
+def main() -> None:
+    print("Standalone Power BI REST API query test")
+    print("This script calls the Power BI REST API directly.")
+
+    report_url = input("\nPaste the Power BI report URL: ")
+    group_id, report_id = parse_report_url(report_url)
+    token = get_access_token()
+
+    session = requests.Session()
+    session.headers.update(
+        {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+    )
+
+    if group_id.lower() == "me":
+        report_endpoint = f"{POWER_BI_API}/reports/{report_id}"
+    else:
+        report_endpoint = (
+            f"{POWER_BI_API}/groups/{group_id}/reports/{report_id}"
+        )
+
+    report_response = session.get(report_endpoint, timeout=60)
+    report = require_success(
+        report_response,
+        "Get report",
+        "The signed-in account needs access to the report and delegated "
+        "Report.Read.All permission.",
+    )
+
+    dataset_id = report.get("datasetId")
+    if not dataset_id:
+        stop(
+            "Power BI returned the report but no semantic model ID. This can "
+            "happen for paginated reports or unsupported report types."
+        )
+
+    print(f"\nReport: {report.get('name', report_id)}")
+    print(f"Workspace ID: {group_id}")
+    print(f"Semantic model ID: {dataset_id}")
+
+    if group_id.lower() == "me":
+        query_endpoint = f"{POWER_BI_API}/datasets/{dataset_id}/executeQueries"
+    else:
+        query_endpoint = (
+            f"{POWER_BI_API}/groups/{group_id}/datasets/"
+            f"{dataset_id}/executeQueries"
+        )
+
+    payload = {
+        "queries": [{"query": 'EVALUATE ROW("QueryAccess", "OK")'}],
+        "serializerSettings": {"includeNulls": True},
+    }
+    query_response = session.post(query_endpoint, json=payload, timeout=120)
+    result = require_success(
+        query_response,
+        "Execute query",
+        "The signed-in account needs Read and Build permission on the semantic "
+        "model, delegated Dataset.Read.All permission, and the tenant setting "
+        "for the Execute Queries REST API must be enabled.",
+    )
+
+    print("\nSUCCESS: the Power BI API executed a DAX query.")
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except requests.RequestException as exc:
+        stop(f"Network request failed: {exc}")
+    except KeyboardInterrupt:
+        stop("Cancelled by user.", 130)
+'@ | Set-Content -Encoding UTF8 .\pbi_query_test.py
+
+python .\pbi_query_test.py
