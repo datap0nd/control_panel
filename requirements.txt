@@ -226,3 +226,75 @@ Invoke-RestMethod http://localhost:8000/api/scanner/pbi-sync/status |
 
 EVALUATE
 ROW("QueryAccess", "OK")
+
+if (-not (Test-Path ".\app\scanner\pbi_auth.py")) {
+    throw "Open PowerShell in the data_governance repository root, then run this command again."
+}
+
+$ReportName = Read-Host "Enter the report name exactly as shown in Data Governance"
+$Python = if (Test-Path ".\venv\Scripts\python.exe") {
+    ".\venv\Scripts\python.exe"
+} else {
+    "python"
+}
+
+@'
+import json
+import sys
+
+import httpx
+
+from app.database import get_db
+from app.scanner.pbi_auth import get_access_token, resolve_proxy
+
+
+report_name = sys.argv[1]
+
+with get_db() as db:
+    report = db.execute(
+        """
+        SELECT name, pbi_dataset_id
+        FROM reports
+        WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))
+          AND pbi_dataset_id IS NOT NULL
+        LIMIT 1
+        """,
+        (report_name,),
+    ).fetchone()
+
+if report is None:
+    raise SystemExit(
+        "No synced report with that name was found. Run the Power BI refresh sync first."
+    )
+
+dataset_id = report["pbi_dataset_id"]
+auth = get_access_token()
+url = f"https://api.powerbi.com/v1.0/myorg/datasets/{dataset_id}/executeQueries"
+payload = {
+    "queries": [{"query": 'EVALUATE ROW("QueryAccess", "OK")'}],
+    "serializerSettings": {"includeNulls": True},
+}
+
+with httpx.Client(timeout=120, proxy=resolve_proxy(url)) as client:
+    response = client.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {auth['access_token']}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+    )
+
+print(f"HTTP {response.status_code}")
+try:
+    print(json.dumps(response.json(), indent=2))
+except ValueError:
+    print(response.text)
+
+if response.status_code == 403:
+    raise SystemExit(
+        "Authentication worked, but Execute Queries is disabled or you lack Build permission."
+    )
+
+response.raise_for_status()
+'@ | & $Python - "$ReportName"
