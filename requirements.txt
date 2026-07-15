@@ -223,3 +223,6 @@ createOrReplace
 
 Invoke-RestMethod http://localhost:8000/api/scanner/pbi-sync/status |
     Select-Object auth_mode, auth
+
+EVALUATE
+ROW("QueryAccess", "OK")
