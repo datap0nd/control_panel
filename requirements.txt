@@ -1,38 +1,43 @@
-# Run this entire block in PowerShell on the work PC.
-# It can be run from any folder. It creates pbi_query_test.py in that folder.
+# Stop the previous script with Ctrl+C.
+# Open PowerShell in the folder that contains pbi_token.json.
+# Paste this entire block. It creates and runs pbi_query_test.py there.
 
 $ErrorActionPreference = "Stop"
-
-python -m pip install msal msal-extensions requests truststore
 
 @'
 from __future__ import annotations
 
+import base64
+import ctypes
+import ctypes.wintypes
 import json
 import os
+import platform
 import re
-import sys
+import subprocess
+import time
+from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 try:
     import truststore
 
     truststore.inject_into_ssl()
-except ImportError:
+except Exception:
     pass
 
-import msal
 import requests
-from msal_extensions import PersistedTokenCache, build_encrypted_persistence
 
 
 POWER_BI_API = "https://api.powerbi.com/v1.0/myorg"
-POWER_BI_SCOPE = ["https://analysis.windows.net/powerbi/api/.default"]
-AUTHORITY = "https://login.microsoftonline.com/organizations"
-
-# Microsoft Azure CLI public-client application ID for device-code sign-in.
-CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
+LOGIN_BASE = "https://login.microsoftonline.com"
+DEFAULT_SCOPE = (
+    "https://analysis.windows.net/powerbi/api/.default "
+    "offline_access openid profile"
+)
+DEFAULT_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
+REFRESH_SKEW_SECONDS = 300
 
 UUID_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -41,14 +46,229 @@ UUID_PATTERN = re.compile(
 
 
 def stop(message: str, exit_code: int = 1) -> None:
-    print(f"\nERROR: {message}")
+    print(f"\nERROR: {message}", flush=True)
     raise SystemExit(exit_code)
+
+
+def cache_path() -> Path:
+    configured = (
+        os.environ.get("PBI_TOKEN_CACHE")
+        or os.environ.get("DG_PBI_TOKEN_CACHE")
+        or "pbi_token.json"
+    )
+    path = Path(configured).expanduser().resolve()
+    if not path.is_file():
+        stop(
+            f"Cached token file not found at {path}. Run this block from the "
+            "repository folder containing pbi_token.json, or set "
+            "PBI_TOKEN_CACHE to its full path."
+        )
+    return path
+
+
+def dpapi(data: bytes, protect: bool) -> bytes:
+    if platform.system() != "Windows":
+        stop("The cached token is Windows DPAPI encrypted. Run this on the work PC.")
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [
+            ("cbData", ctypes.wintypes.DWORD),
+            ("pbData", ctypes.POINTER(ctypes.c_char)),
+        ]
+
+    buffer = ctypes.create_string_buffer(data, len(data))
+    blob_in = DATA_BLOB(
+        len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_char))
+    )
+    blob_out = DATA_BLOB()
+    flags = 0x01
+    function = (
+        ctypes.windll.crypt32.CryptProtectData
+        if protect
+        else ctypes.windll.crypt32.CryptUnprotectData
+    )
+
+    if not function(
+        ctypes.byref(blob_in), None, None, None, None, flags, ctypes.byref(blob_out)
+    ):
+        operation = "encrypt" if protect else "decrypt"
+        stop(
+            f"Windows DPAPI could not {operation} the cached token. The cache "
+            "must be used by the same Windows account that created it."
+        )
+
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+
+
+def load_cached_record(path: Path) -> tuple[dict, str]:
+    print(f"Reading cached authentication from: {path}", flush=True)
+    try:
+        wrapper = json.loads(path.read_text(encoding="utf-8"))
+        cache_format = wrapper.get("format") or "plain"
+        payload = base64.b64decode(wrapper["data"])
+        if cache_format == "dpapi":
+            payload = dpapi(payload, False)
+        record = json.loads(payload.decode("utf-8"))
+    except SystemExit:
+        raise
+    except Exception as exc:
+        stop(f"Could not read the cached authentication record: {exc}")
+
+    if not record.get("refresh_token"):
+        stop("The cached record does not contain a refresh token.")
+
+    return record, cache_format
+
+
+def save_cached_record(path: Path, record: dict, cache_format: str) -> None:
+    raw = json.dumps(record).encode("utf-8")
+    if cache_format == "dpapi":
+        raw = dpapi(raw, True)
+    wrapper = {
+        "format": cache_format,
+        "data": base64.b64encode(raw).decode("ascii"),
+    }
+
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(wrapper), encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def normalize_proxy(value: str) -> str:
+    value = value.strip().rstrip("/")
+    if value and "://" not in value:
+        value = "http://" + value
+    return value
+
+
+def resolve_proxy(target_url: str) -> str | None:
+    for name in (
+        "PBI_PROXY",
+        "DG_PBI_PROXY",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+    ):
+        value = os.environ.get(name)
+        if value:
+            proxy = normalize_proxy(value)
+            print(f"Using proxy from {name} for {urlsplit(target_url).netloc}.", flush=True)
+            return proxy
+
+    if platform.system() != "Windows":
+        return None
+
+    print(
+        f"Checking the Windows proxy configuration for {urlsplit(target_url).netloc}...",
+        flush=True,
+    )
+    script = (
+        "$ErrorActionPreference='SilentlyContinue';"
+        f"$u=[Uri]'{target_url}';"
+        "$p=[System.Net.WebRequest]::GetSystemWebProxy().GetProxy($u);"
+        "if ($p -and $p.AbsoluteUri -ne $u.AbsoluteUri) "
+        "{ Write-Output $p.AbsoluteUri }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        lines = [
+            line.strip()
+            for line in (result.stdout or "").splitlines()
+            if line.strip()
+        ]
+        return normalize_proxy(lines[-1]) if lines else None
+    except subprocess.TimeoutExpired:
+        stop("Windows proxy discovery exceeded 20 seconds.")
+    except Exception as exc:
+        stop(f"Windows proxy discovery failed: {exc}")
+
+
+def proxy_mapping(proxy: str | None) -> dict[str, str] | None:
+    if not proxy:
+        return None
+    return {"http": proxy, "https": proxy}
+
+
+def decode_jwt_claims(token: str) -> dict:
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
+    except Exception:
+        return {}
+
+
+def cached_access_token(path: Path) -> tuple[str, str]:
+    record, cache_format = load_cached_record(path)
+    account = record.get("account") or "saved account"
+    print(f"Cached account: {account}", flush=True)
+
+    expires_at = float(record.get("access_token_expires_at") or 0)
+    if record.get("access_token") and expires_at - time.time() > REFRESH_SKEW_SECONDS:
+        print("Using the existing cached Power BI access token.", flush=True)
+        return record["access_token"], account
+
+    print("Cached access token expired. Refreshing it silently...", flush=True)
+    tenant = record.get("tenant_id") or "organizations"
+    token_url = f"{LOGIN_BASE}/{tenant}/oauth2/v2.0/token"
+    proxy = resolve_proxy(token_url)
+
+    try:
+        response = requests.post(
+            token_url,
+            data={
+                "grant_type": "refresh_token",
+                "client_id": record.get("client_id") or DEFAULT_CLIENT_ID,
+                "refresh_token": record["refresh_token"],
+                "scope": record.get("scope") or DEFAULT_SCOPE,
+            },
+            proxies=proxy_mapping(proxy),
+            timeout=(10, 30),
+        )
+    except requests.RequestException as exc:
+        stop(f"Microsoft token refresh could not connect: {exc}")
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+
+    if response.status_code >= 400 or "access_token" not in body:
+        error = body.get("error") or f"HTTP {response.status_code}"
+        description_lines = (
+            body.get("error_description") or response.text[:500] or "No details returned"
+        ).splitlines()
+        description = description_lines[0]
+        stop(f"Cached token refresh failed: {error}: {description}")
+
+    now = time.time()
+    record["access_token"] = body["access_token"]
+    record["refresh_token"] = body.get("refresh_token") or record["refresh_token"]
+    record["access_token_expires_at"] = now + float(body.get("expires_in") or 0)
+    record["last_refresh_at"] = datetime.now(timezone.utc).isoformat()
+    record["last_error"] = None
+
+    claims = decode_jwt_claims(body["access_token"])
+    if claims.get("tid"):
+        record["tenant_id"] = claims["tid"]
+
+    save_cached_record(path, record, cache_format)
+    print("Cached token refreshed and the rotated token was saved.", flush=True)
+    return body["access_token"], account
 
 
 def parse_report_url(raw_url: str) -> tuple[str, str]:
     url = raw_url.strip().strip('"').strip("'")
     parsed = urlparse(url)
-
     if parsed.netloc.lower() != "app.powerbi.com":
         stop("Use a report URL copied from app.powerbi.com.")
 
@@ -67,76 +287,19 @@ def parse_report_url(raw_url: str) -> tuple[str, str]:
         index = lower_parts.index("groups")
         if index + 1 < len(parts):
             group_id = group_id or parts[index + 1]
-
     if "reports" in lower_parts:
         index = lower_parts.index("reports")
         if index + 1 < len(parts):
             report_id = report_id or parts[index + 1]
 
     if not report_id or not UUID_PATTERN.fullmatch(report_id):
-        stop(
-            "The URL does not expose a report ID. Open the report directly in "
-            "the Power BI workspace, then copy that browser URL."
-        )
-
+        stop("The URL does not expose a valid report ID.")
     if not group_id:
-        stop(
-            "The URL does not expose a workspace ID. Open the report directly "
-            "in the Power BI workspace, then copy that browser URL."
-        )
-
+        stop("The URL does not expose a workspace ID.")
     if group_id.lower() != "me" and not UUID_PATTERN.fullmatch(group_id):
         stop(f"The workspace value in the URL is not valid: {group_id}")
 
     return group_id, report_id
-
-
-def build_token_cache() -> PersistedTokenCache:
-    base = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
-    cache_folder = base / "PowerBIQueryTest"
-    cache_folder.mkdir(parents=True, exist_ok=True)
-    cache_path = cache_folder / "msal_cache.bin"
-
-    try:
-        persistence = build_encrypted_persistence(str(cache_path))
-    except Exception as exc:
-        stop(
-            "Windows could not create the encrypted MSAL token cache. "
-            f"Details: {exc}"
-        )
-
-    return PersistedTokenCache(persistence)
-
-
-def get_access_token() -> str:
-    app = msal.PublicClientApplication(
-        client_id=CLIENT_ID,
-        authority=AUTHORITY,
-        token_cache=build_token_cache(),
-    )
-
-    result = None
-    accounts = app.get_accounts()
-    if accounts:
-        result = app.acquire_token_silent(POWER_BI_SCOPE, account=accounts[0])
-
-    if not result:
-        flow = app.initiate_device_flow(scopes=POWER_BI_SCOPE)
-        if "user_code" not in flow:
-            stop(f"Microsoft did not start device sign-in: {json.dumps(flow)}")
-
-        print("\nMicrosoft sign-in is required once. Follow this instruction:")
-        print(flow["message"])
-        result = app.acquire_token_by_device_flow(flow)
-
-    access_token = result.get("access_token") if result else None
-    if not access_token:
-        stop(
-            "Microsoft authentication failed. "
-            f"{result.get('error_description', result) if result else 'No response'}"
-        )
-
-    return access_token
 
 
 def response_details(response: requests.Response) -> str:
@@ -156,30 +319,29 @@ def require_success(
 
     details = response_details(response)
     if response.status_code == 401:
-        stop(
-            f"{operation} returned HTTP 401. The token was not accepted by "
-            f"Power BI.\n\n{details}"
-        )
+        stop(f"{operation} returned HTTP 401. The cached token was rejected.\n\n{details}")
     if response.status_code == 403:
         stop(f"{operation} returned HTTP 403. {forbidden_hint}\n\n{details}")
     if response.status_code == 404:
         stop(
-            f"{operation} returned HTTP 404. Check that the copied URL is the "
-            f"workspace report URL and that your account can open it.\n\n{details}"
+            f"{operation} returned HTTP 404. Check that this is the workspace "
+            f"report URL and that the cached account can open it.\n\n{details}"
         )
-
     stop(f"{operation} returned HTTP {response.status_code}.\n\n{details}")
 
 
 def main() -> None:
-    print("Standalone Power BI REST API query test")
-    print("This script calls the Power BI REST API directly.")
+    print("Standalone Power BI cached-token API test", flush=True)
+    token_path = cache_path()
+    token, account = cached_access_token(token_path)
 
     report_url = input("\nPaste the Power BI report URL: ")
     group_id, report_id = parse_report_url(report_url)
-    token = get_access_token()
 
+    proxy = resolve_proxy(POWER_BI_API)
     session = requests.Session()
+    if proxy:
+        session.proxies.update(proxy_mapping(proxy) or {})
     session.headers.update(
         {
             "Authorization": f"Bearer {token}",
@@ -190,28 +352,27 @@ def main() -> None:
     if group_id.lower() == "me":
         report_endpoint = f"{POWER_BI_API}/reports/{report_id}"
     else:
-        report_endpoint = (
-            f"{POWER_BI_API}/groups/{group_id}/reports/{report_id}"
-        )
+        report_endpoint = f"{POWER_BI_API}/groups/{group_id}/reports/{report_id}"
 
-    report_response = session.get(report_endpoint, timeout=60)
+    print("Calling the Power BI report API...", flush=True)
+    try:
+        report_response = session.get(report_endpoint, timeout=(10, 60))
+    except requests.RequestException as exc:
+        stop(f"Power BI report request could not connect: {exc}")
+
     report = require_success(
         report_response,
         "Get report",
-        "The signed-in account needs access to the report and delegated "
-        "Report.Read.All permission.",
+        "The cached account needs access to the report and Report.Read.All.",
     )
 
     dataset_id = report.get("datasetId")
     if not dataset_id:
-        stop(
-            "Power BI returned the report but no semantic model ID. This can "
-            "happen for paginated reports or unsupported report types."
-        )
+        stop("Power BI returned the report but no semantic model ID.")
 
-    print(f"\nReport: {report.get('name', report_id)}")
-    print(f"Workspace ID: {group_id}")
-    print(f"Semantic model ID: {dataset_id}")
+    print(f"Authenticated as: {account}", flush=True)
+    print(f"Report: {report.get('name', report_id)}", flush=True)
+    print(f"Semantic model ID: {dataset_id}", flush=True)
 
     if group_id.lower() == "me":
         query_endpoint = f"{POWER_BI_API}/datasets/{dataset_id}/executeQueries"
@@ -225,24 +386,31 @@ def main() -> None:
         "queries": [{"query": 'EVALUATE ROW("QueryAccess", "OK")'}],
         "serializerSettings": {"includeNulls": True},
     }
-    query_response = session.post(query_endpoint, json=payload, timeout=120)
+
+    print("Executing the DAX test through the Power BI API...", flush=True)
+    try:
+        query_response = session.post(
+            query_endpoint,
+            json=payload,
+            timeout=(10, 120),
+        )
+    except requests.RequestException as exc:
+        stop(f"Power BI query request could not connect: {exc}")
+
     result = require_success(
         query_response,
         "Execute query",
-        "The signed-in account needs Read and Build permission on the semantic "
-        "model, delegated Dataset.Read.All permission, and the tenant setting "
-        "for the Execute Queries REST API must be enabled.",
+        "The cached account needs Read and Build permission on the semantic "
+        "model, Dataset.Read.All, and the tenant Execute Queries setting enabled.",
     )
 
-    print("\nSUCCESS: the Power BI API executed a DAX query.")
+    print("\nSUCCESS: the cached account executed a DAX query through Power BI.")
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
     try:
         main()
-    except requests.RequestException as exc:
-        stop(f"Network request failed: {exc}")
     except KeyboardInterrupt:
         stop("Cancelled by user.", 130)
 '@ | Set-Content -Encoding UTF8 .\pbi_query_test.py
