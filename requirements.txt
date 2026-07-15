@@ -92,9 +92,9 @@ createOrReplace
 					    FileName = "aggregated_policy.csv",
 					    CandidatePaths = {
 					        DataPath & FileName,
-					        "C:\Users\r.cunha\Documents\Home\Projects\care+\Data Sources\" & FileName,
-					        "//Mac/Home/Documents/care/powerbi/data_sources/" & FileName,
-					        "Y:/Documents/care/powerbi/data_sources/" & FileName
+					        "C:\Users\USERNAME\Documents\Projects\REPORT_PROJECT\Data Sources\" & FileName,
+					        "//REMOTE_PC/Shared/REPORT_PROJECT/powerbi/data_sources/" & FileName,
+					        "Y:/Documents/REPORT_PROJECT/powerbi/data_sources/" & FileName
 					    },
 					    CandidateFiles = List.Transform(
 					        CandidatePaths,
@@ -220,3 +220,7 @@ createOrReplace
 	relationship 848f29c4-e7c6-4854-a6c5-b83add9e8459
 		fromColumn: 'Aggregated Policy'.'Country Code'
 		toColumn: 'Subsidiary Master'.'Country ID'
+
+
+Invoke-RestMethod http://localhost:8000/api/scanner/pbi-sync/status |
+    Select-Object auth_mode, auth
