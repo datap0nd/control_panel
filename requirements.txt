@@ -220,3 +220,6 @@ createOrReplace
 	relationship 848f29c4-e7c6-4854-a6c5-b83add9e8459
 		fromColumn: 'Aggregated Policy'.'Country Code'
 		toColumn: 'Subsidiary Master'.'Country ID'
+
+Invoke-RestMethod http://localhost:8000/api/scanner/pbi-sync/status |
+    Select-Object auth_mode, auth
