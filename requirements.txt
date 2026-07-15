@@ -8,6 +8,7 @@ $ErrorActionPreference = "Stop"
 from __future__ import annotations
 
 import base64
+import csv
 import ctypes
 import ctypes.wintypes
 import json
@@ -330,6 +331,85 @@ def require_success(
     stop(f"{operation} returned HTTP {response.status_code}.\n\n{details}")
 
 
+def choose_dax_query() -> tuple[str, str]:
+    print("\nChoose what to extract:")
+    print("1 - Entire semantic-model table by table name")
+    print("2 - Exact custom DAX query from a report visual")
+    choice = input("Selection [1]: ").strip() or "1"
+
+    if choice == "1":
+        table_name = input("Semantic-model table name: ").strip()
+        table_name = table_name.strip("'")
+        if not table_name:
+            stop("A semantic-model table name is required.")
+        escaped_name = table_name.replace("'", "''")
+        return f"EVALUATE\n'{escaped_name}'", table_name
+
+    if choice == "2":
+        dax_path_text = input("DAX file path [query.dax]: ").strip() or "query.dax"
+        dax_path = Path(dax_path_text).expanduser().resolve()
+        if not dax_path.is_file():
+            stop(f"DAX query file not found: {dax_path}")
+        dax_query = dax_path.read_text(encoding="utf-8-sig").strip()
+        if not dax_query:
+            stop(f"DAX query file is empty: {dax_path}")
+        if "EVALUATE" not in dax_query.upper():
+            stop("The DAX file does not contain an EVALUATE statement.")
+        return dax_query, dax_path.stem
+
+    stop("Selection must be 1 or 2.")
+
+
+def rows_from_result(result: dict) -> tuple[list[dict], list[str]]:
+    results = result.get("results") or []
+    if not results:
+        stop(f"Power BI returned no result sets.\n\n{json.dumps(result, indent=2)}")
+
+    warnings = []
+    for result_set in results:
+        if result_set.get("error"):
+            warnings.append(json.dumps(result_set["error"], ensure_ascii=False))
+
+    tables = results[0].get("tables") or []
+    if not tables:
+        stop(f"Power BI returned no result table.\n\n{json.dumps(result, indent=2)}")
+
+    rows = tables[0].get("rows") or []
+    return rows, warnings
+
+
+def write_csv(rows: list[dict], label: str) -> Path | None:
+    output_path = Path.cwd() / "powerbi_extract.csv"
+    if not rows:
+        if output_path.exists():
+            output_path.unlink()
+        print("\nNO ROWS: no CSV was created.", flush=True)
+        return None
+
+    columns = []
+    seen = set()
+    for row in rows:
+        for column in row:
+            if column not in seen:
+                seen.add(column)
+                columns.append(column)
+
+    with output_path.open("w", encoding="utf-8-sig", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"\nSUCCESS: extracted {len(rows):,} rows for {label}.", flush=True)
+    print(f"CSV file: {output_path}", flush=True)
+    if len(rows) >= 100_000 or len(rows) * max(1, len(columns)) >= 1_000_000:
+        print(
+            "WARNING: the result reached the Execute Queries API size limit and "
+            "may be truncated.",
+            flush=True,
+        )
+    return output_path
+
+
 def main() -> None:
     print("Standalone Power BI cached-token API test", flush=True)
     token_path = cache_path()
@@ -374,6 +454,8 @@ def main() -> None:
     print(f"Report: {report.get('name', report_id)}", flush=True)
     print(f"Semantic model ID: {dataset_id}", flush=True)
 
+    dax_query, extract_label = choose_dax_query()
+
     if group_id.lower() == "me":
         query_endpoint = f"{POWER_BI_API}/datasets/{dataset_id}/executeQueries"
     else:
@@ -383,11 +465,11 @@ def main() -> None:
         )
 
     payload = {
-        "queries": [{"query": 'EVALUATE ROW("QueryAccess", "OK")'}],
+        "queries": [{"query": dax_query}],
         "serializerSettings": {"includeNulls": True},
     }
 
-    print("Executing the DAX test through the Power BI API...", flush=True)
+    print("Executing the extraction query through the Power BI API...", flush=True)
     try:
         query_response = session.post(
             query_endpoint,
@@ -404,8 +486,10 @@ def main() -> None:
         "model, Dataset.Read.All, and the tenant Execute Queries setting enabled.",
     )
 
-    print("\nSUCCESS: the cached account executed a DAX query through Power BI.")
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    rows, warnings = rows_from_result(result)
+    for warning in warnings:
+        print(f"WARNING returned by Power BI: {warning}", flush=True)
+    write_csv(rows, extract_label)
 
 
 if __name__ == "__main__":
