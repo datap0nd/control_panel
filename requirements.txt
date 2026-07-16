@@ -1,502 +1,85 @@
-# Stop the previous script with Ctrl+C.
-# Open PowerShell in the folder that contains pbi_token.json.
-# Paste this entire block. It creates and runs pbi_query_test.py there.
-
-$ErrorActionPreference = "Stop"
-
-@'
-from __future__ import annotations
-
-import base64
-import csv
-import ctypes
-import ctypes.wintypes
-import json
-import os
-import platform
-import re
-import subprocess
-import time
-from datetime import datetime, timezone
-from pathlib import Path
-from urllib.parse import parse_qs, urlparse, urlsplit
-
-try:
-    import truststore
-
-    truststore.inject_into_ssl()
-except Exception:
-    pass
-
-import requests
-
-
-POWER_BI_API = "https://api.powerbi.com/v1.0/myorg"
-LOGIN_BASE = "https://login.microsoftonline.com"
-DEFAULT_SCOPE = (
-    "https://analysis.windows.net/powerbi/api/.default "
-    "offline_access openid profile"
-)
-DEFAULT_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
-REFRESH_SKEW_SECONDS = 300
-
-UUID_PATTERN = re.compile(
-    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
-    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-)
-
-
-def stop(message: str, exit_code: int = 1) -> None:
-    print(f"\nERROR: {message}", flush=True)
-    raise SystemExit(exit_code)
-
-
-def cache_path() -> Path:
-    configured = (
-        os.environ.get("PBI_TOKEN_CACHE")
-        or os.environ.get("DG_PBI_TOKEN_CACHE")
-        or "pbi_token.json"
-    )
-    path = Path(configured).expanduser().resolve()
-    if not path.is_file():
-        stop(
-            f"Cached token file not found at {path}. Run this block from the "
-            "repository folder containing pbi_token.json, or set "
-            "PBI_TOKEN_CACHE to its full path."
-        )
-    return path
-
-
-def dpapi(data: bytes, protect: bool) -> bytes:
-    if platform.system() != "Windows":
-        stop("The cached token is Windows DPAPI encrypted. Run this on the work PC.")
-
-    class DATA_BLOB(ctypes.Structure):
-        _fields_ = [
-            ("cbData", ctypes.wintypes.DWORD),
-            ("pbData", ctypes.POINTER(ctypes.c_char)),
-        ]
-
-    buffer = ctypes.create_string_buffer(data, len(data))
-    blob_in = DATA_BLOB(
-        len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_char))
-    )
-    blob_out = DATA_BLOB()
-    flags = 0x01
-    function = (
-        ctypes.windll.crypt32.CryptProtectData
-        if protect
-        else ctypes.windll.crypt32.CryptUnprotectData
-    )
-
-    if not function(
-        ctypes.byref(blob_in), None, None, None, None, flags, ctypes.byref(blob_out)
-    ):
-        operation = "encrypt" if protect else "decrypt"
-        stop(
-            f"Windows DPAPI could not {operation} the cached token. The cache "
-            "must be used by the same Windows account that created it."
-        )
-
-    try:
-        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
-    finally:
-        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
-
-
-def load_cached_record(path: Path) -> tuple[dict, str]:
-    print(f"Reading cached authentication from: {path}", flush=True)
-    try:
-        wrapper = json.loads(path.read_text(encoding="utf-8"))
-        cache_format = wrapper.get("format") or "plain"
-        payload = base64.b64decode(wrapper["data"])
-        if cache_format == "dpapi":
-            payload = dpapi(payload, False)
-        record = json.loads(payload.decode("utf-8"))
-    except SystemExit:
-        raise
-    except Exception as exc:
-        stop(f"Could not read the cached authentication record: {exc}")
-
-    if not record.get("refresh_token"):
-        stop("The cached record does not contain a refresh token.")
-
-    return record, cache_format
-
-
-def save_cached_record(path: Path, record: dict, cache_format: str) -> None:
-    raw = json.dumps(record).encode("utf-8")
-    if cache_format == "dpapi":
-        raw = dpapi(raw, True)
-    wrapper = {
-        "format": cache_format,
-        "data": base64.b64encode(raw).decode("ascii"),
-    }
-
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps(wrapper), encoding="utf-8")
-    os.replace(temporary, path)
-
-
-def normalize_proxy(value: str) -> str:
-    value = value.strip().rstrip("/")
-    if value and "://" not in value:
-        value = "http://" + value
-    return value
-
-
-def resolve_proxy(target_url: str) -> str | None:
-    for name in (
-        "PBI_PROXY",
-        "DG_PBI_PROXY",
-        "HTTPS_PROXY",
-        "https_proxy",
-        "HTTP_PROXY",
-        "http_proxy",
-    ):
-        value = os.environ.get(name)
-        if value:
-            proxy = normalize_proxy(value)
-            print(f"Using proxy from {name} for {urlsplit(target_url).netloc}.", flush=True)
-            return proxy
-
-    if platform.system() != "Windows":
-        return None
-
-    print(
-        f"Checking the Windows proxy configuration for {urlsplit(target_url).netloc}...",
-        flush=True,
-    )
-    script = (
-        "$ErrorActionPreference='SilentlyContinue';"
-        f"$u=[Uri]'{target_url}';"
-        "$p=[System.Net.WebRequest]::GetSystemWebProxy().GetProxy($u);"
-        "if ($p -and $p.AbsoluteUri -ne $u.AbsoluteUri) "
-        "{ Write-Output $p.AbsoluteUri }"
-    )
-    try:
-        result = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        lines = [
-            line.strip()
-            for line in (result.stdout or "").splitlines()
-            if line.strip()
-        ]
-        return normalize_proxy(lines[-1]) if lines else None
-    except subprocess.TimeoutExpired:
-        stop("Windows proxy discovery exceeded 20 seconds.")
-    except Exception as exc:
-        stop(f"Windows proxy discovery failed: {exc}")
-
-
-def proxy_mapping(proxy: str | None) -> dict[str, str] | None:
-    if not proxy:
-        return None
-    return {"http": proxy, "https": proxy}
-
-
-def decode_jwt_claims(token: str) -> dict:
-    try:
-        payload = token.split(".")[1]
-        payload += "=" * (-len(payload) % 4)
-        return json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
-    except Exception:
-        return {}
-
-
-def cached_access_token(path: Path) -> tuple[str, str]:
-    record, cache_format = load_cached_record(path)
-    account = record.get("account") or "saved account"
-    print(f"Cached account: {account}", flush=True)
-
-    expires_at = float(record.get("access_token_expires_at") or 0)
-    if record.get("access_token") and expires_at - time.time() > REFRESH_SKEW_SECONDS:
-        print("Using the existing cached Power BI access token.", flush=True)
-        return record["access_token"], account
-
-    print("Cached access token expired. Refreshing it silently...", flush=True)
-    tenant = record.get("tenant_id") or "organizations"
-    token_url = f"{LOGIN_BASE}/{tenant}/oauth2/v2.0/token"
-    proxy = resolve_proxy(token_url)
-
-    try:
-        response = requests.post(
-            token_url,
-            data={
-                "grant_type": "refresh_token",
-                "client_id": record.get("client_id") or DEFAULT_CLIENT_ID,
-                "refresh_token": record["refresh_token"],
-                "scope": record.get("scope") or DEFAULT_SCOPE,
-            },
-            proxies=proxy_mapping(proxy),
-            timeout=(10, 30),
-        )
-    except requests.RequestException as exc:
-        stop(f"Microsoft token refresh could not connect: {exc}")
-
-    try:
-        body = response.json()
-    except ValueError:
-        body = {}
-
-    if response.status_code >= 400 or "access_token" not in body:
-        error = body.get("error") or f"HTTP {response.status_code}"
-        description_lines = (
-            body.get("error_description") or response.text[:500] or "No details returned"
-        ).splitlines()
-        description = description_lines[0]
-        stop(f"Cached token refresh failed: {error}: {description}")
-
-    now = time.time()
-    record["access_token"] = body["access_token"]
-    record["refresh_token"] = body.get("refresh_token") or record["refresh_token"]
-    record["access_token_expires_at"] = now + float(body.get("expires_in") or 0)
-    record["last_refresh_at"] = datetime.now(timezone.utc).isoformat()
-    record["last_error"] = None
-
-    claims = decode_jwt_claims(body["access_token"])
-    if claims.get("tid"):
-        record["tenant_id"] = claims["tid"]
-
-    save_cached_record(path, record, cache_format)
-    print("Cached token refreshed and the rotated token was saved.", flush=True)
-    return body["access_token"], account
-
-
-def parse_report_url(raw_url: str) -> tuple[str, str]:
-    url = raw_url.strip().strip('"').strip("'")
-    parsed = urlparse(url)
-    if parsed.netloc.lower() != "app.powerbi.com":
-        stop("Use a report URL copied from app.powerbi.com.")
-
-    query = {
-        key.lower(): values[0]
-        for key, values in parse_qs(parsed.query).items()
-        if values
-    }
-    group_id = query.get("groupid")
-    report_id = query.get("reportid")
-
-    parts = [part for part in parsed.path.split("/") if part]
-    lower_parts = [part.lower() for part in parts]
-
-    if "groups" in lower_parts:
-        index = lower_parts.index("groups")
-        if index + 1 < len(parts):
-            group_id = group_id or parts[index + 1]
-    if "reports" in lower_parts:
-        index = lower_parts.index("reports")
-        if index + 1 < len(parts):
-            report_id = report_id or parts[index + 1]
-
-    if not report_id or not UUID_PATTERN.fullmatch(report_id):
-        stop("The URL does not expose a valid report ID.")
-    if not group_id:
-        stop("The URL does not expose a workspace ID.")
-    if group_id.lower() != "me" and not UUID_PATTERN.fullmatch(group_id):
-        stop(f"The workspace value in the URL is not valid: {group_id}")
-
-    return group_id, report_id
-
-
-def response_details(response: requests.Response) -> str:
-    try:
-        return json.dumps(response.json(), indent=2, ensure_ascii=False)
-    except ValueError:
-        return response.text.strip() or "No response body"
-
-
-def require_success(
-    response: requests.Response,
-    operation: str,
-    forbidden_hint: str,
-) -> dict:
-    if response.ok:
-        return response.json()
-
-    details = response_details(response)
-    if response.status_code == 401:
-        stop(f"{operation} returned HTTP 401. The cached token was rejected.\n\n{details}")
-    if response.status_code == 403:
-        stop(f"{operation} returned HTTP 403. {forbidden_hint}\n\n{details}")
-    if response.status_code == 404:
-        stop(
-            f"{operation} returned HTTP 404. Check that this is the workspace "
-            f"report URL and that the cached account can open it.\n\n{details}"
-        )
-    stop(f"{operation} returned HTTP {response.status_code}.\n\n{details}")
-
-
-def choose_dax_query() -> tuple[str, str]:
-    print("\nChoose what to extract:")
-    print("1 - Entire semantic-model table by table name")
-    print("2 - Exact custom DAX query from a report visual")
-    choice = input("Selection [1]: ").strip() or "1"
-
-    if choice == "1":
-        table_name = input("Semantic-model table name: ").strip()
-        table_name = table_name.strip("'")
-        if not table_name:
-            stop("A semantic-model table name is required.")
-        escaped_name = table_name.replace("'", "''")
-        return f"EVALUATE\n'{escaped_name}'", table_name
-
-    if choice == "2":
-        dax_path_text = input("DAX file path [query.dax]: ").strip() or "query.dax"
-        dax_path = Path(dax_path_text).expanduser().resolve()
-        if not dax_path.is_file():
-            stop(f"DAX query file not found: {dax_path}")
-        dax_query = dax_path.read_text(encoding="utf-8-sig").strip()
-        if not dax_query:
-            stop(f"DAX query file is empty: {dax_path}")
-        if "EVALUATE" not in dax_query.upper():
-            stop("The DAX file does not contain an EVALUATE statement.")
-        return dax_query, dax_path.stem
-
-    stop("Selection must be 1 or 2.")
-
-
-def rows_from_result(result: dict) -> tuple[list[dict], list[str]]:
-    results = result.get("results") or []
-    if not results:
-        stop(f"Power BI returned no result sets.\n\n{json.dumps(result, indent=2)}")
-
-    warnings = []
-    for result_set in results:
-        if result_set.get("error"):
-            warnings.append(json.dumps(result_set["error"], ensure_ascii=False))
-
-    tables = results[0].get("tables") or []
-    if not tables:
-        stop(f"Power BI returned no result table.\n\n{json.dumps(result, indent=2)}")
-
-    rows = tables[0].get("rows") or []
-    return rows, warnings
-
-
-def write_csv(rows: list[dict], label: str) -> Path | None:
-    output_path = Path.cwd() / "powerbi_extract.csv"
-    if not rows:
-        if output_path.exists():
-            output_path.unlink()
-        print("\nNO ROWS: no CSV was created.", flush=True)
-        return None
-
-    columns = []
-    seen = set()
-    for row in rows:
-        for column in row:
-            if column not in seen:
-                seen.add(column)
-                columns.append(column)
-
-    with output_path.open("w", encoding="utf-8-sig", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=columns, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
-
-    print(f"\nSUCCESS: extracted {len(rows):,} rows for {label}.", flush=True)
-    print(f"CSV file: {output_path}", flush=True)
-    if len(rows) >= 100_000 or len(rows) * max(1, len(columns)) >= 1_000_000:
-        print(
-            "WARNING: the result reached the Execute Queries API size limit and "
-            "may be truncated.",
-            flush=True,
-        )
-    return output_path
-
-
-def main() -> None:
-    print("Standalone Power BI cached-token API test", flush=True)
-    token_path = cache_path()
-    token, account = cached_access_token(token_path)
-
-    report_url = input("\nPaste the Power BI report URL: ")
-    group_id, report_id = parse_report_url(report_url)
-
-    proxy = resolve_proxy(POWER_BI_API)
-    session = requests.Session()
-    if proxy:
-        session.proxies.update(proxy_mapping(proxy) or {})
-    session.headers.update(
-        {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
-    )
-
-    if group_id.lower() == "me":
-        report_endpoint = f"{POWER_BI_API}/reports/{report_id}"
-    else:
-        report_endpoint = f"{POWER_BI_API}/groups/{group_id}/reports/{report_id}"
-
-    print("Calling the Power BI report API...", flush=True)
-    try:
-        report_response = session.get(report_endpoint, timeout=(10, 60))
-    except requests.RequestException as exc:
-        stop(f"Power BI report request could not connect: {exc}")
-
-    report = require_success(
-        report_response,
-        "Get report",
-        "The cached account needs access to the report and Report.Read.All.",
-    )
-
-    dataset_id = report.get("datasetId")
-    if not dataset_id:
-        stop("Power BI returned the report but no semantic model ID.")
-
-    print(f"Authenticated as: {account}", flush=True)
-    print(f"Report: {report.get('name', report_id)}", flush=True)
-    print(f"Semantic model ID: {dataset_id}", flush=True)
-
-    dax_query, extract_label = choose_dax_query()
-
-    if group_id.lower() == "me":
-        query_endpoint = f"{POWER_BI_API}/datasets/{dataset_id}/executeQueries"
-    else:
-        query_endpoint = (
-            f"{POWER_BI_API}/groups/{group_id}/datasets/"
-            f"{dataset_id}/executeQueries"
-        )
-
-    payload = {
-        "queries": [{"query": dax_query}],
-        "serializerSettings": {"includeNulls": True},
-    }
-
-    print("Executing the extraction query through the Power BI API...", flush=True)
-    try:
-        query_response = session.post(
-            query_endpoint,
-            json=payload,
-            timeout=(10, 120),
-        )
-    except requests.RequestException as exc:
-        stop(f"Power BI query request could not connect: {exc}")
-
-    result = require_success(
-        query_response,
-        "Execute query",
-        "The cached account needs Read and Build permission on the semantic "
-        "model, Dataset.Read.All, and the tenant Execute Queries setting enabled.",
-    )
-
-    rows, warnings = rows_from_result(result)
-    for warning in warnings:
-        print(f"WARNING returned by Power BI: {warning}", flush=True)
-    write_csv(rows, extract_label)
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        stop("Cancelled by user.", 130)
-'@ | Set-Content -Encoding UTF8 .\pbi_query_test.py
-
-python .\pbi_query_test.py
+Subject: New automated report alert capability now available
+
+Hi team,
+
+The new Recurrences feature is now live in [INTERNAL TOOL] under Tools > Recurrences.
+
+This gives us a controlled way to create scheduled alerts from table or matrix visuals in [BI PLATFORM] and notify users when the returned data meets defined conditions. The main use case is replacing repetitive manual report checks with scheduled, traceable notifications.
+
+What the feature does
+
+- Connects an alert to a specific report, page, and table or matrix visual.
+- Reads the current summarized data behind that saved visual.
+- Applies optional row-level rules, such as sending only rows where a value exceeds a threshold.
+- Can send all matching rows to one recipient list, or split the results into subgroups and send a separate email for each subgroup.
+- Formats the returned rows as an HTML table and includes a direct link to the report.
+- Supports daily, weekday, weekly, and monthly schedules.
+- Records each run, including its status, row counts, email count, and failure reason.
+- Sends nothing when there are no matching rows.
+
+Authentication
+
+The feature reuses the work account already connected through the [INTERNAL TOOL] scanner. It does not require us to paste access tokens into scripts or configure a separate login for every alert.
+
+The initial account connection creates a delegated authentication cache on the machine running [INTERNAL TOOL]. The application requests an access token from that cache and silently renews it when Microsoft authentication permits. The token remains inside the application process and is never included in the alert configuration or email.
+
+This means the connected account must already have access to the relevant workspace, report, and semantic model. If the cached session expires or requires interactive authentication, the scanner will show that the account must be reconnected.
+
+How the [BI PLATFORM] APIs are used
+
+The implementation uses supported [BI PLATFORM] interfaces rather than automating clicks in the report:
+
+- The REST API lists the reports available in the configured workspace.
+- The REST API retrieves the stable technical page identifiers for the selected report.
+- Before every alert run, the REST API checks the semantic model's latest refresh attempt. The alert proceeds only when the latest status is Completed.
+- The official embedded client identifies the exact saved visual and first requests its summarized export data.
+- If the visual export API cannot run the visual's data query, [INTERNAL TOOL] reads the selected visual's current field bindings and filters, generates the equivalent query, and uses the semantic-model Execute Queries REST endpoint as a fallback.
+
+The fallback requires the connected account to have Read and Build access to the semantic model. The tenant setting that permits the Execute Queries REST API must also be enabled. If those permissions are unavailable, the alert fails closed and sends no user data.
+
+How to create an alert
+
+1. Open [INTERNAL TOOL] and go to Tools > Recurrences.
+2. Select Create new.
+3. Choose the report from the configured workspace.
+4. Select the report page.
+5. Load the available visuals and choose the required table or matrix.
+6. Fetch the preview and confirm that the expected columns and rows are returned.
+7. Choose the delivery method:
+   - Single email sends all eligible rows to one recipient list.
+   - Subgroups split the rows using a selected column. Each subgroup can have its own display name and recipients.
+8. Add row rules if required. Rules are optional. Multiple rules are evaluated together, and only matching rows are included.
+9. Confirm the alert owner. It defaults to the owner of the selected report.
+10. Confirm that the owner has a valid email in Management > Create > People.
+11. Set the email subject and schedule.
+12. Save the recurrence.
+13. Use Create drafts to test the complete refresh, extraction, filtering, and formatting path without sending the alert.
+14. After reviewing the draft, use Run now for a controlled live test.
+
+Ownership and failures
+
+The alert owner defaults to the report owner, although another registered owner can be selected. Owner email addresses are resolved from the central People registry, so email corrections apply without editing every alert.
+
+If an actual send run fails before delivery, the owner receives a separate failure email containing:
+
+- The alert and report name.
+- The selected page and visual.
+- The latest refresh status when available.
+- The recorded failure reason.
+- A direct link to the report.
+
+The alert will not send user data when the latest refresh failed, is still running, was cancelled, has no history, or cannot be verified. It also fails closed if a required rule or subgroup column disappears, the visual is deleted, permissions change, or the result cannot be reproduced safely.
+
+Operational notes
+
+- The machine hosting [INTERNAL TOOL] must be running.
+- The connected work account must retain access to the report and semantic model.
+- The desktop email profile used by the existing alert process must remain configured.
+- Adding or removing ordinary columns from the saved table should be picked up automatically because each run reads the current visual structure.
+- If a column used by a rule or subgroup is removed, the run fails instead of sending an incorrect result.
+- Failure notifications use the same desktop email delivery mechanism. If that email client is completely unavailable, the failure and notification attempt are still recorded, but the system cannot email its own outage.
+
+This is now available for us to test with suitable operational reports. Please use Create drafts first and validate the recipients, filtering, table layout, and report link before enabling scheduled delivery.
+
+Thanks,
+[YOUR NAME]
