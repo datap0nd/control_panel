@@ -1,84 +1,12 @@
-createOrReplace
-
-	ref table Measures_table
-
-		measure 'Monthly Cancellation Events - Selected Months' =
-				VAR _SelectedDates =
-					CALCULATETABLE ( VALUES ( 'Date'[Date] ) )
-				VAR _SelectedMonths =
-					DISTINCT (
-						SELECTCOLUMNS (
-							_SelectedDates,
-							"__MonthStart", DATE ( YEAR ( 'Date'[Date] ), MONTH ( 'Date'[Date] ), 1 )
-						)
-					)
-				RETURN
-					SUMX (
-						_SelectedMonths,
-						VAR _MonthStart = [__MonthStart]
-						VAR _MonthDates =
-							FILTER (
-								_SelectedDates,
-								'Date'[Date] >= _MonthStart
-									&& 'Date'[Date] <= EOMONTH ( _MonthStart, 0 )
-							)
-						RETURN
-							CALCULATE (
-								[Cancelled Policies - Event Based],
-								KEEPFILTERS ( Policy[Paid Monthly Subscriber Flag] = 1 ),
-								REMOVEFILTERS ( 'Date' ),
-								REMOVEFILTERS ( 'Date Filter' ),
-								TREATAS ( _MonthDates, 'Date'[Date] )
-							)
-					)
-			formatString: #,##0
-			isHidden
-			displayFolder: Sales\Policy Status\Diagnostics
-
-		measure 'Monthly Opening Subscription Exposure - Selected Months' =
-				VAR _SelectedDates =
-					CALCULATETABLE ( VALUES ( 'Date'[Date] ) )
-				VAR _SelectedMonths =
-					DISTINCT (
-						SELECTCOLUMNS (
-							_SelectedDates,
-							"__MonthStart", DATE ( YEAR ( 'Date'[Date] ), MONTH ( 'Date'[Date] ), 1 )
-						)
-					)
-				RETURN
-					SUMX (
-						_SelectedMonths,
-						VAR _MonthStart = [__MonthStart]
-						RETURN
-							CALCULATE (
-								[Active Policies - Start of Period],
-								KEEPFILTERS ( Policy[Paid Monthly Subscriber Flag] = 1 ),
-								REMOVEFILTERS ( 'Date' ),
-								REMOVEFILTERS ( 'Date Filter' ),
-								TREATAS ( { _MonthStart }, 'Date'[Date] )
-							)
-					)
-			formatString: #,##0
-			isHidden
-			displayFolder: Sales\Policy Status\Diagnostics
-
-		measure 'Monthly Cancellation Rate' =
-				VAR _HasDateContext =
-					ISCROSSFILTERED ( 'Date'[Date] )
-						|| ISCROSSFILTERED ( 'Date'[StartOfMonth] )
-						|| ISFILTERED ( 'Date Filter'[Period Label] )
-						|| ISFILTERED ( 'Date Filter'[Period Type] )
-				RETURN
-					IF (
-						_HasDateContext,
-						DIVIDE (
-							[Monthly Cancellation Events - Selected Months],
-							[Monthly Opening Subscription Exposure - Selected Months]
-						),
-						CALCULATE (
-							[Cancellation Rate - Current Status],
-							KEEPFILTERS ( Policy[Paid Monthly Subscriber Flag] = 1 )
-						)
-					)
-			formatString: 0.0%
-			displayFolder: Sales\Policy Status
+EVALUATE
+CALCULATETABLE (
+    ROW (
+        "Selected date count", COUNTROWS ( VALUES ( 'Date'[Date] ) ),
+        "Period start", MIN ( 'Date'[Date] ),
+        "Period end", MAX ( 'Date'[Date] ),
+        "Monthly cancellation events", [Monthly Cancellation Events - Selected Months],
+        "Monthly opening exposure", [Monthly Opening Subscription Exposure - Selected Months],
+        "Monthly cancellation rate", [Monthly Cancellation Rate]
+    ),
+    KEEPFILTERS ( 'Date Filter'[Period Label] = "YTD" )
+)
