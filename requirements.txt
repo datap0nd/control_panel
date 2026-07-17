@@ -1,3 +1,196 @@
+POWER BI CANCELLATION RATE FIX
+
+Part 1 - Fix Policy date ingestion
+
+1. In Power BI Desktop, select Transform data.
+2. Select the Policy query.
+3. Open Advanced Editor.
+4. Immediately after the existing #"Promoted Headers" step, insert this step:
+
+    #"Cleaned Policy Date Text" = Table.TransformColumns(
+        #"Promoted Headers",
+        {
+            {"policy_created_date", each let v = if _ = null then null else Text.Trim(Text.From(_)) in if v = null or v = "" or Text.Upper(v) = "NULL" or v = "########" then null else v, type text},
+            {"product_purchase_date", each let v = if _ = null then null else Text.Trim(Text.From(_)) in if v = null or v = "" or Text.Upper(v) = "NULL" or v = "########" then null else v, type text},
+            {"warranty_start_date", each let v = if _ = null then null else Text.Trim(Text.From(_)) in if v = null or v = "" or Text.Upper(v) = "NULL" or v = "########" then null else v, type text},
+            {"warranty_end_date", each let v = if _ = null then null else Text.Trim(Text.From(_)) in if v = null or v = "" or Text.Upper(v) = "NULL" or v = "########" then null else v, type text},
+            {"cancellation_date", each let v = if _ = null then null else Text.Trim(Text.From(_)) in if v = null or v = "" or Text.Upper(v) = "NULL" or v = "########" then null else v, type text}
+        },
+        null,
+        MissingField.UseNull
+    ),
+
+5. In the existing #"Changed Type" step, change its input from:
+
+    #"Promoted Headers"
+
+to:
+
+    #"Cleaned Policy Date Text"
+
+Keep Culture="en-US". This matches the HTML parser's first-choice MM/DD/YYYY interpretation.
+
+6. Immediately after the existing #"Changed Type" step, insert these three steps:
+
+    #"Added Resolved Policy Created Date" = Table.AddColumn(
+        #"Changed Type",
+        "__resolved_policy_created_date",
+        each
+            if [policy_created_date] <> null then [policy_created_date]
+            else
+                try Date.FromText(
+                    Text.From([policy_created_month_key]) & "-01",
+                    [Format="yyyy-MM-dd", Culture="en-US"]
+                ) otherwise null,
+        type date
+    ),
+    #"Removed Unresolved Policy Created Date" = Table.RemoveColumns(
+        #"Added Resolved Policy Created Date",
+        {"policy_created_date"}
+    ),
+    #"Renamed Resolved Policy Created Date" = Table.RenameColumns(
+        #"Removed Unresolved Policy Created Date",
+        {{"__resolved_policy_created_date", "policy_created_date"}}
+    ),
+
+7. Change the input of the existing #"Normalized Product Monthly Amount" step from:
+
+    #"Changed Type"
+
+to:
+
+    #"Renamed Resolved Policy Created Date"
+
+8. Select Done, then Close & Apply. Confirm the Policy query refreshes without date-conversion errors.
+
+Part 2 - Replace the cancellation measures
+
+9. Open TMDL view, create a new TMDL script, paste the entire block below, and select Apply:
+
+createOrReplace
+
+	ref table Measures_table
+
+		measure 'Monthly Cancellation Events - Selected Months' =
+				VAR _SelectedDates =
+					CALCULATETABLE ( VALUES ( 'Date'[Date] ) )
+				VAR _SelectedMonths =
+					DISTINCT (
+						SELECTCOLUMNS (
+							_SelectedDates,
+							"__MonthStart", DATE ( YEAR ( 'Date'[Date] ), MONTH ( 'Date'[Date] ), 1 )
+						)
+					)
+				VAR _PolicyRows =
+					CALCULATETABLE (
+						Policy,
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						REMOVEFILTERS ( Policy[Policy Created Date] ),
+						REMOVEFILTERS ( Policy[Warranty Start Date] ),
+						REMOVEFILTERS ( Policy[Warranty End Date] ),
+						REMOVEFILTERS ( Policy[Cancellation Date] )
+					)
+				RETURN
+					SUMX (
+						_SelectedMonths,
+						VAR _MonthStart = [__MonthStart]
+						VAR _MonthDates =
+							FILTER (
+								_SelectedDates,
+								'Date'[Date] >= _MonthStart
+									&& 'Date'[Date] <= EOMONTH ( _MonthStart, 0 )
+							)
+						VAR _EventStart = MINX ( _MonthDates, 'Date'[Date] )
+						VAR _EventEnd = MAXX ( _MonthDates, 'Date'[Date] )
+						RETURN
+							CALCULATE (
+								[Policy Row Count],
+								REMOVEFILTERS ( 'Date' ),
+								REMOVEFILTERS ( 'Date Filter' ),
+								REMOVEFILTERS ( Policy[Policy Created Date] ),
+								REMOVEFILTERS ( Policy[Warranty Start Date] ),
+								REMOVEFILTERS ( Policy[Warranty End Date] ),
+								REMOVEFILTERS ( Policy[Cancellation Date] ),
+								FILTER (
+									_PolicyRows,
+									COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
+										&& NOT ISBLANK ( Policy[Cancellation Date] )
+										&& Policy[Cancellation Date] >= _EventStart
+										&& Policy[Cancellation Date] <= _EventEnd
+								)
+							)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Sales\Policy Status\Diagnostics
+
+		measure 'Monthly Opening Subscription Exposure - Selected Months' =
+				VAR _SelectedDates =
+					CALCULATETABLE ( VALUES ( 'Date'[Date] ) )
+				VAR _SelectedMonths =
+					DISTINCT (
+						SELECTCOLUMNS (
+							_SelectedDates,
+							"__MonthStart", DATE ( YEAR ( 'Date'[Date] ), MONTH ( 'Date'[Date] ), 1 )
+						)
+					)
+				VAR _PolicyRows =
+					CALCULATETABLE (
+						Policy,
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						REMOVEFILTERS ( Policy[Policy Created Date] ),
+						REMOVEFILTERS ( Policy[Warranty Start Date] ),
+						REMOVEFILTERS ( Policy[Warranty End Date] ),
+						REMOVEFILTERS ( Policy[Cancellation Date] )
+					)
+				RETURN
+					SUMX (
+						_SelectedMonths,
+						VAR _MonthStart = [__MonthStart]
+						RETURN
+							CALCULATE (
+								[Policy Row Count],
+								REMOVEFILTERS ( 'Date' ),
+								REMOVEFILTERS ( 'Date Filter' ),
+								REMOVEFILTERS ( Policy[Policy Created Date] ),
+								REMOVEFILTERS ( Policy[Warranty Start Date] ),
+								REMOVEFILTERS ( Policy[Warranty End Date] ),
+								REMOVEFILTERS ( Policy[Cancellation Date] ),
+								FILTER (
+									_PolicyRows,
+									VAR _CoverageStart =
+										COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
+									VAR _CoverageEnd = Policy[Warranty End Date]
+									VAR _CancellationDate = Policy[Cancellation Date]
+									RETURN
+										COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
+											&& NOT ISBLANK ( _CoverageStart )
+											&& _CoverageStart <= _MonthStart
+											&& ( ISBLANK ( _CoverageEnd ) || _CoverageEnd >= _MonthStart )
+											&& ( ISBLANK ( _CancellationDate ) || _CancellationDate > _MonthStart )
+								)
+							)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Sales\Policy Status\Diagnostics
+
+		measure 'Monthly Cancellation Rate' =
+				DIVIDE (
+					[Monthly Cancellation Events - Selected Months],
+					[Monthly Opening Subscription Exposure - Selected Months]
+				)
+			formatString: 0.0%
+			displayFolder: Sales\Policy Status
+
+10. Refresh the HTML KPI visual or switch to another page and back. Its large value already references [Monthly Cancellation Rate], so no visual retargeting is required.
+
+Part 3 - Validate
+
+11. Run this in DAX Query View:
+
 EVALUATE
 CALCULATETABLE (
     ROW (
@@ -10,3 +203,11 @@ CALCULATETABLE (
     ),
     KEEPFILTERS ( 'Date Filter'[Period Label] = "YTD" )
 )
+
+Expected benchmark for the fake HTML policy file and the same YTD cutoff:
+
+- Monthly cancellation events: 214
+- Monthly opening exposure: 6,381
+- Monthly cancellation rate: 0.0335, displayed as 3.4%
+
+If the cutoff is July 12 instead of July 5, the date count and possibly the event count can differ. The Power BI and HTML reports must use the same reporting cutoff before the benchmark can match exactly.
