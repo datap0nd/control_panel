@@ -1,84 +1,179 @@
-DEFINE
-    VAR __JuneStart = DATE ( 2026, 6, 1 )
-    VAR __JuneEnd = DATE ( 2026, 6, 30 )
-    VAR __PaymentTypes =
-        DISTINCT (
-            SELECTCOLUMNS (
-                ALL ( Policy ),
-                "Payment Type", Policy[Payment Type]
-            )
-        )
+createOrReplace
 
-EVALUATE
-    ADDCOLUMNS (
-        __PaymentTypes,
-        "All June Cancellations",
-            VAR __PaymentType = [Payment Type]
-            RETURN
-                COUNTROWS (
-                    FILTER (
-                        ALL ( Policy ),
-                        Policy[Payment Type] = __PaymentType
-                            && NOT ISBLANK ( Policy[Cancellation Date] )
-                            && Policy[Cancellation Date] >= __JuneStart
-                            && Policy[Cancellation Date] <= __JuneEnd
-                    )
-                ),
-        "Positive Amount June Cancellations",
-            VAR __PaymentType = [Payment Type]
-            RETURN
-                COUNTROWS (
-                    FILTER (
-                        ALL ( Policy ),
-                        Policy[Payment Type] = __PaymentType
-                            && COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                            && NOT ISBLANK ( Policy[Cancellation Date] )
-                            && Policy[Cancellation Date] >= __JuneStart
-                            && Policy[Cancellation Date] <= __JuneEnd
-                    )
-                ),
-        "Distinct Products With Positive Amount",
-            VAR __PaymentType = [Payment Type]
-            RETURN
-                CALCULATE (
-                    DISTINCTCOUNT ( Policy[Product ID] ),
-                    FILTER (
-                        ALL ( Policy ),
-                        Policy[Payment Type] = __PaymentType
-                            && COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                            && NOT ISBLANK ( Policy[Cancellation Date] )
-                            && Policy[Cancellation Date] >= __JuneStart
-                            && Policy[Cancellation Date] <= __JuneEnd
-                    )
-                ),
-        "Minimum Positive Monthly Amount",
-            VAR __PaymentType = [Payment Type]
-            RETURN
-                MINX (
-                    FILTER (
-                        ALL ( Policy ),
-                        Policy[Payment Type] = __PaymentType
-                            && COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                            && NOT ISBLANK ( Policy[Cancellation Date] )
-                            && Policy[Cancellation Date] >= __JuneStart
-                            && Policy[Cancellation Date] <= __JuneEnd
-                    ),
-                    Policy[Product Monthly Amount]
-                ),
-        "Maximum Positive Monthly Amount",
-            VAR __PaymentType = [Payment Type]
-            RETURN
-                MAXX (
-                    FILTER (
-                        ALL ( Policy ),
-                        Policy[Payment Type] = __PaymentType
-                            && COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                            && NOT ISBLANK ( Policy[Cancellation Date] )
-                            && Policy[Cancellation Date] >= __JuneStart
-                            && Policy[Cancellation Date] <= __JuneEnd
-                    ),
-                    Policy[Product Monthly Amount]
-                )
-    )
+	ref table Policy
 
-ORDER BY [Positive Amount June Cancellations] DESC
+		partition Policy = m
+			mode: import
+			source =
+					let
+					    ParseDate = (Value as any) as nullable date =>
+					        let
+					            RawText = if Value = null then null else Text.Trim(Text.From(Value)),
+					            Invalid = RawText = null or RawText = "" or Text.Upper(RawText) = "NULL" or Text.Contains(RawText, "#"),
+					            Parsed =
+					                if Invalid then null
+								else try Date.FromText(RawText, [Format="MM/dd/yyyy", Culture="en-US"])
+								otherwise try Date.FromText(RawText, [Format="yyyy-MM-dd", Culture="en-US"])
+								otherwise null
+					        in
+					            Parsed,
+					    ParseMonthKey = (Value as any) as nullable date =>
+					        let
+					            RawText = if Value = null then null else Text.Trim(Text.From(Value)),
+					            MonthText = if RawText = null or Text.Length(RawText) < 7 then null else Text.Start(RawText, 7) & "-01",
+					            Parsed = if MonthText = null then null else try Date.FromText(MonthText, [Format="yyyy-MM-dd", Culture="en-US"]) otherwise null
+					        in
+					            Parsed,
+					    ParseNumber = (Value as any) as nullable number =>
+					        let
+					            RawText = if Value = null then null else Text.Trim(Text.From(Value)),
+					            CleanText = if RawText = null then null else Text.Replace(RawText, ",", ""),
+					            Parsed =
+					                if CleanText = null or CleanText = "" or Text.Upper(CleanText) = "NULL" or Text.Contains(CleanText, "#") then null
+								else try Number.FromText(CleanText, "en-US")
+								otherwise try Number.From(Value)
+					                otherwise null
+					        in
+					            Parsed,
+					    ParseWholeNumber = (Value as any) as nullable number =>
+					        let
+					            Parsed = ParseNumber(Value)
+					        in
+					            if Parsed = null then null else Int64.From(Parsed),
+					    DataFolder = Text.Trim(DataPath),
+					    Backslash = Character.FromNumber(92),
+					    PathSeparator = if Text.EndsWith(DataFolder, Backslash) or Text.EndsWith(DataFolder, "/") then "" else if Text.Contains(DataFolder, Backslash) then Backslash else "/",
+					    PolicyFilePath = DataFolder & PathSeparator & PolicyCsvFileName,
+					    CsvBinary = File.Contents(PolicyFilePath),
+					    Source = Csv.Document(CsvBinary, [Delimiter=",", Encoding=65001, QuoteStyle=QuoteStyle.Csv]),
+					    #"Removed Numbers Title Row" = if (try Text.StartsWith(Text.From(Source{0}[Column1]), "Table ") otherwise false) then Table.Skip(Source, 1) else Source,
+					    #"Promoted Headers" = Table.PromoteHeaders(#"Removed Numbers Title Row", [PromoteAllScalars=true]),
+					    #"Normalized Headers" = Table.TransformColumnNames(#"Promoted Headers", each Text.Trim(_)),
+					    #"Selected Columns" = Table.SelectColumns(#"Normalized Headers", {
+					        "policy_id", "insurance_policy_id", "user_id", "device_unique_id", "product_id",
+					        "policy_created_date", "policy_created_month_key", "country_code", "sales_channel_code",
+					        "policy_status_code", "last_payment_status_text", "insurer_company_type_code", "partner_name",
+					        "sales_partner_key", "store_name", "device_model_name", "payment_type_code", "payment_method_code",
+					        "product_purchase_date", "warranty_start_date", "warranty_end_date", "cancellation_date",
+					        "cancellation_amount", "product_monthly_amount", "product_sale_type", "sale_type",
+					        "service_deleted_flag", "deleted_flag", "load_timestamp", "policy_source_rows",
+					        "duplicate_policy_id_flag", "cancelled_by_date_flag", "warranty_expired_by_date_flag",
+					        "reference_perks_category", "reference_service_product_flag", "reference_device_model_name",
+					        "product_reference_rows", "active_product_reference_rows", "product_reference_ambiguous_flag"
+					    }, MissingField.UseNull),
+					    #"Added Parsed Policy Created Date" = Table.AddColumn(#"Selected Columns", "__policy_created_date", each
+					        let
+					            ExactDate = ParseDate([policy_created_date]),
+					            MonthDate = ParseMonthKey([policy_created_month_key])
+					        in
+					            if ExactDate <> null then ExactDate else MonthDate,
+					        type date),
+					    #"Removed Raw Policy Created Date" = Table.RemoveColumns(#"Added Parsed Policy Created Date", {"policy_created_date"}),
+					    #"Renamed Parsed Policy Created Date" = Table.RenameColumns(#"Removed Raw Policy Created Date", {{"__policy_created_date", "policy_created_date"}}),
+					    #"Parsed Date Columns" = Table.TransformColumns(#"Renamed Parsed Policy Created Date", {
+					        {"product_purchase_date", ParseDate, type date},
+					        {"warranty_start_date", ParseDate, type date},
+					        {"warranty_end_date", ParseDate, type date},
+					        {"cancellation_date", ParseDate, type date}
+					    }, null, MissingField.UseNull),
+					    #"Parsed Numeric Columns" = Table.TransformColumns(#"Parsed Date Columns", {
+					        {"cancellation_amount", ParseNumber, type number},
+					        {"product_monthly_amount", ParseNumber, type number},
+					        {"policy_source_rows", ParseWholeNumber, Int64.Type},
+					        {"duplicate_policy_id_flag", ParseWholeNumber, Int64.Type},
+					        {"cancelled_by_date_flag", ParseWholeNumber, Int64.Type},
+					        {"warranty_expired_by_date_flag", ParseWholeNumber, Int64.Type},
+					        {"product_reference_rows", ParseWholeNumber, Int64.Type},
+					        {"active_product_reference_rows", ParseWholeNumber, Int64.Type},
+					        {"product_reference_ambiguous_flag", ParseWholeNumber, Int64.Type}
+					    }, null, MissingField.UseNull),
+					    #"Changed Text Types" = Table.TransformColumnTypes(#"Parsed Numeric Columns", {
+					        {"policy_id", type text}, {"insurance_policy_id", type text}, {"user_id", type text},
+					        {"device_unique_id", type text}, {"product_id", type text}, {"policy_created_month_key", type text},
+					        {"country_code", type text}, {"sales_channel_code", type text}, {"policy_status_code", type text},
+					        {"last_payment_status_text", type text}, {"insurer_company_type_code", type text}, {"partner_name", type text},
+					        {"sales_partner_key", type text}, {"store_name", type text}, {"device_model_name", type text},
+					        {"payment_type_code", type text}, {"payment_method_code", type text}, {"product_sale_type", type text},
+					        {"sale_type", type text}, {"service_deleted_flag", type text}, {"deleted_flag", type text},
+					        {"load_timestamp", type text}, {"reference_perks_category", type text},
+					        {"reference_service_product_flag", type text}, {"reference_device_model_name", type text}
+					    }, [Culture="en-US", MissingField=MissingField.UseNull]),
+					    #"Normalized Join Keys" = Table.TransformColumns(#"Changed Text Types", {
+					        {"country_code", each if _ = null then null else Text.Upper(Text.Trim(_)), type text},
+					        {"sales_channel_code", each if _ = null then null else Text.Trim(_), type text},
+					        {"policy_status_code", each if _ = null then null else Text.Trim(_), type text},
+					        {"payment_type_code", each if _ = null then null else Text.Trim(_), type text}
+					    }, null, MissingField.UseNull),
+					    #"Merged Subsidiary" = Table.NestedJoin(#"Normalized Join Keys", {"country_code"}, #"Subsidiary Master", {"country_id"}, "Subsidiary Master", JoinKind.LeftOuter),
+					    #"Expanded Subsidiary" = Table.ExpandTableColumn(#"Merged Subsidiary", "Subsidiary Master", {"subsidiary"}, {"subsidiary"}),
+					    #"Filled Subsidiary" = Table.ReplaceValue(#"Expanded Subsidiary", null, "Unmapped", Replacer.ReplaceValue, {"subsidiary"}),
+					    #"Added Payment Type Label" = Table.AddColumn(#"Filled Subsidiary", "payment_type_label", each
+					        let Raw = if [payment_type_code] = null then null else Text.Upper(Text.Trim(Text.From([payment_type_code])))
+					        in if Raw = null or Raw = "" then null
+					           else if List.Contains({"1", "UPFRONT", "UP-FRONT"}, Raw) then "Upfront"
+					           else if List.Contains({"2", "MONTHLY", "MONTH"}, Raw) then "Monthly"
+					           else if List.Contains({"3", "FREE", "FOC"}, Raw) then "Free"
+					           else "Unmapped",
+					        type text),
+					    #"Added Coverage Scope" = Table.AddColumn(#"Added Payment Type Label", "coverage_scope", each
+					        let Product = if [reference_perks_category] = null then null else Text.Upper(Text.Trim(Text.From([reference_perks_category])))
+					        in if Product = null or Product = "" then null
+					           else if Product = "ADH" then "Accidental Damage"
+					           else if Product = "SCR" then "Screen Damage"
+					           else if List.Contains({"EW", "EXW"}, Product) then "Extended Warranty"
+					           else Product,
+					        type text),
+					    #"Added Warranty Duration Days" = Table.AddColumn(#"Added Coverage Scope", "warranty_duration_days", each
+					        if [warranty_start_date] = null or [warranty_end_date] = null or [warranty_end_date] < [warranty_start_date] then null
+					        else Duration.Days([warranty_end_date] - [warranty_start_date]) + 1,
+					        Int64.Type),
+					    #"Added Warranty Duration Months" = Table.AddColumn(#"Added Warranty Duration Days", "warranty_duration_months", each
+					        if [warranty_duration_days] = null then null
+					        else if [warranty_duration_days] >= 330 and [warranty_duration_days] <= 400 then 12
+					        else if [warranty_duration_days] >= 690 and [warranty_duration_days] <= 770 then 24
+					        else if [warranty_duration_days] >= 1030 and [warranty_duration_days] <= 1130 then 36
+					        else Number.Round(Number.From([warranty_duration_days]) / 30.4375, 0),
+					        Int64.Type),
+					    #"Added SC+ Plan Rollup" = Table.AddColumn(#"Added Warranty Duration Months", "scplus_plan_rollup", each
+					        let
+					            Product = if [reference_perks_category] = null then null else Text.Upper(Text.Trim(Text.From([reference_perks_category]))),
+					            Months = [warranty_duration_months]
+					        in
+					            if [payment_type_label] = "Monthly" then "Monthly"
+					            else if Months = 12 then "1YR"
+					            else if Months = 24 then "2YR"
+					            else if Product = "SCR" then "1YR"
+					            else if Product = "ADH" then "2YR"
+					            else "Unmapped",
+					        type text),
+					    #"Added SC+ Plan Type" = Table.AddColumn(#"Added SC+ Plan Rollup", "scplus_plan_type", each
+					        let
+					            Product = if [reference_perks_category] = null then null else Text.Upper(Text.Trim(Text.From([reference_perks_category]))),
+					            Sub = if [subsidiary] = null then null else Text.Upper(Text.Trim(Text.From([subsidiary]))),
+					            Payment = [payment_type_label],
+					            Months = [warranty_duration_months]
+					        in
+					            if Payment = "Monthly" and Sub = "SETK" and Product = "ADH" then "2YR Device Insurance Monthly Subscription"
+					            else if Payment = "Monthly" and List.Contains({"EW", "EXW"}, Product) then "Monthly Pay Plan - Extended Warranty Phase"
+					            else if Payment = "Monthly" and List.Contains({"SGE", "SESAR"}, Sub) then "Monthly Pay Plan"
+					            else if Payment = "Monthly" then "Monthly Plan"
+					            else if Product = "SCR" and Sub = "SETK" then "1YR Screen Protection Insurance"
+					            else if Product = "SCR" then "1YR Screen Damage"
+					            else if Product = "ADH" and Sub = "SETK" then "2YR Device Insurance"
+					            else if Product = "ADH" then "2YR Accidental Damage"
+					            else if List.Contains({"EW", "EXW"}, Product) then "Extended Warranty"
+					            else if Months = 12 then "1YR Plan - Scope Unmapped"
+					            else if Months = 24 then "2YR Plan - Scope Unmapped"
+					            else "Unmapped",
+					        type text),
+					    #"Added Device Category" = Table.AddColumn(#"Added SC+ Plan Type", "device_category_code", each
+					        let Model = if [device_model_name] = null then "" else Text.Upper(Text.Trim(Text.From([device_model_name])))
+					        in if Text.Contains(Model, "TAB") then "2"
+					           else if Text.Contains(Model, "WATCH") or Text.Contains(Model, "FIT") or Text.Contains(Model, "BAND") then "3"
+					           else if Text.Contains(Model, "BUD") then "4"
+					           else if Text.Contains(Model, "RING") then "6"
+					           else "1",
+					        type text),
+					    #"Added Source Type" = Table.AddColumn(#"Added Device Category", "source_type", each "Policy", type text)
+					in
+					    #"Added Source Type"
