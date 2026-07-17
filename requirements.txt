@@ -1,132 +1,348 @@
-DEFINE
-    VAR _DataEnd = [KPI Comparison Data End Date]
-    VAR _CY = YEAR ( _DataEnd )
-    VAR _LY = _CY - 1
-    VAR _LatestMonth = MONTH ( _DataEnd )
-    VAR _LatestDay = DAY ( _DataEnd )
+createOrReplace
 
-EVALUATE
-    SUMMARIZECOLUMNS (
-        'Date'[MonthNum],
-        'Date'[Month],
+	ref table Measures_table
 
-        // These are the boundaries currently detected inside each chart point.
-        "Detected Period Start", [KPI Comparison Period Start Date],
-        "Detected Period End", [KPI Comparison Period End Date],
+		measure 'Chart Month Context Flag' =
+				IF (
+					ISINSCOPE ( 'Date'[Month] )
+						|| ISINSCOPE ( 'Date'[MonthNum] )
+						|| ISINSCOPE ( 'Date'[StartOfMonth] )
+						|| ISINSCOPE ( 'Date'[YearMonth] ),
+					1,
+					0
+				)
+			formatString: 0
+			isHidden
+			displayFolder: Helper
 
-        // Values currently plotted by the three Executive charts.
-        "Sales Chart CY", [Sales QTY CY],
-        "Sales Chart LY", [Sales QTY LY],
-        "Attach Chart CY", [Attach Rate CY],
-        "Attach Chart LY", [Attach Rate LY Chart],
-        "Margin Chart CY", [Net Revenue CY],
-        "Margin Chart LY", [Net Revenue LY Chart],
+		measure 'Chart CY Month Start Date' =
+				VAR _Year = [Analysis Year]
+				VAR _Month = SELECTEDVALUE ( 'Date'[MonthNum] )
+				RETURN
+					IF (
+						[Chart Month Context Flag] = 1 && NOT ISBLANK ( _Month ),
+						DATE ( _Year, _Month, 1 )
+					)
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
 
-        // Correct non-cumulative monthly values at the chart grain.
-        "Sales Monthly CY",
-            VAR _Month = SELECTEDVALUE ( 'Date'[MonthNum] )
-            RETURN
-                CALCULATE (
-                    [Sales Volume],
-                    REMOVEFILTERS ( 'Date' ),
-                    REMOVEFILTERS ( 'Date Filter' ),
-                    'Date'[Year] = _CY,
-                    'Date'[MonthNum] = _Month
-                ),
-        "Sales Monthly LY Full Month",
-            VAR _Month = SELECTEDVALUE ( 'Date'[MonthNum] )
-            RETURN
-                CALCULATE (
-                    [Sales Volume],
-                    REMOVEFILTERS ( 'Date' ),
-                    REMOVEFILTERS ( 'Date Filter' ),
-                    'Date'[Year] = _LY,
-                    'Date'[MonthNum] = _Month
-                ),
-        "Sales Monthly LY Comparable Cutoff",
-            VAR _Month = SELECTEDVALUE ( 'Date'[MonthNum] )
-            VAR _LYMonthStart = DATE ( _LY, _Month, 1 )
-            VAR _LYMonthEnd =
-                IF (
-                    _Month = _LatestMonth,
-                    DATE ( _LY, _Month, _LatestDay ),
-                    EOMONTH ( _LYMonthStart, 0 )
-                )
-            RETURN
-                IF (
-                    _Month > _LatestMonth,
-                    BLANK (),
-                    CALCULATE (
-                        [Sales Volume],
-                        REMOVEFILTERS ( 'Date' ),
-                        REMOVEFILTERS ( 'Date Filter' ),
-                        DATESBETWEEN ( 'Date'[Date], _LYMonthStart, _LYMonthEnd )
-                    )
-                ),
-        "Attach Monthly CY",
-            VAR _Month = SELECTEDVALUE ( 'Date'[MonthNum] )
-            RETURN
-                CALCULATE (
-                    [Raw Attach Rate],
-                    REMOVEFILTERS ( 'Date' ),
-                    REMOVEFILTERS ( 'Date Filter' ),
-                    'Date'[Year] = _CY,
-                    'Date'[MonthNum] = _Month
-                ),
-        "Attach Monthly LY Full Month",
-            VAR _Month = SELECTEDVALUE ( 'Date'[MonthNum] )
-            RETURN
-                CALCULATE (
-                    [Raw Attach Rate],
-                    REMOVEFILTERS ( 'Date' ),
-                    REMOVEFILTERS ( 'Date Filter' ),
-                    'Date'[Year] = _LY,
-                    'Date'[MonthNum] = _Month
-                ),
-        "Margin Monthly CY",
-            VAR _Month = SELECTEDVALUE ( 'Date'[MonthNum] )
-            RETURN
-                CALCULATE (
-                    [Net Revenue / Program Margin],
-                    REMOVEFILTERS ( 'Date' ),
-                    REMOVEFILTERS ( 'Date Filter' ),
-                    'Date'[Year] = _CY,
-                    'Date'[MonthNum] = _Month
-                ),
-        "Margin Monthly LY Full Month",
-            VAR _Month = SELECTEDVALUE ( 'Date'[MonthNum] )
-            RETURN
-                CALCULATE (
-                    [Net Revenue / Program Margin],
-                    REMOVEFILTERS ( 'Date' ),
-                    REMOVEFILTERS ( 'Date Filter' ),
-                    'Date'[Year] = _LY,
-                    'Date'[MonthNum] = _Month
-                ),
+		measure 'Chart CY Month End Date' =
+				VAR _MonthStart = [Chart CY Month Start Date]
+				VAR _DataEnd = [KPI Comparison Data End Date]
+				RETURN
+					IF (
+						ISBLANK ( _MonthStart )
+							|| ISBLANK ( _DataEnd )
+							|| _MonthStart > _DataEnd,
+						BLANK (),
+						MIN ( EOMONTH ( _MonthStart, 0 ), _DataEnd )
+					)
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
 
-        // A non-zero difference proves that the plotted measure is not monthly.
-        "Sales CY Difference",
-            VAR _Month = SELECTEDVALUE ( 'Date'[MonthNum] )
-            VAR _Expected =
-                CALCULATE (
-                    [Sales Volume],
-                    REMOVEFILTERS ( 'Date' ),
-                    REMOVEFILTERS ( 'Date Filter' ),
-                    'Date'[Year] = _CY,
-                    'Date'[MonthNum] = _Month
-                )
-            RETURN [Sales QTY CY] - _Expected,
-        "Margin CY Difference",
-            VAR _Month = SELECTEDVALUE ( 'Date'[MonthNum] )
-            VAR _Expected =
-                CALCULATE (
-                    [Net Revenue / Program Margin],
-                    REMOVEFILTERS ( 'Date' ),
-                    REMOVEFILTERS ( 'Date Filter' ),
-                    'Date'[Year] = _CY,
-                    'Date'[MonthNum] = _Month
-                )
-            RETURN [Net Revenue CY] - _Expected
-    )
+		measure 'CY Month Scope Sales Volume' =
+				VAR _IsChartMonth = [Chart Month Context Flag] = 1
+				VAR _PeriodStart =
+					IF ( _IsChartMonth, [Chart CY Month Start Date], [KPI Comparison Period Start Date] )
+				VAR _PeriodEnd =
+					IF ( _IsChartMonth, [Chart CY Month End Date], [KPI Comparison Period End Date] )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Sales Volume],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Helper
 
-ORDER BY 'Date'[MonthNum]
+		measure 'LY Month Scope Sales Volume' =
+				VAR _IsChartMonth = [Chart Month Context Flag] = 1
+				VAR _CurrentStart =
+					IF ( _IsChartMonth, [Chart CY Month Start Date], [KPI Comparison Period Start Date] )
+				VAR _CurrentEnd =
+					IF ( _IsChartMonth, [Chart CY Month End Date], [KPI Comparison Period End Date] )
+				VAR _PeriodStart = EDATE ( _CurrentStart, -12 )
+				VAR _PeriodEnd = EDATE ( _CurrentEnd, -12 )
+				RETURN
+					IF (
+						ISBLANK ( _CurrentStart )
+							|| ISBLANK ( _CurrentEnd )
+							|| _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Sales Volume],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Helper
+
+		measure 'LY-1 Month Scope Sales Volume' =
+				VAR _IsChartMonth = [Chart Month Context Flag] = 1
+				VAR _CurrentStart =
+					IF ( _IsChartMonth, [Chart CY Month Start Date], [KPI Comparison Period Start Date] )
+				VAR _CurrentEnd =
+					IF ( _IsChartMonth, [Chart CY Month End Date], [KPI Comparison Period End Date] )
+				VAR _PeriodStart = EDATE ( _CurrentStart, -24 )
+				VAR _PeriodEnd = EDATE ( _CurrentEnd, -24 )
+				RETURN
+					IF (
+						ISBLANK ( _CurrentStart )
+							|| ISBLANK ( _CurrentEnd )
+							|| _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Sales Volume],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Helper
+
+		measure 'Gross Revenue CY' =
+				VAR _IsChartMonth = [Chart Month Context Flag] = 1
+				VAR _PeriodStart =
+					IF ( _IsChartMonth, [Chart CY Month Start Date], [KPI Comparison Period Start Date] )
+				VAR _PeriodEnd =
+					IF ( _IsChartMonth, [Chart CY Month End Date], [KPI Comparison Period End Date] )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Gross Revenue],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0.00
+			displayFolder: Chart aliases
+
+		measure 'Gross Revenue LY Chart' =
+				VAR _IsChartMonth = [Chart Month Context Flag] = 1
+				VAR _CurrentStart =
+					IF ( _IsChartMonth, [Chart CY Month Start Date], [KPI Comparison Period Start Date] )
+				VAR _CurrentEnd =
+					IF ( _IsChartMonth, [Chart CY Month End Date], [KPI Comparison Period End Date] )
+				VAR _PeriodStart = EDATE ( _CurrentStart, -12 )
+				VAR _PeriodEnd = EDATE ( _CurrentEnd, -12 )
+				RETURN
+					IF (
+						ISBLANK ( _CurrentStart ) || ISBLANK ( _CurrentEnd ),
+						BLANK (),
+						CALCULATE (
+							[Gross Revenue],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0.00
+			displayFolder: Chart aliases
+
+		measure 'Gross Revenue LY-1 Chart' =
+				VAR _IsChartMonth = [Chart Month Context Flag] = 1
+				VAR _CurrentStart =
+					IF ( _IsChartMonth, [Chart CY Month Start Date], [KPI Comparison Period Start Date] )
+				VAR _CurrentEnd =
+					IF ( _IsChartMonth, [Chart CY Month End Date], [KPI Comparison Period End Date] )
+				VAR _PeriodStart = EDATE ( _CurrentStart, -24 )
+				VAR _PeriodEnd = EDATE ( _CurrentEnd, -24 )
+				RETURN
+					IF (
+						ISBLANK ( _CurrentStart ) || ISBLANK ( _CurrentEnd ),
+						BLANK (),
+						CALCULATE (
+							[Gross Revenue],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0.00
+			displayFolder: Chart aliases
+
+		measure 'Net Revenue CY' =
+				VAR _IsChartMonth = [Chart Month Context Flag] = 1
+				VAR _PeriodStart =
+					IF ( _IsChartMonth, [Chart CY Month Start Date], [KPI Comparison Period Start Date] )
+				VAR _PeriodEnd =
+					IF ( _IsChartMonth, [Chart CY Month End Date], [KPI Comparison Period End Date] )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Net Revenue / Program Margin],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0.00
+			displayFolder: Chart aliases
+
+		measure 'Net Revenue LY Chart' =
+				VAR _IsChartMonth = [Chart Month Context Flag] = 1
+				VAR _CurrentStart =
+					IF ( _IsChartMonth, [Chart CY Month Start Date], [KPI Comparison Period Start Date] )
+				VAR _CurrentEnd =
+					IF ( _IsChartMonth, [Chart CY Month End Date], [KPI Comparison Period End Date] )
+				VAR _PeriodStart = EDATE ( _CurrentStart, -12 )
+				VAR _PeriodEnd = EDATE ( _CurrentEnd, -12 )
+				RETURN
+					IF (
+						ISBLANK ( _CurrentStart ) || ISBLANK ( _CurrentEnd ),
+						BLANK (),
+						CALCULATE (
+							[Net Revenue / Program Margin],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0.00
+			displayFolder: Chart aliases
+
+		measure 'Net Revenue LY-1 Chart' =
+				VAR _IsChartMonth = [Chart Month Context Flag] = 1
+				VAR _CurrentStart =
+					IF ( _IsChartMonth, [Chart CY Month Start Date], [KPI Comparison Period Start Date] )
+				VAR _CurrentEnd =
+					IF ( _IsChartMonth, [Chart CY Month End Date], [KPI Comparison Period End Date] )
+				VAR _PeriodStart = EDATE ( _CurrentStart, -24 )
+				VAR _PeriodEnd = EDATE ( _CurrentEnd, -24 )
+				RETURN
+					IF (
+						ISBLANK ( _CurrentStart ) || ISBLANK ( _CurrentEnd ),
+						BLANK (),
+						CALCULATE (
+							[Net Revenue / Program Margin],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0.00
+			displayFolder: Chart aliases
+
+		measure 'Attach Rate CY' =
+				VAR _IsChartMonth = [Chart Month Context Flag] = 1
+				VAR _PeriodStart =
+					IF ( _IsChartMonth, [Chart CY Month Start Date], [KPI Comparison Period Start Date] )
+				VAR _PeriodEnd =
+					IF ( _IsChartMonth, [Chart CY Month End Date], [KPI Comparison Period End Date] )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Raw Attach Rate],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: 0.0%
+			displayFolder: Chart aliases
+
+		measure 'Attach Rate LY Chart' =
+				VAR _IsChartMonth = [Chart Month Context Flag] = 1
+				VAR _CurrentStart =
+					IF ( _IsChartMonth, [Chart CY Month Start Date], [KPI Comparison Period Start Date] )
+				VAR _CurrentEnd =
+					IF ( _IsChartMonth, [Chart CY Month End Date], [KPI Comparison Period End Date] )
+				VAR _PeriodStart = EDATE ( _CurrentStart, -12 )
+				VAR _PeriodEnd = EDATE ( _CurrentEnd, -12 )
+				RETURN
+					IF (
+						ISBLANK ( _CurrentStart ) || ISBLANK ( _CurrentEnd ),
+						BLANK (),
+						CALCULATE (
+							[Raw Attach Rate],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: 0.0%
+			displayFolder: Chart aliases
+
+		measure 'Attach Rate LY-1 Chart' =
+				VAR _IsChartMonth = [Chart Month Context Flag] = 1
+				VAR _CurrentStart =
+					IF ( _IsChartMonth, [Chart CY Month Start Date], [KPI Comparison Period Start Date] )
+				VAR _CurrentEnd =
+					IF ( _IsChartMonth, [Chart CY Month End Date], [KPI Comparison Period End Date] )
+				VAR _PeriodStart = EDATE ( _CurrentStart, -24 )
+				VAR _PeriodEnd = EDATE ( _CurrentEnd, -24 )
+				RETURN
+					IF (
+						ISBLANK ( _CurrentStart ) || ISBLANK ( _CurrentEnd ),
+						BLANK (),
+						CALCULATE (
+							[Raw Attach Rate],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: 0.0%
+			displayFolder: Chart aliases
+
+		measure 'Profit % CY' =
+				VAR _IsChartMonth = [Chart Month Context Flag] = 1
+				VAR _PeriodStart =
+					IF ( _IsChartMonth, [Chart CY Month Start Date], [KPI Comparison Period Start Date] )
+				VAR _PeriodEnd =
+					IF ( _IsChartMonth, [Chart CY Month End Date], [KPI Comparison Period End Date] )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Program Margin Rate],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: 0.0%
+			displayFolder: Chart aliases
+
+		measure 'Profit % LY' =
+				VAR _IsChartMonth = [Chart Month Context Flag] = 1
+				VAR _CurrentStart =
+					IF ( _IsChartMonth, [Chart CY Month Start Date], [KPI Comparison Period Start Date] )
+				VAR _CurrentEnd =
+					IF ( _IsChartMonth, [Chart CY Month End Date], [KPI Comparison Period End Date] )
+				VAR _PeriodStart = EDATE ( _CurrentStart, -12 )
+				VAR _PeriodEnd = EDATE ( _CurrentEnd, -12 )
+				RETURN
+					IF (
+						ISBLANK ( _CurrentStart ) || ISBLANK ( _CurrentEnd ),
+						BLANK (),
+						CALCULATE (
+							[Program Margin Rate],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: 0.0%
+			displayFolder: Chart aliases
