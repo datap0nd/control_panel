@@ -1,155 +1,64 @@
-createOrReplace
-
-	ref table Measures_table
-
-		measure 'Sales Plan QTY' =
-				VAR _SourceType = SELECTEDVALUE ( 'Source'[Source Type] )
-				VAR _UnsupportedDetailFilter =
-					ISFILTERED ( Sales[Country Code] )
-						|| ISFILTERED ( Sales[Sales Channel] )
-						|| ISFILTERED ( Sales[Device Category] )
-						|| ISFILTERED ( Sales[Device Model] )
-						|| ISFILTERED ( Sales[Product Type] )
-						|| ISFILTERED ( Sales[Payment Type] )
-						|| ISFILTERED ( Sales[SC+ Plan Rollup] )
-						|| ISFILTERED ( Sales[SC+ Plan Type] )
-						|| ISFILTERED ( Sales[Account / Partner] )
-						|| ISINSCOPE ( Sales[Country Code] )
-						|| ISINSCOPE ( Sales[Sales Channel] )
-						|| ISINSCOPE ( Sales[Device Category] )
-						|| ISINSCOPE ( Sales[Device Model] )
-						|| ISINSCOPE ( Sales[Product Type] )
-						|| ISINSCOPE ( Sales[Payment Type] )
-						|| ISINSCOPE ( Sales[SC+ Plan Rollup] )
-						|| ISINSCOPE ( Sales[SC+ Plan Type] )
-						|| ISINSCOPE ( Sales[Account / Partner] )
-				VAR _PeriodStart = [KPI Comparison Period Start Date]
-				VAR _PeriodEnd = [KPI Comparison Period End Date]
-				VAR _MonthKeys =
-					CALCULATETABLE (
-						VALUES ( 'Date'[YearMonth] ),
-						REMOVEFILTERS ( 'Date' ),
-						REMOVEFILTERS ( 'Date Filter' ),
-						DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
-					)
-				RETURN
-					IF (
-						_SourceType IN { "Revenue", "Policy" }
-							|| _UnsupportedDetailFilter
-							|| ISBLANK ( _PeriodStart )
-							|| ISBLANK ( _PeriodEnd )
-							|| _PeriodStart > _PeriodEnd,
-						BLANK (),
-						CALCULATE (
-							SUM ( 'Sales Plan'[plan_value] ),
-							'Sales Plan'[Sales Plan Type] = "Sales",
-							REMOVEFILTERS ( 'Sales Plan'[Sales Channel] ),
-							TREATAS ( _MonthKeys, 'Sales Plan'[Month Key] ),
-							TREATAS ( VALUES ( 'Subsidiary Master'[Subsidiary] ), 'Sales Plan'[Subsidiary] )
-						)
-					)
-			formatString: #,##0
-			displayFolder: Sales Plan and Revenue Plan
-
-		measure 'Sales Plan Attach Rate' =
-				VAR _SourceType = SELECTEDVALUE ( 'Source'[Source Type] )
-				VAR _UnsupportedDetailFilter =
-					ISFILTERED ( Sales[Country Code] )
-						|| ISFILTERED ( Sales[Sales Channel] )
-						|| ISFILTERED ( Sales[Device Category] )
-						|| ISFILTERED ( Sales[Device Model] )
-						|| ISFILTERED ( Sales[Product Type] )
-						|| ISFILTERED ( Sales[Payment Type] )
-						|| ISFILTERED ( Sales[SC+ Plan Rollup] )
-						|| ISFILTERED ( Sales[SC+ Plan Type] )
-						|| ISFILTERED ( Sales[Account / Partner] )
-						|| ISINSCOPE ( Sales[Country Code] )
-						|| ISINSCOPE ( Sales[Sales Channel] )
-						|| ISINSCOPE ( Sales[Device Category] )
-						|| ISINSCOPE ( Sales[Device Model] )
-						|| ISINSCOPE ( Sales[Product Type] )
-						|| ISINSCOPE ( Sales[Payment Type] )
-						|| ISINSCOPE ( Sales[SC+ Plan Rollup] )
-						|| ISINSCOPE ( Sales[SC+ Plan Type] )
-						|| ISINSCOPE ( Sales[Account / Partner] )
-				VAR _PeriodStart = [KPI Comparison Period Start Date]
-				VAR _PeriodEnd = [KPI Comparison Period End Date]
-				VAR _MonthKeys =
-					CALCULATETABLE (
-						VALUES ( 'Date'[YearMonth] ),
-						REMOVEFILTERS ( 'Date' ),
-						REMOVEFILTERS ( 'Date Filter' ),
-						DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
-					)
-				VAR _PlanGrain =
-					CALCULATETABLE (
-						SUMMARIZE (
-							'Sales Plan',
-							'Sales Plan'[Month Key],
-							'Sales Plan'[Subsidiary],
-							'Sales Plan'[Sales Channel]
-						),
-						REMOVEFILTERS ( 'Sales Plan'[Sales Channel] ),
-						TREATAS ( _MonthKeys, 'Sales Plan'[Month Key] ),
-						TREATAS ( VALUES ( 'Subsidiary Master'[Subsidiary] ), 'Sales Plan'[Subsidiary] )
-					)
-				VAR _WeightedNumerator =
-					SUMX (
-						_PlanGrain,
-						VAR _PlanUnits =
-							CALCULATE (
-								SUM ( 'Sales Plan'[plan_value] ),
-								'Sales Plan'[Sales Plan Type] = "Sales"
-							)
-						VAR _PlanRate =
-							CALCULATE (
-								AVERAGE ( 'Sales Plan'[plan_value] ),
-								'Sales Plan'[Sales Plan Type] = "Att"
-							)
-						RETURN
-							_PlanUnits * _PlanRate
-					)
-				VAR _PlanUnitsDenominator =
-					SUMX (
-						_PlanGrain,
-						CALCULATE (
-							SUM ( 'Sales Plan'[plan_value] ),
-							'Sales Plan'[Sales Plan Type] = "Sales"
-						)
-					)
-				RETURN
-					IF (
-						_SourceType = "Policy"
-							|| _UnsupportedDetailFilter
-							|| ISBLANK ( _PeriodStart )
-							|| ISBLANK ( _PeriodEnd )
-							|| _PeriodStart > _PeriodEnd,
-						BLANK (),
-						DIVIDE ( _WeightedNumerator, _PlanUnitsDenominator )
-					)
-			formatString: 0.0%
-			displayFolder: Sales Plan and Revenue Plan
-
-		measure 'Raw Attach Rate vs Global' =
-				VAR _LocalRate = [Attach Rate CY]
-				VAR _GlobalRate = [Global Attach Rate CY]
-				RETURN
-					IF (
-						ISBLANK ( _LocalRate ),
-						BLANK (),
-						_LocalRate - _GlobalRate
-					)
-			formatString: +0.0%;-0.0%;0.0%
-			displayFolder: Attach Rate\Guide
-
-		measure 'Excluding Export Attach Rate vs Global' =
-				VAR _LocalRate = [Excluding Export Attach Rate]
-				VAR _GlobalRate = [Global Excluding Export Attach Rate]
-				RETURN
-					IF (
-						ISBLANK ( _LocalRate ),
-						BLANK (),
-						_LocalRate - _GlobalRate
-					)
-			formatString: +0.0%;-0.0%;0.0%
-			displayFolder: Export Exclusion Placeholder
+EVALUATE
+VAR _Result =
+    SUMMARIZECOLUMNS (
+        'P&L'[Date],
+        'P&L'[Combined Company],
+        FILTER (
+            ALL ( 'P&L'[Date] ),
+            'P&L'[Date] >= DATE ( 2025, 1, 1 )
+                && 'P&L'[Date] < DATE ( 2027, 1, 1 )
+        ),
+        "Actual Gross Sales",
+            CALCULATE (
+                SUM ( 'P&L'[Value] ),
+                'P&L'[Individual] IN { "CY", "LY" },
+                'P&L'[Sales Consolidated Detail (P2)] = "Gross Sales Amt"
+            ),
+        "Actual Net Sales",
+            CALCULATE (
+                SUM ( 'P&L'[Value] ),
+                'P&L'[Individual] IN { "CY", "LY" },
+                'P&L'[Sales Consolidated Detail (P2)] = "Net Sales Amt"
+            ),
+        "Actual Sales Deduction",
+            CALCULATE (
+                SUM ( 'P&L'[Value] ),
+                'P&L'[Individual] IN { "CY", "LY" },
+                'P&L'[Sales Consolidated Detail (P2)] = "Sales Deduction"
+            ),
+        "Actual Gross Check",
+            CALCULATE (
+                SUM ( 'P&L'[Value] ),
+                'P&L'[Individual] IN { "CY", "LY" },
+                'P&L'[Sales Consolidated Detail (P2)] = "Net Sales Amt"
+            )
+                + CALCULATE (
+                    SUM ( 'P&L'[Value] ),
+                    'P&L'[Individual] IN { "CY", "LY" },
+                    'P&L'[Sales Consolidated Detail (P2)] = "Sales Deduction"
+                ),
+        "Plan Gross Sales",
+            CALCULATE (
+                SUM ( 'P&L'[Value] ),
+                'P&L'[Individual] = "Plan",
+                'P&L'[Sales Consolidated Detail (P2)] = "Gross Sales Amt"
+            ),
+        "Plan Net Sales",
+            CALCULATE (
+                SUM ( 'P&L'[Value] ),
+                'P&L'[Individual] = "Plan",
+                'P&L'[Sales Consolidated Detail (P2)] = "Net Sales Amt"
+            ),
+        "Fact Rows", CALCULATE ( COUNTROWS ( 'P&L' ) )
+    )
+RETURN
+    FILTER (
+        _Result,
+        NOT ISBLANK ( [Actual Gross Sales] )
+            || NOT ISBLANK ( [Actual Net Sales] )
+            || NOT ISBLANK ( [Plan Gross Sales] )
+            || NOT ISBLANK ( [Plan Net Sales] )
+    )
+ORDER BY
+    'P&L'[Date],
+    'P&L'[Combined Company]
