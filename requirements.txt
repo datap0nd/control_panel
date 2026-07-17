@@ -1,38 +1,25 @@
 1. Open policy.csv in Excel.
 
-2. Click any cell in the data and press Ctrl+T. Confirm "My table has headers" and click OK.
+2. Click inside the data and press Ctrl+T. Confirm "My table has headers."
 
-3. Add a new column at the far right named:
-Cancellation Date Parsed
+3. Do not parse or modify cancellation_date. It is already a date.
 
-Enter this formula in the first data row. Excel should fill the entire table column automatically:
-=IF([@cancellation_date]="","",IF(ISNUMBER([@cancellation_date]),INT([@cancellation_date]),IFERROR(LET(x,TRIM([@cancellation_date]),p1,FIND("/",x),p2,FIND("/",x,p1+1),DATE(VALUE(MID(x,p2+1,4)),VALUE(LEFT(x,p1-1)),VALUE(MID(x,p1+1,p2-p1-1)))),"")))
-
-This supports both real Excel dates and text dates written as M/D/YYYY or MM/DD/YYYY. If cancellation_date is already a real Excel date, it keeps the existing date serial instead of parsing that serial as text.
-
-Format this new column as Short Date. For example, 1/28/2025 must remain 1/28/2025. Do not continue if it becomes a large year or a number such as 1388995.
-
-4. Add another column named:
-Product Monthly Amount Parsed
-
-Enter:
-=IFERROR(NUMBERVALUE([@product_monthly_amount],".",","),0)
-
-5. Add another column named:
+4. Add one new column named:
 June 2026 Numerator
 
-Enter:
-=--AND(ISNUMBER([@[Cancellation Date Parsed]]),[@[Product Monthly Amount Parsed]]>0,[@[Cancellation Date Parsed]]>=DATE(2026,6,1),[@[Cancellation Date Parsed]]<DATE(2026,7,1))
+Use this formula:
 
-6. Click anywhere in the table. Go to Insert > PivotTable > From Table/Range > New Worksheet.
+=--AND([@cancellation_date]>=DATE(2026,6,1),[@cancellation_date]<DATE(2026,7,1),[@product_monthly_amount]>0)
 
-7. In PivotTable Fields:
-- Drag payment_type_code to Rows.
-- Drag June 2026 Numerator to Values.
-- Open Value Field Settings and select Sum, not Count.
+5. Insert a PivotTable from the table.
+
+6. Set the PivotTable fields:
+- Rows: payment_type_code
+- Values: June 2026 Numerator
+- Value Field Settings: Sum
 
 Expected result:
 - payment_type_code 2 = 20
 - Grand Total = 20
 
-Do not count policy_id. This numerator is a row count, and the helper column contributes one only when the row has a positive monthly amount and a June 2026 cancellation date.
+Do not create a parsed-date column. Do not count policy_id.
