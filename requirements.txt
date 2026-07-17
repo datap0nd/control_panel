@@ -1,73 +1,11 @@
-EVALUATE
-VAR _PeriodStart = DATE ( 2026, 1, 1 )
-VAR _PeriodEnd = DATE ( 2026, 7, 12 )
-VAR _JanuaryStart = DATE ( 2026, 1, 1 )
-VAR _RawPolicy = ALL ( Policy )
-RETURN
-    ROW (
-        "Policy rows",
-            COUNTROWS ( _RawPolicy ),
-        "Rows with monthly amount above zero",
-            COUNTROWS (
-                FILTER (
-                    _RawPolicy,
-                    COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                )
-            ),
-        "All cancellation rows in period",
-            COUNTROWS (
-                FILTER (
-                    _RawPolicy,
-                    NOT ISBLANK ( Policy[Cancellation Date] )
-                        && Policy[Cancellation Date] >= _PeriodStart
-                        && Policy[Cancellation Date] <= _PeriodEnd
-                )
-            ),
-        "Paid-monthly cancellation rows in period",
-            COUNTROWS (
-                FILTER (
-                    _RawPolicy,
-                    COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                        && NOT ISBLANK ( Policy[Cancellation Date] )
-                        && Policy[Cancellation Date] >= _PeriodStart
-                        && Policy[Cancellation Date] <= _PeriodEnd
-                )
-            ),
-        "Blank policy-created dates after fallback",
-            COUNTROWS (
-                FILTER ( _RawPolicy, ISBLANK ( Policy[Policy Created Date] ) )
-            ),
-        "Paid-monthly January opening exposure",
-            COUNTROWS (
-                FILTER (
-                    _RawPolicy,
-                    VAR _CoverageStart =
-                        COALESCE (
-                            Policy[Warranty Start Date],
-                            Policy[Policy Created Date]
-                        )
-                    VAR _CoverageEnd = Policy[Warranty End Date]
-                    VAR _CancellationDate = Policy[Cancellation Date]
-                    RETURN
-                        COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                            && NOT ISBLANK ( _CoverageStart )
-                            && _CoverageStart <= _JanuaryStart
-                            && ( ISBLANK ( _CoverageEnd ) || _CoverageEnd >= _JanuaryStart )
-                            && ( ISBLANK ( _CancellationDate ) || _CancellationDate > _JanuaryStart )
-                )
-            ),
-        "Active helper cancellation events",
-            CALCULATE (
-                [Monthly Cancellation Events - Selected Months],
-                REMOVEFILTERS ( 'Date' ),
-                REMOVEFILTERS ( 'Date Filter' ),
-                DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
-            ),
-        "Active helper opening exposure",
-            CALCULATE (
-                [Monthly Opening Subscription Exposure - Selected Months],
-                REMOVEFILTERS ( 'Date' ),
-                REMOVEFILTERS ( 'Date Filter' ),
-                DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
-            )
-    )
+createOrReplace
+
+	ref table Measures_table
+
+		measure 'Monthly Cancellation Rate' =
+				DIVIDE (
+					[Monthly Cancellation Events - Selected Months],
+					[Monthly Opening Subscription Exposure - Selected Months]
+				)
+			formatString: 0.0%
+			displayFolder: Sales\Policy Status
