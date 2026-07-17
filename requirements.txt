@@ -11,19 +11,66 @@ createOrReplace
 			displayFolder: Sales\Policy Status
 
 		measure 'HTML KPI Monthly Cancellation Rate' =
-				VAR _Rate = [Monthly Cancellation Rate]
-				VAR _Value =
-					IF ( ISBLANK ( _Rate ), "--", FORMAT ( _Rate, "0.0%" ) )
-				VAR _Events = [Monthly Cancellation Events - Selected Months]
-				VAR _Exposure = [Monthly Opening Subscription Exposure - Selected Months]
-				VAR _Diagnostic =
-					IF (
-						ISBLANK ( _Exposure ),
-						"No opening exposure",
-						FORMAT ( _Events, "#,##0" ) & " events / " & FORMAT ( _Exposure, "#,##0" ) & " opening exposure"
-					)
-				RETURN
+				VAR _AsOfDate = COALESCE ( [KPI Sales Sparkline Anchor Date], MAX ( 'Date'[Date] ), TODAY () )
+				VAR _SparkStart = DATE ( YEAR ( EDATE ( _AsOfDate, -4 ) ), MONTH ( EDATE ( _AsOfDate, -4 ) ), 1 )
+				VAR _SparkEnd = DATE ( YEAR ( _AsOfDate ), MONTH ( _AsOfDate ), 1 )
+				VAR _StartLabel = FORMAT ( _SparkStart, "MM/yy" )
+				VAR _EndLabel = FORMAT ( _SparkEnd, "MM/yy" )
+				VAR _Css =
 					"<style>" &
-					"*{box-sizing:border-box}body{margin:0}.card{width:100%;height:100%;min-height:190px;padding:22px 28px;background:#fbfcfe;border:1px solid #cbd8e6;border-top:5px solid #b42318;border-radius:18px;box-shadow:0 8px 20px rgba(23,33,43,.10);font-family:Segoe UI,Arial,sans-serif;color:#17212b;display:flex;flex-direction:column}.head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}.label{font-size:20px;line-height:1.2;font-weight:700;color:#40536a}.info{width:34px;height:34px;flex:0 0 34px;border:1px solid #83b6dc;border-radius:50%;background:#e3f2fd;color:#175c8d;font-size:20px;font-weight:700;display:grid;place-items:center}.value{margin-top:18px;font-size:54px;line-height:1;font-weight:800;letter-spacing:-2px;color:#17212b}.detail{margin-top:auto;padding-top:22px;font-size:13px;line-height:1.3;font-weight:600;color:#68768a}</style>" &
-					"<div class='card'><div class='head'><div class='label'>Weighted monthly<br>cancellation</div><div class='info' title='Monthly cancellation events divided by the sum of each selected month opening active paid-monthly exposure.'>i</div></div><div class='value'>" & _Value & "</div><div class='detail'>" & _Diagnostic & "</div></div>"
+					"*{box-sizing:border-box}.kpi-host{width:100%;height:100%;padding:0;margin:0;font-family:Segoe UI,Arial,sans-serif;color:#17212b}.kpi-card{position:relative;width:100%;height:100%;min-height:198px;padding:12px;display:grid;grid-template-rows:auto auto 1fr auto;gap:8px;background:#fbfcfe;border:1px solid #d8dee8;border-radius:8px;box-shadow:0 10px 26px rgba(23,33,43,.08);overflow:hidden}.card-head{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start}.label{color:#6b7280;font-size:11px;line-height:1.25;font-weight:650}.value{color:#17212b;font-size:26px;line-height:1;font-weight:750;letter-spacing:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.info-wrap{display:inline-grid;place-items:center}.info-button{width:18px;height:18px;display:grid;place-items:center;border:1px solid #c8d8e8;border-radius:50%;background:#e8f1f9;color:#1f4e79;font-size:11px;line-height:1;font-weight:800}.tooltip{position:absolute;z-index:5;top:40px;left:10px;right:10px;width:auto;padding:9px 10px;border:1px solid #b8c3d1;border-radius:7px;background:#fbfcfe;box-shadow:0 12px 26px rgba(23,33,43,.16);color:#17212b;opacity:0;visibility:hidden;transform:translateY(-3px);transition:opacity 160ms ease,transform 160ms ease,visibility 160ms ease;pointer-events:none}.tooltip strong{display:block;margin-bottom:4px;color:#17212b;font-size:10px;line-height:1.25}.tooltip span{display:block;color:#6b7280;font-size:9.5px;line-height:1.35}.info-wrap:hover .tooltip,.info-wrap:focus-within .tooltip{opacity:1;visibility:visible;transform:translateY(0)}.spark-wrap{display:grid;gap:3px;margin-top:1px}.spark{width:100%;height:48px;display:block}.axis{display:flex;justify-content:space-between;color:#8b95a3;font-size:8.5px;line-height:1;font-weight:650}.compare-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:5px;margin-top:1px}.compare{min-width:0;border:1px solid #d8dee8;border-radius:6px;background:#f6f8fb;padding:5px 6px}.compare span{display:block;overflow:hidden;color:#6b7280;font-size:8.5px;line-height:1.15;text-overflow:ellipsis;white-space:nowrap}.compare strong{display:block;margin-top:3px;color:#17212b;font-size:10.5px;line-height:1.1;white-space:nowrap}.compare.good strong{color:#0f766e}.compare.bad strong{color:#9b2c2c}.compare.watch strong{color:#9a6700}.compare.na strong{color:#8b95a3}</style>"
+				VAR _SparkTemplatePrefix = "<div class=""spark-wrap""><svg class=""spark"" viewBox=""0 0 156 42"" preserveAspectRatio=""none"" role=""img""><polygon points=""0,42 "
+				VAR _SparkTemplateMiddle = " 156,42"" fill=""#e8f1f9""></polygon><polyline points="""
+				VAR _SparkTemplateSuffix = """ fill=""none"" stroke=""#1f4e79"" stroke-width=""2.2"" stroke-linecap=""round"" stroke-linejoin=""round""></polyline></svg><div class=""axis""><span>" & _StartLabel & "</span><span>" & _EndLabel & "</span></div></div>"
+				VAR _Series =
+					ADDCOLUMNS (
+						GENERATESERIES ( 0, 4, 1 ),
+						"MetricValue",
+							VAR _MonthStart = EDATE ( _SparkStart, [Value] )
+							RETURN COALESCE ( CALCULATE ( [Monthly Cancellation Rate], REMOVEFILTERS ( 'Date' ), REMOVEFILTERS ( 'Date Filter' ), DATESBETWEEN ( 'Date'[Date], _MonthStart, EOMONTH ( _MonthStart, 0 ) ) ), 0 )
+					)
+				VAR _MinValue = MINX ( _Series, [MetricValue] )
+				VAR _MaxValue = MAXX ( _Series, [MetricValue] )
+				VAR _Range = IF ( _MaxValue = _MinValue, 1, _MaxValue - _MinValue )
+				VAR _Points =
+					CONCATENATEX (
+						_Series,
+						VAR _X = [Value] * 39
+						VAR _Y = 5 + DIVIDE ( _MaxValue - [MetricValue], _Range, 0 ) * 30
+						RETURN FORMAT ( _X, "0" ) & "," & FORMAT ( _Y, "0" ),
+						" ",
+						[Value],
+						ASC
+					)
+				VAR _RawValue = [Monthly Cancellation Rate]
+				VAR _Value = IF ( ISBLANK ( _RawValue ), "--", FORMAT ( _RawValue, "0.0%" ) )
+				VAR _Prior1Value =
+					CALCULATE (
+						[Monthly Cancellation Rate],
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						TREATAS ( SELECTCOLUMNS ( VALUES ( 'Date'[Date] ), "Date", EDATE ( 'Date'[Date], -12 ) ), 'Date'[Date] )
+					)
+				VAR _Prior2Value =
+					CALCULATE (
+						[Monthly Cancellation Rate],
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						TREATAS ( SELECTCOLUMNS ( VALUES ( 'Date'[Date] ), "Date", EDATE ( 'Date'[Date], -24 ) ), 'Date'[Date] )
+					)
+				VAR _Comp1Value = _RawValue - _Prior1Value
+				VAR _Comp1Class = IF ( ISBLANK ( _Comp1Value ), "na", IF ( _Comp1Value <= 0, "good", "bad" ) )
+				VAR _Comp1Text = IF ( ISBLANK ( _Comp1Value ), "n/a", FORMAT ( _Comp1Value * 100, "+0.0 pts;-0.0 pts;0.0 pts" ) )
+				VAR _Comp2Value = _RawValue - _Prior2Value
+				VAR _Comp2Class = IF ( ISBLANK ( _Comp2Value ), "na", IF ( _Comp2Value <= 0, "good", "bad" ) )
+				VAR _Comp2Text = IF ( ISBLANK ( _Comp2Value ), "n/a", FORMAT ( _Comp2Value * 100, "+0.0 pts;-0.0 pts;0.0 pts" ) )
+				VAR _Comp3Class = "na"
+				VAR _Comp3Text = "n/a"
+				VAR _Comp3Label = "No Plan"
+				VAR _Card =
+					"<article class=""kpi-card""><div class=""card-head""><div class=""label"">Monthly Cancellation Rate</div><span class=""info-wrap""><span class=""info-button"">i</span><span class=""tooltip""><strong>Weighted monthly cancellation rate</strong><span>Monthly cancellation events divided by the sum of each selected month opening active paid-monthly exposure. Lower is favorable.</span></span></span></div><div class=""value"">" & _Value & "</div>" &
+					_SparkTemplatePrefix & _Points & _SparkTemplateMiddle & _Points & _SparkTemplateSuffix &
+					"<div class=""compare-grid""><div class=""compare " & _Comp1Class & """><span>vs LY</span><strong>" & _Comp1Text & "</strong></div><div class=""compare " & _Comp3Class & """><span>" & _Comp3Label & "</span><strong>" & _Comp3Text & "</strong></div></div></article>"
+				RETURN
+					_Css & "<div class=""kpi-host"">" & _Card & "</div>"
 			displayFolder: KPI Cards\HTML
