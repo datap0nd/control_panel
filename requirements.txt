@@ -1,419 +1,89 @@
-DEFINE
-    VAR _SalesMaxDate =
-        CALCULATE ( MAX ( Sales[Reporting Date] ), REMOVEFILTERS () )
-    VAR _PolicyMaxDate =
-        CALCULATE ( MAX ( Policy[Policy Created Date] ), REMOVEFILTERS () )
-    VAR _PeriodEnd =
-        MIN ( _SalesMaxDate, _PolicyMaxDate )
-    VAR _PeriodStart =
-        DATE ( YEAR ( _PeriodEnd ), 1, 1 )
+// Run in Tabular Editor Advanced Scripting while connected to the open Power BI model.
+// This changes only the embedded HTML tooltip text. It does not replace metric formulas.
 
-    VAR _MonthStarts =
-        SELECTCOLUMNS (
-            GENERATESERIES ( 0, DATEDIFF ( _PeriodStart, _PeriodEnd, MONTH ), 1 ),
-            "Month Start", EDATE ( _PeriodStart, [Value] )
-        )
+var definitions = new[]
+{
+    new { Pattern = @"Total selected .*? sales units", Heading = "Sum of sales_volume from Sales", Body = "Adds sales units dated within the selected period and supported Sales filters. Partner-level views use the new-policy proxy because partner sales are not available in the Sales source." },
+    new { Pattern = @"Total revenue before program deductions", Heading = "Sum of gross_revenue from Sales", Body = "Adds source gross revenue for the selected period before insurer, channel, and distributor deductions. Supported Sales filters apply." },
+    new { Pattern = @"Sales Volume / S/O That Stays Units", Heading = "Sales Volume divided by retained sell-out units", Body = "Uses Sales Volume as the numerator and sell-out units where sell-in subsidiary equals current subsidiary as the denominator. Returns blank when the sell-out denominator is unavailable or zero." },
+    new { Pattern = @"Net Revenue / Gross Revenue", Heading = "Program Margin divided by Gross Revenue", Body = "Program Margin is the sum of source net_revenue_program_margin. The rate is blank when Gross Revenue is zero. Selected period and supported Sales filters apply." },
+    new { Pattern = @"Policy Detail Count / Sales Volume", Heading = "Policy detail rows divided by Sales Volume", Body = "Compares policy-level rows with Sales Volume in the same supported period context. This is a source-coverage check, not an attach rate or active-policy rate." },
+    new { Pattern = @"Program margin amount", Heading = "Sum of net_revenue_program_margin from Sales", Body = "Adds the source program-margin amount for the selected period and supported Sales filters. The report does not reconstruct this amount from displayed components." },
+    new { Pattern = @"Paid revenue plus contribution revenue", Heading = "Sum of subsidiary_revenue from Sales", Body = "Adds the source subsidiary-revenue amount for the selected period and supported Sales filters. It is displayed as supplied rather than recalculated." },
+    new { Pattern = @"Active policy estimate", Heading = "Period-end active policy snapshot", Body = "Counts policies with active status whose coverage started by the final selected date, warranty has not ended, and cancellation is blank or later than that date. This is a stock at period end, not policies created during the period." },
+    new { Pattern = @"Cancelled policy count", Heading = "Cancellation events in the selected period", Body = "Counts policy rows whose cancellation date falls between the selected start and end dates. This event count is independent of the policy's current status." },
+    new { Pattern = @"Expired policy count", Heading = "Warranty expiries in the selected period", Body = "Counts policy rows whose warranty end date falls in the selected period, excluding policies cancelled on or before their warranty end date." },
+    new { Pattern = @"Attach rate after export exclusion", Heading = "Sales Volume divided by retained sell-out after export exclusions", Body = "Applies the configured export exclusions to the supported sell-out denominator. Returns blank when the sell-out source, exclusion mapping, or denominator is unavailable." },
+    new { Pattern = @"Eligible sell-out denominator", Heading = "Retained sell-out units", Body = "Sums active sell-out units where sell-in subsidiary equals current subsidiary. This is the eligible denominator for retained-sell-out attach rates." },
+    new { Pattern = @"Distinct active partners", Heading = "Distinct partners with a new policy", Body = "Counts nonblank partners with at least one policy created in the selected period. It measures partner activity, not current partner status or Sales-table volume." },
+    new { Pattern = @"Monthly paid revenue units", Heading = "Period-end active monthly subscribers", Body = "Counts active policies with product_monthly_amount greater than zero whose coverage is open on the final selected date. It is a period-end stock, not monthly sales or revenue units." },
+    new { Pattern = @"Monthly cancellation rate", Heading = "Paid monthly cancellations divided by opening paid exposure", Body = "For each month, counts cancellations with product_monthly_amount greater than zero and divides by paid monthly policies open at that month's start. The selected-period result is total monthly cancellations divided by total monthly opening exposure." },
+    new { Pattern = @"Smartphone sales volume", Heading = "Flagship smartphone Sales Volume", Body = "Sums Sales Volume for rows classified in the smartphone product family and flagship device series used by this visual. Selected period and supported Sales filters apply." },
+    new { Pattern = @"Non-smartphone sales volume", Heading = "Sales Volume outside the smartphone product family", Body = "Sums Sales Volume for rows outside the smartphone product-family classification used by this visual. Selected period and supported Sales filters apply." },
+    new { Pattern = @"Sales actuals versus plan", Heading = "Sales Volume compared with matching sales plan", Body = "Shows Sales-table volume for the selected period beside the plan rows for the same comparable months and supported planning dimensions." },
+    new { Pattern = @"ERP revenue actuals versus plan", Heading = "Gross Revenue compared with matching revenue plan", Body = "Shows Sales-table Gross Revenue for the selected period beside revenue plan values for the same comparable months and supported planning dimensions." },
+    new { Pattern = @"Attach rate actuals versus plan", Heading = "Attach Rate compared with its plan target", Body = "Compares the supported attach-rate actual with the matching attach-rate plan. Actual remains blank when the required sell-out denominator is unavailable." },
+    new { Pattern = @"Gross revenue / sales volume", Heading = "Gross Revenue divided by Sales Volume", Body = "Calculates average gross revenue per sales unit in the selected period and supported Sales filters. Returns blank when Sales Volume is zero." },
+    new { Pattern = @"Sales Volume / Total S/O", Heading = "Sales Volume divided by total sell-out", Body = "Uses all active sell-out units as the denominator before retained-sell-out and export treatment. Returns blank when the sell-out denominator is unavailable or zero." },
+    new { Pattern = @"Sales Volume / S/O That Stays", Heading = "Sales Volume divided by retained sell-out", Body = "Uses sell-out units where sell-in subsidiary equals current subsidiary as the denominator. Returns blank when the sell-out denominator is unavailable or zero." },
+    new { Pattern = @"eStore sales / eStore S/O That Stays", Heading = "Channel sales divided by retained channel sell-out", Body = "Applies the online-store channel context to both Sales Volume and retained sell-out. Returns blank when the aligned sell-out denominator is unavailable or zero." },
+    new { Pattern = @"Channel-context sales / total S/O", Heading = "Channel Sales Volume divided by total channel sell-out", Body = "Keeps the selected channel context and uses all aligned active sell-out units as the denominator. Returns blank when the denominator is unavailable or zero." },
+    new { Pattern = @"Channel-context sales / S/O That Stays", Heading = "Channel Sales Volume divided by retained channel sell-out", Body = "Keeps the selected channel context and uses aligned sell-out where sell-in subsidiary equals current subsidiary. Returns blank when the denominator is unavailable or zero." }
+};
 
-    VAR _MonthlyCore =
-        GENERATE (
-            _MonthStarts,
-            VAR _MonthStart = [Month Start]
-            VAR _MonthEnd = MIN ( EOMONTH ( _MonthStart, 0 ), _PeriodEnd )
-            VAR _SalesRows =
-                COUNTROWS (
-                    FILTER (
-                        ALL ( Sales ),
-                        Sales[Reporting Date] >= _MonthStart
-                            && Sales[Reporting Date] <= _MonthEnd
-                    )
-                )
-            VAR _SalesVolume =
-                SUMX (
-                    FILTER (
-                        ALL ( Sales ),
-                        Sales[Reporting Date] >= _MonthStart
-                            && Sales[Reporting Date] <= _MonthEnd
-                    ),
-                    Sales[sales_volume]
-                )
-            VAR _GrossRevenue =
-                SUMX (
-                    FILTER (
-                        ALL ( Sales ),
-                        Sales[Reporting Date] >= _MonthStart
-                            && Sales[Reporting Date] <= _MonthEnd
-                    ),
-                    Sales[gross_revenue]
-                )
-            VAR _ProgramMargin =
-                SUMX (
-                    FILTER (
-                        ALL ( Sales ),
-                        Sales[Reporting Date] >= _MonthStart
-                            && Sales[Reporting Date] <= _MonthEnd
-                    ),
-                    Sales[net_revenue_program_margin]
-                )
-            VAR _SubsidiaryRevenue =
-                SUMX (
-                    FILTER (
-                        ALL ( Sales ),
-                        Sales[Reporting Date] >= _MonthStart
-                            && Sales[Reporting Date] <= _MonthEnd
-                    ),
-                    Sales[subsidiary_revenue]
-                )
-            VAR _RevenueUnits =
-                SUMX (
-                    FILTER (
-                        ALL ( Sales ),
-                        Sales[Reporting Date] >= _MonthStart
-                            && Sales[Reporting Date] <= _MonthEnd
-                    ),
-                    Sales[revenue_units]
-                )
-            VAR _NewPolicyProxy =
-                SUMX (
-                    FILTER (
-                        ALL ( 'Aggregated Policy' ),
-                        'Aggregated Policy'[Policy Created Date] >= _MonthStart
-                            && 'Aggregated Policy'[Policy Created Date] <= _MonthEnd
-                    ),
-                    'Aggregated Policy'[New Policy Count]
-                )
-            VAR _ActivePolicies =
-                COUNTROWS (
-                    FILTER (
-                        ALL ( Policy ),
-                        VAR _CoverageStart =
-                            COALESCE (
-                                Policy[Warranty Start Date],
-                                Policy[Policy Created Date]
-                            )
-                        RETURN
-                            TRIM ( Policy[Policy Status] & "" ) = "1"
-                                && _CoverageStart <= _MonthEnd
-                                && (
-                                    ISBLANK ( Policy[Warranty End Date] )
-                                        || Policy[Warranty End Date] >= _MonthEnd
-                                )
-                                && (
-                                    ISBLANK ( Policy[Cancellation Date] )
-                                        || Policy[Cancellation Date] > _MonthEnd
-                                )
-                    )
-                )
-            VAR _ActiveMonthly =
-                COUNTROWS (
-                    FILTER (
-                        ALL ( Policy ),
-                        VAR _CoverageStart =
-                            COALESCE (
-                                Policy[Warranty Start Date],
-                                Policy[Policy Created Date]
-                            )
-                        RETURN
-                            TRIM ( Policy[Policy Status] & "" ) = "1"
-                                && COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                                && _CoverageStart <= _MonthEnd
-                                && (
-                                    ISBLANK ( Policy[Warranty End Date] )
-                                        || Policy[Warranty End Date] >= _MonthEnd
-                                )
-                                && (
-                                    ISBLANK ( Policy[Cancellation Date] )
-                                        || Policy[Cancellation Date] > _MonthEnd
-                                )
-                    )
-                )
-            VAR _AllCancellations =
-                COUNTROWS (
-                    FILTER (
-                        ALL ( Policy ),
-                        Policy[Cancellation Date] >= _MonthStart
-                            && Policy[Cancellation Date] <= _MonthEnd
-                    )
-                )
-            VAR _PaidCancellations =
-                COUNTROWS (
-                    FILTER (
-                        ALL ( Policy ),
-                        COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                            && Policy[Cancellation Date] >= _MonthStart
-                            && Policy[Cancellation Date] <= _MonthEnd
-                    )
-                )
-            VAR _OpeningExposure =
-                COUNTROWS (
-                    FILTER (
-                        ALL ( Policy ),
-                        VAR _CoverageStart =
-                            COALESCE (
-                                Policy[Warranty Start Date],
-                                Policy[Policy Created Date]
-                            )
-                        RETURN
-                            COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                                && _CoverageStart <= _MonthStart
-                                && (
-                                    ISBLANK ( Policy[Warranty End Date] )
-                                        || Policy[Warranty End Date] >= _MonthStart
-                                )
-                                && (
-                                    ISBLANK ( Policy[Cancellation Date] )
-                                        || Policy[Cancellation Date] > _MonthStart
-                                )
-                    )
-                )
-            VAR _Expiries =
-                COUNTROWS (
-                    FILTER (
-                        ALL ( Policy ),
-                        Policy[Warranty End Date] >= _MonthStart
-                            && Policy[Warranty End Date] <= _MonthEnd
-                            && (
-                                ISBLANK ( Policy[Cancellation Date] )
-                                    || Policy[Cancellation Date] > Policy[Warranty End Date]
-                            )
-                    )
-                )
-            RETURN
-                ROW (
-                    "Sort", 2,
-                    "Section", "MONTH",
-                    "Period", FORMAT ( _MonthStart, "yyyy-MM" ),
-                    "Period Start", _MonthStart,
-                    "Period End", _MonthEnd,
-                    "Sales Rows", _SalesRows,
-                    "Policy Rows", BLANK (),
-                    "Aggregated Policy Rows", BLANK (),
-                    "Sales Volume", _SalesVolume,
-                    "Gross Revenue", _GrossRevenue,
-                    "Program Margin", _ProgramMargin,
-                    "Program Margin Rate", DIVIDE ( _ProgramMargin, _GrossRevenue ),
-                    "Subsidiary Revenue", _SubsidiaryRevenue,
-                    "Revenue Units", _RevenueUnits,
-                    "New Policy Proxy", _NewPolicyProxy,
-                    "Active Partners", BLANK (),
-                    "Active Policies", _ActivePolicies,
-                    "Active Monthly Subscribers", _ActiveMonthly,
-                    "All Cancellation Events", _AllCancellations,
-                    "Paid Monthly Cancellations", _PaidCancellations,
-                    "Opening Paid Exposure", _OpeningExposure,
-                    "Weighted Cancellation Rate", DIVIDE ( _PaidCancellations, _OpeningExposure ),
-                    "Expiries", _Expiries,
-                    "Positive Monthly Amount Rows", BLANK (),
-                    "Rows With Cancellation Date", BLANK ()
-                )
-        )
+var updatedMeasures = new System.Collections.Generic.HashSet<string>();
+var replacementCount = 0;
+var missingDefinitions = new System.Collections.Generic.List<string>();
 
-    VAR _MonthlyRows =
-        SELECTCOLUMNS (
-            _MonthlyCore,
-            "Sort", [Sort],
-            "Section", [Section],
-            "Period", [Period],
-            "Period Start", [Period Start],
-            "Period End", [Period End],
-            "Sales Rows", [Sales Rows],
-            "Policy Rows", [Policy Rows],
-            "Aggregated Policy Rows", [Aggregated Policy Rows],
-            "Sales Volume", [Sales Volume],
-            "Gross Revenue", [Gross Revenue],
-            "Program Margin", [Program Margin],
-            "Program Margin Rate", [Program Margin Rate],
-            "Subsidiary Revenue", [Subsidiary Revenue],
-            "Revenue Units", [Revenue Units],
-            "New Policy Proxy", [New Policy Proxy],
-            "Active Partners", [Active Partners],
-            "Active Policies", [Active Policies],
-            "Active Monthly Subscribers", [Active Monthly Subscribers],
-            "All Cancellation Events", [All Cancellation Events],
-            "Paid Monthly Cancellations", [Paid Monthly Cancellations],
-            "Opening Paid Exposure", [Opening Paid Exposure],
-            "Weighted Cancellation Rate", [Weighted Cancellation Rate],
-            "Expiries", [Expiries],
-            "Positive Monthly Amount Rows", [Positive Monthly Amount Rows],
-            "Rows With Cancellation Date", [Rows With Cancellation Date]
-        )
+foreach (var definition in definitions)
+{
+    var pattern = "<strong>" + definition.Pattern + "</strong><span>.*?</span>";
+    var replacement = "<strong>" + definition.Heading + "</strong><span>" + definition.Body + "</span>";
+    var definitionHits = 0;
 
-    VAR _YtdSales =
-        FILTER (
-            ALL ( Sales ),
-            Sales[Reporting Date] >= _PeriodStart
-                && Sales[Reporting Date] <= _PeriodEnd
-        )
-    VAR _YtdPolicy =
-        FILTER (
-            ALL ( Policy ),
-            Policy[Policy Created Date] >= _PeriodStart
-                && Policy[Policy Created Date] <= _PeriodEnd
-        )
-    VAR _YtdAggregate =
-        FILTER (
-            ALL ( 'Aggregated Policy' ),
-            'Aggregated Policy'[Policy Created Date] >= _PeriodStart
-                && 'Aggregated Policy'[Policy Created Date] <= _PeriodEnd
-        )
-    VAR _YtdSalesVolume = SUMX ( _YtdSales, Sales[sales_volume] )
-    VAR _YtdGrossRevenue = SUMX ( _YtdSales, Sales[gross_revenue] )
-    VAR _YtdProgramMargin = SUMX ( _YtdSales, Sales[net_revenue_program_margin] )
-    VAR _YtdActivePolicies =
-        COUNTROWS (
-            FILTER (
-                ALL ( Policy ),
-                VAR _CoverageStart =
-                    COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
-                RETURN
-                    TRIM ( Policy[Policy Status] & "" ) = "1"
-                        && _CoverageStart <= _PeriodEnd
-                        && (
-                            ISBLANK ( Policy[Warranty End Date] )
-                                || Policy[Warranty End Date] >= _PeriodEnd
-                        )
-                        && (
-                            ISBLANK ( Policy[Cancellation Date] )
-                                || Policy[Cancellation Date] > _PeriodEnd
-                        )
-            )
-        )
-    VAR _YtdActiveMonthly =
-        COUNTROWS (
-            FILTER (
-                ALL ( Policy ),
-                VAR _CoverageStart =
-                    COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
-                RETURN
-                    TRIM ( Policy[Policy Status] & "" ) = "1"
-                        && COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                        && _CoverageStart <= _PeriodEnd
-                        && (
-                            ISBLANK ( Policy[Warranty End Date] )
-                                || Policy[Warranty End Date] >= _PeriodEnd
-                        )
-                        && (
-                            ISBLANK ( Policy[Cancellation Date] )
-                                || Policy[Cancellation Date] > _PeriodEnd
-                        )
-            )
-        )
-    VAR _YtdAllCancellations =
-        COUNTROWS (
-            FILTER (
-                ALL ( Policy ),
-                Policy[Cancellation Date] >= _PeriodStart
-                    && Policy[Cancellation Date] <= _PeriodEnd
-            )
-        )
-    VAR _YtdPaidCancellations =
-        COUNTROWS (
-            FILTER (
-                ALL ( Policy ),
-                COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                    && Policy[Cancellation Date] >= _PeriodStart
-                    && Policy[Cancellation Date] <= _PeriodEnd
-            )
-        )
-    VAR _YtdExpiries =
-        COUNTROWS (
-            FILTER (
-                ALL ( Policy ),
-                Policy[Warranty End Date] >= _PeriodStart
-                    && Policy[Warranty End Date] <= _PeriodEnd
-                    && (
-                        ISBLANK ( Policy[Cancellation Date] )
-                            || Policy[Cancellation Date] > Policy[Warranty End Date]
-                    )
-            )
-        )
-    VAR _WeightedNumerator =
-        SUMX ( _MonthlyRows, [Paid Monthly Cancellations] )
-    VAR _WeightedDenominator =
-        SUMX ( _MonthlyRows, [Opening Paid Exposure] )
+    foreach (var measure in Model.AllMeasures)
+    {
+        var expression = measure.Expression ?? "";
+        var matches = System.Text.RegularExpressions.Regex.Matches(
+            expression,
+            pattern,
+            System.Text.RegularExpressions.RegexOptions.Singleline
+        ).Count;
 
-    VAR _ControlRow =
-        ROW (
-            "Sort", 0,
-            "Section", "CONTROL",
-            "Period", "FULL MODEL",
-            "Period Start", _PeriodStart,
-            "Period End", _PeriodEnd,
-            "Sales Rows", COUNTROWS ( ALL ( Sales ) ),
-            "Policy Rows", COUNTROWS ( ALL ( Policy ) ),
-            "Aggregated Policy Rows", COUNTROWS ( ALL ( 'Aggregated Policy' ) ),
-            "Sales Volume", BLANK (),
-            "Gross Revenue", BLANK (),
-            "Program Margin", BLANK (),
-            "Program Margin Rate", BLANK (),
-            "Subsidiary Revenue", BLANK (),
-            "Revenue Units", BLANK (),
-            "New Policy Proxy", BLANK (),
-            "Active Partners", BLANK (),
-            "Active Policies", BLANK (),
-            "Active Monthly Subscribers", BLANK (),
-            "All Cancellation Events", BLANK (),
-            "Paid Monthly Cancellations", BLANK (),
-            "Opening Paid Exposure", BLANK (),
-            "Weighted Cancellation Rate", BLANK (),
-            "Expiries", BLANK (),
-            "Positive Monthly Amount Rows",
-                COUNTROWS (
-                    FILTER (
-                        ALL ( Policy ),
-                        COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                    )
-                ),
-            "Rows With Cancellation Date",
-                COUNTROWS (
-                    FILTER ( ALL ( Policy ), NOT ISBLANK ( Policy[Cancellation Date] ) )
-                )
-        )
+        if (matches == 0)
+            continue;
 
-    VAR _YtdRow =
-        ROW (
-            "Sort", 1,
-            "Section", "YTD",
-            "Period", FORMAT ( _PeriodStart, "yyyy-MM-dd" ) & " to " & FORMAT ( _PeriodEnd, "yyyy-MM-dd" ),
-            "Period Start", _PeriodStart,
-            "Period End", _PeriodEnd,
-            "Sales Rows", COUNTROWS ( _YtdSales ),
-            "Policy Rows", COUNTROWS ( _YtdPolicy ),
-            "Aggregated Policy Rows", COUNTROWS ( _YtdAggregate ),
-            "Sales Volume", _YtdSalesVolume,
-            "Gross Revenue", _YtdGrossRevenue,
-            "Program Margin", _YtdProgramMargin,
-            "Program Margin Rate", DIVIDE ( _YtdProgramMargin, _YtdGrossRevenue ),
-            "Subsidiary Revenue", SUMX ( _YtdSales, Sales[subsidiary_revenue] ),
-            "Revenue Units", SUMX ( _YtdSales, Sales[revenue_units] ),
-            "New Policy Proxy", SUMX ( _YtdAggregate, 'Aggregated Policy'[New Policy Count] ),
-            "Active Partners",
-                COUNTROWS (
-                    SUMMARIZE (
-                        FILTER (
-                            _YtdAggregate,
-                            NOT ISBLANK ( 'Aggregated Policy'[Partner Name] )
-                                && TRIM ( 'Aggregated Policy'[Partner Name] ) <> ""
-                        ),
-                        'Aggregated Policy'[Partner Name]
-                    )
-                ),
-            "Active Policies", _YtdActivePolicies,
-            "Active Monthly Subscribers", _YtdActiveMonthly,
-            "All Cancellation Events", _YtdAllCancellations,
-            "Paid Monthly Cancellations", _YtdPaidCancellations,
-            "Opening Paid Exposure", _WeightedDenominator,
-            "Weighted Cancellation Rate", DIVIDE ( _WeightedNumerator, _WeightedDenominator ),
-            "Expiries", _YtdExpiries,
-            "Positive Monthly Amount Rows", BLANK (),
-            "Rows With Cancellation Date", BLANK ()
-        )
+        measure.Expression = System.Text.RegularExpressions.Regex.Replace(
+            expression,
+            pattern,
+            replacement,
+            System.Text.RegularExpressions.RegexOptions.Singleline
+        );
+        definitionHits += matches;
+        replacementCount += matches;
+        updatedMeasures.Add(measure.Name);
+    }
 
-    VAR _Result =
-        UNION ( _ControlRow, _YtdRow, _MonthlyRows )
+    if (definitionHits == 0)
+        missingDefinitions.Add(definition.Heading);
+}
 
-EVALUATE
-    _Result
+var remainingEmbeddedTooltips = 0;
+foreach (var measure in Model.AllMeasures)
+{
+    remainingEmbeddedTooltips += System.Text.RegularExpressions.Regex.Matches(
+        measure.Expression ?? "",
+        @"<span class=""""tooltip"""">",
+        System.Text.RegularExpressions.RegexOptions.Singleline
+    ).Count;
+}
 
-ORDER BY
-    [Sort],
-    [Period Start]
+var message =
+    "Updated measures: " + updatedMeasures.Count +
+    "\nTooltip replacements: " + replacementCount +
+    "\nEmbedded tooltip instances after update: " + remainingEmbeddedTooltips;
+
+if (missingDefinitions.Count > 0)
+    message += "\nDefinitions not found in this model: " + string.Join(" | ", missingDefinitions);
+
+Info(message);
