@@ -2,97 +2,154 @@ createOrReplace
 
 	ref table Measures_table
 
-		measure 'Attach Sales QTY' = [Attach Sales Volume - Common Grain]
-			formatString: #,##0
-			displayFolder: Attach Rate\Table
-
-		measure 'Sellout That Stays - Common Grain' = [Attach Sellout Net Units - Common Grain]
-			formatString: #,##0
-			displayFolder: Attach Rate\Table
-
-		measure 'Total Sellout - Common Grain' = [Attach Sellout Total Units - Common Grain]
-			formatString: #,##0
-			displayFolder: Attach Rate\Table
-
-		measure 'Raw Attach Rate' = [Attach Rate Total S/O]
-			formatString: 0.0%
-			displayFolder: Attach Rate
-
-		measure 'Excluding Export Attach Rate' = [Attach Rate Net of Export]
-			formatString: 0.0%
-			displayFolder: Attach Rate
-
-		measure 'Global Attach Rate CY' =
-				CALCULATE (
-					[Raw Attach Rate],
-					REMOVEFILTERS ( 'Subsidiary Master' ),
-					REMOVEFILTERS ( Sales[Attach Subsidiary] )
-				)
-			formatString: 0.0%
-			displayFolder: Attach Rate\Benchmark
-
-		measure 'Global Excluding Export Attach Rate' =
-				CALCULATE (
-					[Excluding Export Attach Rate],
-					REMOVEFILTERS ( 'Subsidiary Master' ),
-					REMOVEFILTERS ( Sales[Attach Subsidiary] )
-				)
-			formatString: 0.0%
-			displayFolder: Attach Rate\Benchmark
-
-		measure 'Raw Attach Rate vs Global' =
-				[Raw Attach Rate] - [Global Attach Rate CY]
-			formatString: +0.0%;-0.0%;0.0%
-			displayFolder: Attach Rate\Benchmark
-
-		measure 'Excluding Export Attach Rate vs Global' =
-				[Excluding Export Attach Rate] - [Global Excluding Export Attach Rate]
-			formatString: +0.0%;-0.0%;0.0%
-			displayFolder: Attach Rate\Benchmark
-
-		measure 'Raw vs Global (pts)' =
-				( [Raw Attach Rate] - [Global Attach Rate CY] ) * 100
-			formatString: +0.0 "pts";-0.0 "pts";0.0 "pts"
-			displayFolder: Attach Rate\Table
-
-		measure 'Excl Export vs Global (pts)' =
-				( [Excluding Export Attach Rate] - [Global Excluding Export Attach Rate] ) * 100
-			formatString: +0.0 "pts";-0.0 "pts";0.0 "pts"
-			displayFolder: Attach Rate\Table
-
-		measure 'Excluding Export Attach Rate LY' =
-				VAR _CurrentYear = [Analysis Year]
-				VAR _PriorYear = _CurrentYear - 1
-				VAR _CommonEnd = [Attach Common Data End Date]
-				VAR _Months =
-					FILTER (
-						VALUES ( 'Date'[MonthNum] ),
-						_CurrentYear < YEAR ( _CommonEnd )
-							|| ( _CurrentYear = YEAR ( _CommonEnd ) && 'Date'[MonthNum] <= MONTH ( _CommonEnd ) )
-					)
-				RETURN
-					CALCULATE (
-						[Excluding Export Attach Rate],
+		measure 'Sales Plan QTY' =
+				VAR _SourceType = SELECTEDVALUE ( 'Source'[Source Type] )
+				VAR _UnsupportedDetailFilter =
+					ISFILTERED ( Sales[Country Code] )
+						|| ISFILTERED ( Sales[Sales Channel] )
+						|| ISFILTERED ( Sales[Device Category] )
+						|| ISFILTERED ( Sales[Device Model] )
+						|| ISFILTERED ( Sales[Product Type] )
+						|| ISFILTERED ( Sales[Payment Type] )
+						|| ISFILTERED ( Sales[SC+ Plan Rollup] )
+						|| ISFILTERED ( Sales[SC+ Plan Type] )
+						|| ISFILTERED ( Sales[Account / Partner] )
+						|| ISINSCOPE ( Sales[Country Code] )
+						|| ISINSCOPE ( Sales[Sales Channel] )
+						|| ISINSCOPE ( Sales[Device Category] )
+						|| ISINSCOPE ( Sales[Device Model] )
+						|| ISINSCOPE ( Sales[Product Type] )
+						|| ISINSCOPE ( Sales[Payment Type] )
+						|| ISINSCOPE ( Sales[SC+ Plan Rollup] )
+						|| ISINSCOPE ( Sales[SC+ Plan Type] )
+						|| ISINSCOPE ( Sales[Account / Partner] )
+				VAR _PeriodStart = [KPI Comparison Period Start Date]
+				VAR _PeriodEnd = [KPI Comparison Period End Date]
+				VAR _MonthKeys =
+					CALCULATETABLE (
+						VALUES ( 'Date'[YearMonth] ),
 						REMOVEFILTERS ( 'Date' ),
 						REMOVEFILTERS ( 'Date Filter' ),
-						TREATAS ( _Months, 'Date'[MonthNum] ),
-						'Date'[Year] = _PriorYear
+						DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+					)
+				RETURN
+					IF (
+						_SourceType IN { "Revenue", "Policy" }
+							|| _UnsupportedDetailFilter
+							|| ISBLANK ( _PeriodStart )
+							|| ISBLANK ( _PeriodEnd )
+							|| _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							SUM ( 'Sales Plan'[plan_value] ),
+							'Sales Plan'[Sales Plan Type] = "Sales",
+							REMOVEFILTERS ( 'Sales Plan'[Sales Channel] ),
+							TREATAS ( _MonthKeys, 'Sales Plan'[Month Key] ),
+							TREATAS ( VALUES ( 'Subsidiary Master'[Subsidiary] ), 'Sales Plan'[Subsidiary] )
+						)
+					)
+			formatString: #,##0
+			displayFolder: Sales Plan and Revenue Plan
+
+		measure 'Sales Plan Attach Rate' =
+				VAR _SourceType = SELECTEDVALUE ( 'Source'[Source Type] )
+				VAR _UnsupportedDetailFilter =
+					ISFILTERED ( Sales[Country Code] )
+						|| ISFILTERED ( Sales[Sales Channel] )
+						|| ISFILTERED ( Sales[Device Category] )
+						|| ISFILTERED ( Sales[Device Model] )
+						|| ISFILTERED ( Sales[Product Type] )
+						|| ISFILTERED ( Sales[Payment Type] )
+						|| ISFILTERED ( Sales[SC+ Plan Rollup] )
+						|| ISFILTERED ( Sales[SC+ Plan Type] )
+						|| ISFILTERED ( Sales[Account / Partner] )
+						|| ISINSCOPE ( Sales[Country Code] )
+						|| ISINSCOPE ( Sales[Sales Channel] )
+						|| ISINSCOPE ( Sales[Device Category] )
+						|| ISINSCOPE ( Sales[Device Model] )
+						|| ISINSCOPE ( Sales[Product Type] )
+						|| ISINSCOPE ( Sales[Payment Type] )
+						|| ISINSCOPE ( Sales[SC+ Plan Rollup] )
+						|| ISINSCOPE ( Sales[SC+ Plan Type] )
+						|| ISINSCOPE ( Sales[Account / Partner] )
+				VAR _PeriodStart = [KPI Comparison Period Start Date]
+				VAR _PeriodEnd = [KPI Comparison Period End Date]
+				VAR _MonthKeys =
+					CALCULATETABLE (
+						VALUES ( 'Date'[YearMonth] ),
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+					)
+				VAR _PlanGrain =
+					CALCULATETABLE (
+						SUMMARIZE (
+							'Sales Plan',
+							'Sales Plan'[Month Key],
+							'Sales Plan'[Subsidiary],
+							'Sales Plan'[Sales Channel]
+						),
+						REMOVEFILTERS ( 'Sales Plan'[Sales Channel] ),
+						TREATAS ( _MonthKeys, 'Sales Plan'[Month Key] ),
+						TREATAS ( VALUES ( 'Subsidiary Master'[Subsidiary] ), 'Sales Plan'[Subsidiary] )
+					)
+				VAR _WeightedNumerator =
+					SUMX (
+						_PlanGrain,
+						VAR _PlanUnits =
+							CALCULATE (
+								SUM ( 'Sales Plan'[plan_value] ),
+								'Sales Plan'[Sales Plan Type] = "Sales"
+							)
+						VAR _PlanRate =
+							CALCULATE (
+								AVERAGE ( 'Sales Plan'[plan_value] ),
+								'Sales Plan'[Sales Plan Type] = "Att"
+							)
+						RETURN
+							_PlanUnits * _PlanRate
+					)
+				VAR _PlanUnitsDenominator =
+					SUMX (
+						_PlanGrain,
+						CALCULATE (
+							SUM ( 'Sales Plan'[plan_value] ),
+							'Sales Plan'[Sales Plan Type] = "Sales"
+						)
+					)
+				RETURN
+					IF (
+						_SourceType = "Policy"
+							|| _UnsupportedDetailFilter
+							|| ISBLANK ( _PeriodStart )
+							|| ISBLANK ( _PeriodEnd )
+							|| _PeriodStart > _PeriodEnd,
+						BLANK (),
+						DIVIDE ( _WeightedNumerator, _PlanUnitsDenominator )
 					)
 			formatString: 0.0%
-			displayFolder: Attach Rate\LY
+			displayFolder: Sales Plan and Revenue Plan
 
-		measure 'Excluding Export Attach Rate vs LY' =
-				DIVIDE (
-					[Excluding Export Attach Rate] - [Excluding Export Attach Rate LY],
-					[Excluding Export Attach Rate LY]
-				)
+		measure 'Raw Attach Rate vs Global' =
+				VAR _LocalRate = [Attach Rate CY]
+				VAR _GlobalRate = [Global Attach Rate CY]
+				RETURN
+					IF (
+						ISBLANK ( _LocalRate ),
+						BLANK (),
+						_LocalRate - _GlobalRate
+					)
 			formatString: +0.0%;-0.0%;0.0%
-			displayFolder: Attach Rate\LY
+			displayFolder: Attach Rate\Guide
 
-		measure 'Attach Table Validation' =
-				"Sales=" & FORMAT ( [Attach Sales QTY], "#,##0" )
-					& " | Total SO=" & FORMAT ( [Total Sellout - Common Grain], "#,##0" )
-					& " | Raw=" & FORMAT ( [Raw Attach Rate], "0.000%" )
-					& " | Net SO=" & FORMAT ( [Sellout That Stays - Common Grain], "#,##0" )
-					& " | Excl=" & FORMAT ( [Excluding Export Attach Rate], "0.000%" )
-			displayFolder: Attach Rate\Diagnostics
+		measure 'Excluding Export Attach Rate vs Global' =
+				VAR _LocalRate = [Excluding Export Attach Rate]
+				VAR _GlobalRate = [Global Excluding Export Attach Rate]
+				RETURN
+					IF (
+						ISBLANK ( _LocalRate ),
+						BLANK (),
+						_LocalRate - _GlobalRate
+					)
+			formatString: +0.0%;-0.0%;0.0%
+			displayFolder: Export Exclusion Placeholder
