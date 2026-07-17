@@ -1,54 +1,546 @@
-createOrReplace
+DEFINE
+    VAR _SalesBase =
+        FILTER (
+            SELECTCOLUMNS (
+                ALL ( Sales ),
+                "Month Key", COALESCE ( Sales[Month Key], "__BLANK__" ),
+                "Country Code", COALESCE ( Sales[Country Code], "__BLANK__" ),
+                "Fact Sub", COALESCE ( Sales[Subsidiary], "__BLANK__" ),
+                "Master Sub", COALESCE ( RELATED ( 'Subsidiary Master'[Subsidiary] ), "__UNMAPPED__" ),
+                "Join Sub",
+                    COALESCE (
+                        RELATED ( 'Subsidiary Master'[Subsidiary] ),
+                        Sales[Subsidiary],
+                        "__UNMAPPED__"
+                    ),
+                "Raw Channel", COALESCE ( Sales[Sales Channel], "__BLANK__" ),
+                "Normalized Channel",
+                    VAR _Raw = UPPER ( TRIM ( COALESCE ( Sales[Sales Channel], "" ) ) )
+                    RETURN SUBSTITUTE ( SUBSTITUTE ( _Raw, "-", "" ), " ", "" ),
+                "Channel Bucket",
+                    VAR _Raw = UPPER ( TRIM ( COALESCE ( Sales[Sales Channel], "" ) ) )
+                    VAR _Normalized = SUBSTITUTE ( SUBSTITUTE ( _Raw, "-", "" ), " ", "" )
+                    RETURN IF ( CONTAINSSTRING ( _Normalized, "ESTORE" ), "eStore", "Others" ),
+                "Account", COALESCE ( Sales[Account / Partner], "__BLANK__" ),
+                "Device Category", COALESCE ( Sales[Device Category], "__BLANK__" ),
+                "Device Model", COALESCE ( Sales[Device Model], "__BLANK__" ),
+                "Sales Units", COALESCE ( Sales[sales_volume], 0 )
+            ),
+            [Month Key] <> "__BLANK__"
+        )
 
-	ref table Measures_table
+    VAR _SelloutBase =
+        FILTER (
+            SELECTCOLUMNS (
+                ALL ( 'Sellout Stays' ),
+                "Month Key", COALESCE ( 'Sellout Stays'[Month Key], "__BLANK__" ),
+                "Country Code", COALESCE ( 'Sellout Stays'[Country Code], "__BLANK__" ),
+                "Fact Sub", COALESCE ( 'Sellout Stays'[Subsidiary], "__BLANK__" ),
+                "Master Sub", COALESCE ( RELATED ( 'Subsidiary Master'[Subsidiary] ), "__UNMAPPED__" ),
+                "Join Sub",
+                    COALESCE (
+                        RELATED ( 'Subsidiary Master'[Subsidiary] ),
+                        'Sellout Stays'[Subsidiary],
+                        "__UNMAPPED__"
+                    ),
+                "Raw Channel", COALESCE ( 'Sellout Stays'[Sales Channel], "__BLANK__" ),
+                "Normalized Channel",
+                    VAR _Raw = UPPER ( TRIM ( COALESCE ( 'Sellout Stays'[Sales Channel], "" ) ) )
+                    RETURN SUBSTITUTE ( SUBSTITUTE ( _Raw, "-", "" ), " ", "" ),
+                "Channel Bucket",
+                    VAR _Raw = UPPER ( TRIM ( COALESCE ( 'Sellout Stays'[Sales Channel], "" ) ) )
+                    VAR _Normalized = SUBSTITUTE ( SUBSTITUTE ( _Raw, "-", "" ), " ", "" )
+                    RETURN IF ( CONTAINSSTRING ( _Normalized, "ESTORE" ), "eStore", "Others" ),
+                "Account", COALESCE ( 'Sellout Stays'[Account / Partner], "__BLANK__" ),
+                "Device Category", COALESCE ( 'Sellout Stays'[Device Category], "__BLANK__" ),
+                "Device Model", COALESCE ( 'Sellout Stays'[Device Model], "__BLANK__" ),
+                "Sellout Stays Units", COALESCE ( 'Sellout Stays'[so_that_stays_units], 0 ),
+                "Sellout Total Units", COALESCE ( 'Sellout Stays'[active_units_resolved], 0 )
+            ),
+            [Month Key] <> "__BLANK__"
+        )
 
-		measure 'Month-End Active Monthly Subscribers Last 12M' =
-				VAR _AxisMonth = SELECTEDVALUE ( 'Monthly Trend Axis'[MonthStart] )
-				VAR _DataEnd = [Policy Data End Date]
-				VAR _MonthEnd =
-					IF (
-						NOT ISBLANK ( _AxisMonth ),
-						EOMONTH ( _AxisMonth, 0 )
-					)
-				VAR _IsLatestMonth =
-					NOT ISBLANK ( _AxisMonth )
-						&& NOT ISBLANK ( _DataEnd )
-						&& YEAR ( _AxisMonth ) = YEAR ( _DataEnd )
-						&& MONTH ( _AxisMonth ) = MONTH ( _DataEnd )
-				VAR _HistoricalValue =
-					CALCULATE (
-						[Active Monthly Subscribers],
-						REMOVEFILTERS ( 'Date' ),
-						REMOVEFILTERS ( 'Date Filter' ),
-						DATESBETWEEN ( 'Date'[Date], _MonthEnd, _MonthEnd )
-					)
-				VAR _LatestValue =
-					CALCULATE (
-						[Active Monthly Subscribers],
-						REMOVEFILTERS ( 'Date' ),
-						REMOVEFILTERS ( 'Date Filter' )
-					)
-				RETURN
-					IF (
-						ISBLANK ( _AxisMonth )
-							|| ISBLANK ( _DataEnd )
-							|| _AxisMonth > _DataEnd,
-						BLANK (),
-						IF (
-							_IsLatestMonth,
-							COALESCE ( _LatestValue, 0 ),
-							COALESCE ( _HistoricalValue, 0 )
-						)
-					)
-			formatString: #,##0
-			displayFolder: SC+ Plan Classification
+    VAR _SalesChannelProfile =
+        GROUPBY (
+            _SalesBase,
+            [Raw Channel],
+            [Normalized Channel],
+            [Channel Bucket],
+            "Rows", COUNTX ( CURRENTGROUP (), 1 ),
+            "Units", SUMX ( CURRENTGROUP (), [Sales Units] )
+        )
 
-		measure 'HTML Info - Month-End Active Monthly Subscribers' =
-				VAR _Css =
-					"<style>" &
-					"*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;font-family:Segoe UI,Arial,sans-serif}.info-host{position:relative;width:100%;height:100%;min-width:260px;min-height:104px;background:transparent;pointer-events:none}.info-wrap{position:absolute;top:4px;right:4px;z-index:10;pointer-events:auto;outline:none}.info-button{width:18px;height:18px;display:grid;place-items:center;border:1px solid #c8d8e8;border-radius:50%;background:#e8f1f9;color:#1f4e79;font-size:11px;line-height:1;font-weight:800;cursor:help;box-shadow:0 1px 2px rgba(23,33,43,.08)}.tooltip{position:absolute;top:26px;right:0;width:280px;padding:10px 11px;border:1px solid #b8c3d1;border-radius:7px;background:#fbfcfe;box-shadow:0 12px 26px rgba(23,33,43,.16);color:#17212b;opacity:0;visibility:hidden;transform:translateY(-3px);transition:opacity 160ms ease,transform 160ms ease,visibility 160ms ease;pointer-events:none}.tooltip strong{display:block;margin-bottom:4px;color:#17212b;font-size:10.5px;line-height:1.25}.tooltip span{display:block;color:#6b7280;font-size:9.5px;line-height:1.4}.info-wrap:hover .tooltip,.info-wrap:focus .tooltip,.info-wrap:focus-within .tooltip{opacity:1;visibility:visible;transform:translateY(0)}</style>"
-				VAR _Html =
-					"<div class=""info-host""><div class=""info-wrap"" tabindex=""0"" aria-label=""Metric information""><span class=""info-button"">i</span><span class=""tooltip""><strong>Month-end subscriber stock</strong><span>Counts policies with Product Monthly Amount greater than zero, grouped by subsidiary. Historical points are active as of month-end: coverage started on or before the reporting date, warranty had not ended, and cancellation was blank or effective later. The latest point uses current active status at the extraction date. The current month uses the latest available date rather than calendar month-end.</span></span></div></div>"
-				RETURN
-					_Css & _Html
-			displayFolder: KPI Cards\HTML
+    VAR _SelloutChannelProfile =
+        GROUPBY (
+            _SelloutBase,
+            [Raw Channel],
+            [Normalized Channel],
+            [Channel Bucket],
+            "Rows", COUNTX ( CURRENTGROUP (), 1 ),
+            "Units", SUMX ( CURRENTGROUP (), [Sellout Stays Units] )
+        )
+
+    VAR _SalesSubProfile =
+        GROUPBY (
+            _SalesBase,
+            [Country Code],
+            [Fact Sub],
+            [Master Sub],
+            [Join Sub],
+            "Rows", COUNTX ( CURRENTGROUP (), 1 ),
+            "Units", SUMX ( CURRENTGROUP (), [Sales Units] )
+        )
+
+    VAR _SelloutSubProfile =
+        GROUPBY (
+            _SelloutBase,
+            [Country Code],
+            [Fact Sub],
+            [Master Sub],
+            [Join Sub],
+            "Rows", COUNTX ( CURRENTGROUP (), 1 ),
+            "Units", SUMX ( CURRENTGROUP (), [Sellout Stays Units] )
+        )
+
+    VAR _SalesTargetGrain =
+        GROUPBY (
+            _SalesBase,
+            [Month Key],
+            [Join Sub],
+            [Channel Bucket],
+            "Sales Rows", COUNTX ( CURRENTGROUP (), 1 ),
+            "Sales Units", SUMX ( CURRENTGROUP (), [Sales Units] )
+        )
+
+    VAR _SelloutTargetGrain =
+        GROUPBY (
+            _SelloutBase,
+            [Month Key],
+            [Join Sub],
+            [Channel Bucket],
+            "Sellout Rows", COUNTX ( CURRENTGROUP (), 1 ),
+            "Sellout Stays Units", SUMX ( CURRENTGROUP (), [Sellout Stays Units] ),
+            "Sellout Total Units", SUMX ( CURRENTGROUP (), [Sellout Total Units] )
+        )
+
+    VAR _AllTargetKeys =
+        DISTINCT (
+            UNION (
+                SELECTCOLUMNS (
+                    _SalesTargetGrain,
+                    "Month Key", [Month Key],
+                    "Join Sub", [Join Sub],
+                    "Channel Bucket", [Channel Bucket]
+                ),
+                SELECTCOLUMNS (
+                    _SelloutTargetGrain,
+                    "Month Key", [Month Key],
+                    "Join Sub", [Join Sub],
+                    "Channel Bucket", [Channel Bucket]
+                )
+            )
+        )
+
+    VAR _TargetAudit =
+        ADDCOLUMNS (
+            _AllTargetKeys,
+            "Sales Rows",
+                VAR _Month = [Month Key]
+                VAR _Sub = [Join Sub]
+                VAR _Bucket = [Channel Bucket]
+                RETURN
+                    MAXX (
+                        FILTER (
+                            _SalesTargetGrain,
+                            [Month Key] = _Month
+                                && [Join Sub] = _Sub
+                                && [Channel Bucket] = _Bucket
+                        ),
+                        [Sales Rows]
+                    ),
+            "Sales Units",
+                VAR _Month = [Month Key]
+                VAR _Sub = [Join Sub]
+                VAR _Bucket = [Channel Bucket]
+                RETURN
+                    MAXX (
+                        FILTER (
+                            _SalesTargetGrain,
+                            [Month Key] = _Month
+                                && [Join Sub] = _Sub
+                                && [Channel Bucket] = _Bucket
+                        ),
+                        [Sales Units]
+                    ),
+            "Sellout Rows",
+                VAR _Month = [Month Key]
+                VAR _Sub = [Join Sub]
+                VAR _Bucket = [Channel Bucket]
+                RETURN
+                    MAXX (
+                        FILTER (
+                            _SelloutTargetGrain,
+                            [Month Key] = _Month
+                                && [Join Sub] = _Sub
+                                && [Channel Bucket] = _Bucket
+                        ),
+                        [Sellout Rows]
+                    ),
+            "Sellout Stays Units",
+                VAR _Month = [Month Key]
+                VAR _Sub = [Join Sub]
+                VAR _Bucket = [Channel Bucket]
+                RETURN
+                    MAXX (
+                        FILTER (
+                            _SelloutTargetGrain,
+                            [Month Key] = _Month
+                                && [Join Sub] = _Sub
+                                && [Channel Bucket] = _Bucket
+                        ),
+                        [Sellout Stays Units]
+                    ),
+            "Sellout Total Units",
+                VAR _Month = [Month Key]
+                VAR _Sub = [Join Sub]
+                VAR _Bucket = [Channel Bucket]
+                RETURN
+                    MAXX (
+                        FILTER (
+                            _SelloutTargetGrain,
+                            [Month Key] = _Month
+                                && [Join Sub] = _Sub
+                                && [Channel Bucket] = _Bucket
+                        ),
+                        [Sellout Total Units]
+                    )
+        )
+
+    VAR _TargetOutput =
+        SELECTCOLUMNS (
+            _TargetAudit,
+            "Audit Section", "TARGET GRAIN COVERAGE",
+            "Source", "Sales + Sellout",
+            "Month Key", [Month Key],
+            "Join Sub", [Join Sub],
+            "Master Sub", BLANK (),
+            "Fact Sub", BLANK (),
+            "Country Code", BLANK (),
+            "Raw Channel", BLANK (),
+            "Normalized Channel", BLANK (),
+            "Channel Bucket", [Channel Bucket],
+            "Grain", "Month + Sub + Channel Bucket",
+            "Rows", BLANK (),
+            "Units", BLANK (),
+            "Sales Rows", [Sales Rows],
+            "Sales Units", [Sales Units],
+            "Sellout Rows", [Sellout Rows],
+            "Sellout Stays Units", [Sellout Stays Units],
+            "Sellout Total Units", [Sellout Total Units],
+            "Attach Rate - Stays", DIVIDE ( [Sales Units], [Sellout Stays Units] ),
+            "Attach Rate - Total", DIVIDE ( [Sales Units], [Sellout Total Units] ),
+            "Key Status",
+                SWITCH (
+                    TRUE (),
+                    ISBLANK ( [Sales Rows] ), "SELLOUT_ONLY",
+                    ISBLANK ( [Sellout Rows] ), "SALES_ONLY",
+                    COALESCE ( [Sellout Stays Units], 0 ) = 0, "MATCHED_ZERO_STAYS_DENOMINATOR",
+                    "MATCHED"
+                )
+        )
+
+    VAR _ChannelOutput =
+        UNION (
+            SELECTCOLUMNS (
+                _SalesChannelProfile,
+                "Audit Section", "RAW CHANNEL VALUES",
+                "Source", "Sales",
+                "Month Key", BLANK (),
+                "Join Sub", BLANK (),
+                "Master Sub", BLANK (),
+                "Fact Sub", BLANK (),
+                "Country Code", BLANK (),
+                "Raw Channel", [Raw Channel],
+                "Normalized Channel", [Normalized Channel],
+                "Channel Bucket", [Channel Bucket],
+                "Grain", BLANK (),
+                "Rows", [Rows],
+                "Units", [Units],
+                "Sales Rows", BLANK (),
+                "Sales Units", BLANK (),
+                "Sellout Rows", BLANK (),
+                "Sellout Stays Units", BLANK (),
+                "Sellout Total Units", BLANK (),
+                "Attach Rate - Stays", BLANK (),
+                "Attach Rate - Total", BLANK (),
+                "Key Status", BLANK ()
+            ),
+            SELECTCOLUMNS (
+                _SelloutChannelProfile,
+                "Audit Section", "RAW CHANNEL VALUES",
+                "Source", "Sellout",
+                "Month Key", BLANK (),
+                "Join Sub", BLANK (),
+                "Master Sub", BLANK (),
+                "Fact Sub", BLANK (),
+                "Country Code", BLANK (),
+                "Raw Channel", [Raw Channel],
+                "Normalized Channel", [Normalized Channel],
+                "Channel Bucket", [Channel Bucket],
+                "Grain", BLANK (),
+                "Rows", [Rows],
+                "Units", [Units],
+                "Sales Rows", BLANK (),
+                "Sales Units", BLANK (),
+                "Sellout Rows", BLANK (),
+                "Sellout Stays Units", BLANK (),
+                "Sellout Total Units", BLANK (),
+                "Attach Rate - Stays", BLANK (),
+                "Attach Rate - Total", BLANK (),
+                "Key Status", BLANK ()
+            )
+        )
+
+    VAR _SubOutput =
+        UNION (
+            SELECTCOLUMNS (
+                _SalesSubProfile,
+                "Audit Section", "SUBSIDIARY VALUES",
+                "Source", "Sales",
+                "Month Key", BLANK (),
+                "Join Sub", [Join Sub],
+                "Master Sub", [Master Sub],
+                "Fact Sub", [Fact Sub],
+                "Country Code", [Country Code],
+                "Raw Channel", BLANK (),
+                "Normalized Channel", BLANK (),
+                "Channel Bucket", BLANK (),
+                "Grain", BLANK (),
+                "Rows", [Rows],
+                "Units", [Units],
+                "Sales Rows", BLANK (),
+                "Sales Units", BLANK (),
+                "Sellout Rows", BLANK (),
+                "Sellout Stays Units", BLANK (),
+                "Sellout Total Units", BLANK (),
+                "Attach Rate - Stays", BLANK (),
+                "Attach Rate - Total", BLANK (),
+                "Key Status",
+                    IF ( [Master Sub] = "__UNMAPPED__", "UNMAPPED_COUNTRY", IF ( [Fact Sub] = [Master Sub], "ALIGNED", "FACT_MASTER_MISMATCH" ) )
+            ),
+            SELECTCOLUMNS (
+                _SelloutSubProfile,
+                "Audit Section", "SUBSIDIARY VALUES",
+                "Source", "Sellout",
+                "Month Key", BLANK (),
+                "Join Sub", [Join Sub],
+                "Master Sub", [Master Sub],
+                "Fact Sub", [Fact Sub],
+                "Country Code", [Country Code],
+                "Raw Channel", BLANK (),
+                "Normalized Channel", BLANK (),
+                "Channel Bucket", BLANK (),
+                "Grain", BLANK (),
+                "Rows", [Rows],
+                "Units", [Units],
+                "Sales Rows", BLANK (),
+                "Sales Units", BLANK (),
+                "Sellout Rows", BLANK (),
+                "Sellout Stays Units", BLANK (),
+                "Sellout Total Units", BLANK (),
+                "Attach Rate - Stays", BLANK (),
+                "Attach Rate - Total", BLANK (),
+                "Key Status",
+                    IF ( [Master Sub] = "__UNMAPPED__", "UNMAPPED_COUNTRY", IF ( [Fact Sub] = [Master Sub], "ALIGNED", "FACT_MASTER_MISMATCH" ) )
+            )
+        )
+
+    VAR _GrainOutput =
+        UNION (
+            ROW (
+                "Audit Section", "DISTINCT GRAIN COUNTS",
+                "Source", "Sales",
+                "Month Key", BLANK (),
+                "Join Sub", BLANK (),
+                "Master Sub", BLANK (),
+                "Fact Sub", BLANK (),
+                "Country Code", BLANK (),
+                "Raw Channel", BLANK (),
+                "Normalized Channel", BLANK (),
+                "Channel Bucket", BLANK (),
+                "Grain", "Source rows",
+                "Rows", COUNTROWS ( _SalesBase ),
+                "Units", SUMX ( _SalesBase, [Sales Units] ),
+                "Sales Rows", BLANK (),
+                "Sales Units", BLANK (),
+                "Sellout Rows", BLANK (),
+                "Sellout Stays Units", BLANK (),
+                "Sellout Total Units", BLANK (),
+                "Attach Rate - Stays", BLANK (),
+                "Attach Rate - Total", BLANK (),
+                "Key Status", BLANK ()
+            ),
+            ROW (
+                "Audit Section", "DISTINCT GRAIN COUNTS",
+                "Source", "Sales",
+                "Month Key", BLANK (),
+                "Join Sub", BLANK (),
+                "Master Sub", BLANK (),
+                "Fact Sub", BLANK (),
+                "Country Code", BLANK (),
+                "Raw Channel", BLANK (),
+                "Normalized Channel", BLANK (),
+                "Channel Bucket", BLANK (),
+                "Grain", "Month + Sub + Channel Bucket",
+                "Rows",
+                    COUNTROWS (
+                        DISTINCT (
+                            SELECTCOLUMNS (
+                                _SalesBase,
+                                "Key", COMBINEVALUES ( "|", [Month Key], [Join Sub], [Channel Bucket] )
+                            )
+                        )
+                    ),
+                "Units", BLANK (),
+                "Sales Rows", BLANK (),
+                "Sales Units", BLANK (),
+                "Sellout Rows", BLANK (),
+                "Sellout Stays Units", BLANK (),
+                "Sellout Total Units", BLANK (),
+                "Attach Rate - Stays", BLANK (),
+                "Attach Rate - Total", BLANK (),
+                "Key Status", BLANK ()
+            ),
+            ROW (
+                "Audit Section", "DISTINCT GRAIN COUNTS",
+                "Source", "Sales",
+                "Month Key", BLANK (),
+                "Join Sub", BLANK (),
+                "Master Sub", BLANK (),
+                "Fact Sub", BLANK (),
+                "Country Code", BLANK (),
+                "Raw Channel", BLANK (),
+                "Normalized Channel", BLANK (),
+                "Channel Bucket", BLANK (),
+                "Grain", "Month + Sub + Raw Channel + Account + Device",
+                "Rows",
+                    COUNTROWS (
+                        DISTINCT (
+                            SELECTCOLUMNS (
+                                _SalesBase,
+                                "Key", COMBINEVALUES ( "|", [Month Key], [Join Sub], [Raw Channel], [Account], [Device Model] )
+                            )
+                        )
+                    ),
+                "Units", BLANK (),
+                "Sales Rows", BLANK (),
+                "Sales Units", BLANK (),
+                "Sellout Rows", BLANK (),
+                "Sellout Stays Units", BLANK (),
+                "Sellout Total Units", BLANK (),
+                "Attach Rate - Stays", BLANK (),
+                "Attach Rate - Total", BLANK (),
+                "Key Status", BLANK ()
+            ),
+            ROW (
+                "Audit Section", "DISTINCT GRAIN COUNTS",
+                "Source", "Sellout",
+                "Month Key", BLANK (),
+                "Join Sub", BLANK (),
+                "Master Sub", BLANK (),
+                "Fact Sub", BLANK (),
+                "Country Code", BLANK (),
+                "Raw Channel", BLANK (),
+                "Normalized Channel", BLANK (),
+                "Channel Bucket", BLANK (),
+                "Grain", "Source rows",
+                "Rows", COUNTROWS ( _SelloutBase ),
+                "Units", SUMX ( _SelloutBase, [Sellout Stays Units] ),
+                "Sales Rows", BLANK (),
+                "Sales Units", BLANK (),
+                "Sellout Rows", BLANK (),
+                "Sellout Stays Units", BLANK (),
+                "Sellout Total Units", BLANK (),
+                "Attach Rate - Stays", BLANK (),
+                "Attach Rate - Total", BLANK (),
+                "Key Status", BLANK ()
+            ),
+            ROW (
+                "Audit Section", "DISTINCT GRAIN COUNTS",
+                "Source", "Sellout",
+                "Month Key", BLANK (),
+                "Join Sub", BLANK (),
+                "Master Sub", BLANK (),
+                "Fact Sub", BLANK (),
+                "Country Code", BLANK (),
+                "Raw Channel", BLANK (),
+                "Normalized Channel", BLANK (),
+                "Channel Bucket", BLANK (),
+                "Grain", "Month + Sub + Channel Bucket",
+                "Rows",
+                    COUNTROWS (
+                        DISTINCT (
+                            SELECTCOLUMNS (
+                                _SelloutBase,
+                                "Key", COMBINEVALUES ( "|", [Month Key], [Join Sub], [Channel Bucket] )
+                            )
+                        )
+                    ),
+                "Units", BLANK (),
+                "Sales Rows", BLANK (),
+                "Sales Units", BLANK (),
+                "Sellout Rows", BLANK (),
+                "Sellout Stays Units", BLANK (),
+                "Sellout Total Units", BLANK (),
+                "Attach Rate - Stays", BLANK (),
+                "Attach Rate - Total", BLANK (),
+                "Key Status", BLANK ()
+            ),
+            ROW (
+                "Audit Section", "DISTINCT GRAIN COUNTS",
+                "Source", "Sellout",
+                "Month Key", BLANK (),
+                "Join Sub", BLANK (),
+                "Master Sub", BLANK (),
+                "Fact Sub", BLANK (),
+                "Country Code", BLANK (),
+                "Raw Channel", BLANK (),
+                "Normalized Channel", BLANK (),
+                "Channel Bucket", BLANK (),
+                "Grain", "Month + Sub + Raw Channel + Account + Device",
+                "Rows",
+                    COUNTROWS (
+                        DISTINCT (
+                            SELECTCOLUMNS (
+                                _SelloutBase,
+                                "Key", COMBINEVALUES ( "|", [Month Key], [Join Sub], [Raw Channel], [Account], [Device Model] )
+                            )
+                        )
+                    ),
+                "Units", BLANK (),
+                "Sales Rows", BLANK (),
+                "Sales Units", BLANK (),
+                "Sellout Rows", BLANK (),
+                "Sellout Stays Units", BLANK (),
+                "Sellout Total Units", BLANK (),
+                "Attach Rate - Stays", BLANK (),
+                "Attach Rate - Total", BLANK (),
+                "Key Status", BLANK ()
+            )
+        )
+
+EVALUATE
+    UNION (
+        _GrainOutput,
+        _ChannelOutput,
+        _SubOutput,
+        _TargetOutput
+    )
+
+ORDER BY
+    [Audit Section],
+    [Source],
+    [Month Key],
+    [Join Sub],
+    [Channel Bucket],
+    [Raw Channel]
