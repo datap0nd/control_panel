@@ -1,64 +1,172 @@
-EVALUATE
-VAR _Result =
-    SUMMARIZECOLUMNS (
-        'P&L'[Date],
-        'P&L'[Combined Company],
-        FILTER (
-            ALL ( 'P&L'[Date] ),
-            'P&L'[Date] >= DATE ( 2025, 1, 1 )
-                && 'P&L'[Date] < DATE ( 2027, 1, 1 )
-        ),
-        "Actual Gross Sales",
-            CALCULATE (
-                SUM ( 'P&L'[Value] ),
-                'P&L'[Individual] IN { "CY", "LY" },
-                'P&L'[Sales Consolidated Detail (P2)] = "Gross Sales Amt"
-            ),
-        "Actual Net Sales",
-            CALCULATE (
-                SUM ( 'P&L'[Value] ),
-                'P&L'[Individual] IN { "CY", "LY" },
-                'P&L'[Sales Consolidated Detail (P2)] = "Net Sales Amt"
-            ),
-        "Actual Sales Deduction",
-            CALCULATE (
-                SUM ( 'P&L'[Value] ),
-                'P&L'[Individual] IN { "CY", "LY" },
-                'P&L'[Sales Consolidated Detail (P2)] = "Sales Deduction"
-            ),
-        "Actual Gross Check",
-            CALCULATE (
-                SUM ( 'P&L'[Value] ),
-                'P&L'[Individual] IN { "CY", "LY" },
-                'P&L'[Sales Consolidated Detail (P2)] = "Net Sales Amt"
-            )
-                + CALCULATE (
-                    SUM ( 'P&L'[Value] ),
-                    'P&L'[Individual] IN { "CY", "LY" },
-                    'P&L'[Sales Consolidated Detail (P2)] = "Sales Deduction"
-                ),
-        "Plan Gross Sales",
-            CALCULATE (
-                SUM ( 'P&L'[Value] ),
-                'P&L'[Individual] = "Plan",
-                'P&L'[Sales Consolidated Detail (P2)] = "Gross Sales Amt"
-            ),
-        "Plan Net Sales",
-            CALCULATE (
-                SUM ( 'P&L'[Value] ),
-                'P&L'[Individual] = "Plan",
-                'P&L'[Sales Consolidated Detail (P2)] = "Net Sales Amt"
-            ),
-        "Fact Rows", CALCULATE ( COUNTROWS ( 'P&L' ) )
-    )
-RETURN
-    FILTER (
-        _Result,
-        NOT ISBLANK ( [Actual Gross Sales] )
-            || NOT ISBLANK ( [Actual Net Sales] )
-            || NOT ISBLANK ( [Plan Gross Sales] )
-            || NOT ISBLANK ( [Plan Net Sales] )
-    )
-ORDER BY
-    'P&L'[Date],
-    'P&L'[Combined Company]
+# ERP Revenue and Cross-Source Mapping Review
+
+Last reviewed: 2026-07-17
+
+## Purpose
+
+This document records the validated ERP/P&L lineage, current temporary reporting decisions, and unresolved business-definition and source-mapping questions. It should be updated when source owners confirm the outstanding items.
+
+## Validated ERP/P&L lineage
+
+The P&L semantic model contains a genuine monthly financial fact table. It is not equivalent to the current dashboard placeholder sourced from `sales.csv`.
+
+- Fact table: `P&L`
+- Native grain: month, combined company/subsidiary, P&L line, scenario, item, segment, and market name
+- Subsidiary field: `Combined Company`
+- Actual scenario labels: `CY` and `LY`
+- Plan scenario label: `Plan`
+- Gross revenue candidate: `Gross Sales Amt`
+- Net revenue candidate: `Net Sales Amt`
+- 2026 Gross Sales is reconstructed as Net Sales plus Sales Deduction.
+- The 2026 ingestion multiplies source values by 1,000,000 to restore base units.
+- SGE, SETK, and SESAR map directly to dashboard subsidiaries.
+
+### January through June 2026 reconciliation
+
+June is the latest defensible completed ERP month as of this review.
+
+| Metric | Amount |
+|---|---:|
+| Gross Sales actual | 3,216,983,395 |
+| Gross Sales plan | 3,108,357,893 |
+| Gross Sales attainment | 103.5% |
+| Gross Sales YoY | +9.2% |
+| Net Sales actual | 2,843,243,890 |
+| Net Sales plan | 2,751,097,754 |
+| Net Sales attainment | 103.3% |
+| Net Sales YoY | +9.9% |
+
+## ERP/P&L blockers
+
+1. The model removes the source `Version` field before scenario assignment and labels every 2026 row as `CY`.
+2. August through December 2026 contain nonblank values classified as CY actual. These cannot be actual results as of the review date and are likely forecast, plan, or another version.
+3. July 2026 is an open month and should not be treated as a completed monthly ERP actual without owner confirmation.
+4. It is not confirmed whether dashboard ERP Revenue should mean Gross Sales or Net Sales. Net Sales is the recommended financial-revenue definition unless the business explicitly requires Gross Sales.
+5. It is not confirmed whether the KPI should show the entire subsidiary P&L or only the program-specific portion.
+6. If program-only revenue is required, an approved mapping using ItemPart, Segment, Market Name, or another ERP key is required.
+7. The extracted model does not expose a currency field. The owner must confirm that values for all included subsidiaries are in one additive reporting currency.
+8. ERP actual and plan should use matching P&L definitions and month windows. The unrelated dashboard revenue-plan file should not be compared with ERP actuals without a formal reconciliation.
+
+## Temporary reporting decisions
+
+- Do not label `Sales[gross_revenue]` or `Sales[subsidiary_revenue]` as ERP revenue.
+- Keep the fake ERP KPI disabled or clearly relabeled until the P&L source is integrated.
+- For a monthly ERP metric, use completed months only. As of this review, that means January through June 2026.
+- If ERP Revenue is approved as Net Sales, use `Net Sales Amt` for actual, plan, LY, and attainment.
+- If Gross Sales is required, use `Gross Sales Amt` consistently for actual, plan, LY, and attainment.
+- Filter the initial ERP KPI to SGE, SETK, and SESAR unless additional companies are explicitly brought into dashboard scope.
+
+## Cross-source mapping status
+
+### Sales to Sales Plan
+
+- Sales actual channels include B2B, E-Store, Operator, Others, Retail, and SES.
+- Sales Plan channels include E-Store, Operator, Retail, SES, and Standalone.
+- `Others -> Standalone` has been confirmed.
+- B2B still has no approved Sales Plan equivalent.
+- Channel-level plan reporting is therefore not fully reconcilable.
+- The current safe comparison grain is month plus subsidiary, with all plan channels included.
+- `sales_plan.csv` uses `Sept`, while some model logic expects `Sep`. The source or ingestion logic must accept one canonical September label.
+
+### Sales to Sellout for attach rate
+
+- E-Store is the only confidently matched channel across Sales and Sellout.
+- The sources do not currently provide a reliable shared account, partner, store, or channel key for the remaining channels.
+- Sales account/partner detail is mostly blank or `NA` and cannot support a deeper automatic join.
+- The existing detailed channel map uses channel code, partner, and store keys that are not available at usable quality in Sales actuals.
+- Separate Retail, Operator, SES, B2B, and Others attach rates are unsupported until an authoritative crosswalk is supplied.
+- The temporary safe attach-rate grain is month plus subsidiary.
+- At subsidiary grain, attach rate is summed Sales quantity divided by the corresponding summed Sellout denominator. Rates must never be averaged.
+
+### Attach-rate denominator and export logic
+
+- Raw attach rate should use total eligible Sellout as its denominator.
+- Excluding-export attach rate should use the retained or non-export Sellout denominator.
+- The model needs an owner-approved definition of how export units are identified.
+- An account-level export list or equivalent source flag is not available in the current extracts.
+- The terms `S/O That Stays`, retained Sellout, and excluding-export Sellout must be confirmed as equivalent or documented as separate concepts.
+
+### Sales metric and partner reporting
+
+- Use the Sales table for sales metrics whenever the requested grain exists there.
+- Use New Policies only as an explicitly labelled proxy when partner-level sales are unavailable from Sales.
+- The Sales extract does not currently provide reliable partner-level sales for every reporting need.
+- An owner-approved partner mapping and source precedence rule are still required.
+
+### Monthly paid subscribers
+
+- Monthly paid subscribers by subsidiary begins in February 2026 in the available data.
+- Earlier months have no qualifying paid rows even when broader policy history exists.
+- The source owner must confirm whether this reflects a genuine product launch, a source-system migration, a missing extraction period, or an incomplete payment-type mapping.
+
+## Required owner-provided crosswalk
+
+The preferred controlled mapping file should contain:
+
+| Field | Purpose |
+|---|---|
+| Source table | Identifies Sales, Sellout, Plan, Policy, or ERP |
+| Subsidiary | Common subsidiary key |
+| Raw channel | Source-specific channel value |
+| Raw channel code | Stable source code where available |
+| Raw account/partner | Source-specific account or partner |
+| Raw store | Source-specific store where available |
+| Canonical channel | Approved reporting channel |
+| Plan channel | Approved Sales Plan equivalent |
+| Export flag | Owner-approved export classification |
+| Effective start | Mapping validity start |
+| Effective end | Mapping validity end |
+| Owner/status | Approval and stewardship |
+
+## Email 1: Manager and P&L report business owner
+
+**Subject:** Decision required: mapping program revenue from ERP/P&L
+
+Hi [Manager] and [P&L Report Owner],
+
+We reviewed the monthly P&L model as a possible source for replacing the dashboard's current ERP revenue placeholder. The model contains actual and plan values by month, combined company, P&L line, item, segment, and market name. For SGE, SETK, and SESAR, January through June 2026 reconciles to approximately 3.217 billion in Gross Sales or 2.843 billion in Net Sales.
+
+[Manager], can you confirm whether the program is expected to be identifiable and mapped from ERP/P&L? If yes, we need the approved business rule or ownership path for identifying program revenue in ERP.
+
+[P&L Report Owner], could you please confirm the following:
+
+1. Should ERP Revenue be Gross Sales Amt or Net Sales Amt? We recommend Net Sales unless Gross Sales is the required business definition.
+2. Should the KPI represent total subsidiary revenue or only the program-attributable portion?
+3. If program-only, which ItemPart, Segment, Market Name, account, or other ERP key identifies the program?
+4. Are all included subsidiary values expressed in one common reporting currency and already converted to base units?
+5. What does the source `Version` field contain, and which value identifies posted actuals versus forecast or plan?
+6. Why does the current model classify August through December 2026 values as CY actual? The Power Query transformation removes `Version` before assigning the scenario.
+7. What is the latest closed and approved actual month? Our current assumption is June 2026.
+8. Should ERP comparisons use the P&L plan from the same model and the same completed-month window?
+
+Until these points are confirmed, we will not present the current Sales-derived revenue field as ERP revenue or combine it with P&L plan values.
+
+Thanks,
+[Name]
+
+## Email 2: Sales, Sellout, Policy, and Plan table owners
+
+**Subject:** Source definitions and crosswalk required for channel, attach-rate, and partner reporting
+
+Hi all,
+
+During validation of the dashboard, we found several unresolved differences in grain and business definitions across the Sales, Sellout, Policy, and Sales Plan sources. We have temporarily restricted some metrics to subsidiary level to avoid presenting unsupported channel-level results.
+
+Could you please help confirm or provide the following?
+
+1. **Sales-to-Sellout channel mapping:** E-Store is the only channel we can match confidently. Is there an authoritative crosswalk for Retail, Operator, SES, B2B, Others, and any Sellout-specific channel values?
+2. **Account and partner keys:** Is there a shared stable account, partner, channel-code, or store key across Sales and Sellout? The current Sales extract has mostly blank or `NA` account/partner values, while the detailed mapping file expects channel code, partner, and store.
+3. **Temporary attach-rate grain:** Until a crosswalk exists, we are calculating attach rate only at month plus subsidiary. Please confirm that this is the appropriate temporary treatment.
+4. **Attach denominator:** Please confirm the definitions of total Sellout, `S/O That Stays`, retained Sellout, and excluding-export Sellout. Which denominator should be used for raw attach rate and excluding-export attach rate?
+5. **Export identification:** What field or maintained account list identifies export units? We do not currently have a reliable account-level export flag in the extracts.
+6. **Sales-to-plan mapping:** `Others -> Standalone` is confirmed. What is the approved Plan-channel treatment for B2B? Without that decision, channel-level Sales versus Plan cannot fully reconcile.
+7. **Partner sales:** Should the Sales table be the authoritative source whenever the requested grain exists, with New Policies used only as a labelled proxy when partner sales are unavailable? If partner-level Sales should exist, which fields or extract are missing?
+8. **Monthly paid subscribers:** The available subsidiary series begins in February 2026. Is that the true business start date, a system migration, or an extraction/mapping gap?
+9. **September plan header:** Can the Sales Plan source standardize September as `Sep`, or should ingestion formally support both `Sep` and `Sept`?
+
+To make the solution maintainable, we propose an owner-controlled mapping file containing source table, subsidiary, raw channel/code, account/partner, store, canonical channel, Plan channel, export flag, effective dates, and approval status.
+
+Once these definitions and mappings are confirmed, we can restore channel and partner breakdowns and validate the resulting rates against owner-provided benchmarks.
+
+Thanks,
+[Name]
