@@ -1,156 +1,84 @@
-Subject: New automated report alert capability now available
+createOrReplace
 
-Hi team,
+	ref table Measures_table
 
-The new Recurrences feature is now live in [INTERNAL TOOL] under Tools > Recurrences.
+		measure 'Monthly Cancellation Events - Selected Months' =
+				VAR _SelectedDates =
+					CALCULATETABLE ( VALUES ( 'Date'[Date] ) )
+				VAR _SelectedMonths =
+					DISTINCT (
+						SELECTCOLUMNS (
+							_SelectedDates,
+							"__MonthStart", DATE ( YEAR ( 'Date'[Date] ), MONTH ( 'Date'[Date] ), 1 )
+						)
+					)
+				RETURN
+					SUMX (
+						_SelectedMonths,
+						VAR _MonthStart = [__MonthStart]
+						VAR _MonthDates =
+							FILTER (
+								_SelectedDates,
+								'Date'[Date] >= _MonthStart
+									&& 'Date'[Date] <= EOMONTH ( _MonthStart, 0 )
+							)
+						RETURN
+							CALCULATE (
+								[Cancelled Policies - Event Based],
+								KEEPFILTERS ( Policy[Paid Monthly Subscriber Flag] = 1 ),
+								REMOVEFILTERS ( 'Date' ),
+								REMOVEFILTERS ( 'Date Filter' ),
+								TREATAS ( _MonthDates, 'Date'[Date] )
+							)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Sales\Policy Status\Diagnostics
 
-This gives us a governed way to create scheduled email alerts from table or matrix visuals in [BI PLATFORM]. We can now notify users only when relevant rows exist, control exactly which rows each recipient receives, and maintain clear ownership and failure handling.
+		measure 'Monthly Opening Subscription Exposure - Selected Months' =
+				VAR _SelectedDates =
+					CALCULATETABLE ( VALUES ( 'Date'[Date] ) )
+				VAR _SelectedMonths =
+					DISTINCT (
+						SELECTCOLUMNS (
+							_SelectedDates,
+							"__MonthStart", DATE ( YEAR ( 'Date'[Date] ), MONTH ( 'Date'[Date] ), 1 )
+						)
+					)
+				RETURN
+					SUMX (
+						_SelectedMonths,
+						VAR _MonthStart = [__MonthStart]
+						RETURN
+							CALCULATE (
+								[Active Policies - Start of Period],
+								KEEPFILTERS ( Policy[Paid Monthly Subscriber Flag] = 1 ),
+								REMOVEFILTERS ( 'Date' ),
+								REMOVEFILTERS ( 'Date Filter' ),
+								TREATAS ( { _MonthStart }, 'Date'[Date] )
+							)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Sales\Policy Status\Diagnostics
 
-[IMAGE PLACEHOLDER: Screenshot of Tools > Recurrences showing the recurrence list and Create new button]
-
-What the feature does
-
-- Connects an alert to a specific report, page, and table or matrix visual.
-- Reads the current summarized rows behind that saved visual.
-- Applies optional row-level rules, such as sending only rows where a value exceeds a threshold.
-- Sends nothing when there are no matching rows.
-- Can send all eligible rows to one recipient list or split them into separate subgroup emails.
-- Formats the selected rows as an HTML table and includes a direct link to the report.
-- Supports daily, weekday, weekly, and monthly schedules.
-- Records each run, including status, refresh result, exported rows, matching rows, email count, and failure reason.
-
-Refresh rule
-
-The refresh check is a mandatory delivery gate, not an optional alert rule.
-
-Before every draft or send run, [INTERNAL TOOL] queries [BI PLATFORM] for the semantic model's latest refresh attempt. The alert proceeds only when the latest refresh status is Completed.
-
-If the latest refresh failed, is still running, was cancelled or disabled, has no available history, or cannot be verified, the run is blocked before the visual is queried and no alert data is sent.
-
-This prevents us from notifying users based on data that may be stale, incomplete, or known to have failed its latest refresh.
-
-Ownership and failure notification
-
-Our ownership rule is deliberately simple: the alert owner is the owner of the report on which the alert is based.
-
-This creates one accountable point of contact for the full operational chain:
-
-- The data pipeline feeding the report.
-- The report itself.
-- The alerts generated from that report.
-
-The goal is to avoid scattered ownership where one person owns the pipeline, another owns the report, and nobody clearly owns the alert. The report owner becomes the single operational POC responsible for investigating issues across the chain.
-
-Owner email addresses are resolved from the central People registry in [INTERNAL TOOL]. This means an email correction can be made centrally without editing every recurrence.
-
-If an actual scheduled or manual send run fails on that day before delivery is launched, [INTERNAL TOOL] automatically emails the report owner. The failure email includes:
-
-- The alert and report name.
-- The selected page and visual.
-- The latest refresh status when available.
-- The recorded failure reason.
-- A direct link to the report.
-- Guidance to correct the issue and test the alert again.
-
-This allows the owner to act without waiting for users to report that an expected alert did not arrive.
-
-Subgroups
-
-Subgroups act as row filters that route different views of the same alert to different recipients.
-
-When configuring subgroups, we select one column from the visual, such as Business Unit, Region, Department, or Subsidiary. Each configured value becomes a subgroup with its own display name and recipient list.
-
-For example:
-
-- Rows where Region equals Region A are sent only to the Region A recipients.
-- Rows where Region equals Region B are sent only to the Region B recipients.
-- Each email contains only the rows belonging to that subgroup.
-
-The global row rules are applied first. The remaining rows are then split by subgroup. This means recipients see only the rows that pass the alert conditions and match their configured subgroup.
-
-Subgroups can be renamed for clearer email wording, and each subgroup can have different recipients. If subgroup routing is not needed, the alert can use single-email delivery and send all eligible rows to one recipient list.
-
-Why this gives us more control than native scheduled delivery
-
-The native scheduled subscription capability in [BI PLATFORM] remains useful for distributing standard report or page views. Dynamic subscriptions can also personalize report views for recipients.
-
-For this operational alerting use case, however, Recurrences gives us complete application-level control over the output:
-
-- We decide whether an email should be sent at all based on row-level conditions.
-- We control the exact rows included in the email.
-- We route different filtered row sets to different recipient groups.
-- We control the email subject, table layout, custom message, and direct report link.
-- We enforce a successful latest refresh before sending.
-- We send nothing when no rows meet the criteria.
-- We assign explicit ownership and notify that owner when the run fails.
-- We keep a run history with row counts, email counts, refresh status, and errors.
-
-The key difference is that this is not simply a scheduled snapshot of a report page. It is a governed notification workflow where the query result, business rules, recipient routing, ownership, formatting, send/no-send decision, and failure response are all under our control.
-
-Authentication
-
-The feature reuses the work account already connected through the [INTERNAL TOOL] scanner. It does not require us to paste access tokens into scripts or configure a separate login for each alert.
-
-The initial account connection creates a delegated authentication cache on the machine running [INTERNAL TOOL]. The application obtains an access token from that cache and silently renews it when the Microsoft authentication session permits.
-
-The token remains inside the application process. It is not stored in the recurrence configuration, included in an email, or exposed to alert recipients.
-
-The connected account must have access to the relevant workspace, report, and semantic model. If the cached session expires or requires interactive authentication, the scanner will indicate that the account must be reconnected.
-
-How the [BI PLATFORM] APIs are used
-
-The implementation uses supported [BI PLATFORM] interfaces rather than automating clicks in the report:
-
-- The REST API lists the reports available in the configured workspace.
-- The REST API retrieves the report's stable technical page identifiers.
-- The REST API retrieves the semantic model's latest refresh attempt and status.
-- The official embedded client locates the exact saved visual and requests its current summarized export data.
-- If the normal visual export API cannot execute the visual's data query, [INTERNAL TOOL] reads the visual's current fields and supported filters, builds the equivalent query, and uses the semantic-model Execute Queries REST API as a fallback.
-
-The Execute Queries fallback requires the connected account to have Read and Build permission on the semantic model. The tenant setting that permits the Execute Queries REST API must also be enabled. If the required access is unavailable, the alert fails closed and sends no user data.
-
-How to create an alert
-
-1. Open [INTERNAL TOOL] and go to Tools > Recurrences.
-2. Select Create new.
-3. Choose the report from the configured workspace.
-4. Select the report page.
-5. Load the available visuals and choose the required table or matrix.
-6. Fetch the preview and confirm that the expected columns and rows are returned.
-7. Choose the delivery method:
-   - Single email sends all eligible rows to one recipient list.
-   - Subgroups use a selected column to filter and route different row sets to different recipients.
-8. Add row rules if required. Rules are optional. Multiple rules are evaluated together.
-9. Confirm the alert owner. Under our operating model, this should be the report owner and the single POC for the pipeline, report, and alert.
-10. Confirm that the owner has a valid email in Management > Create > People.
-11. Set the email subject, custom message, and schedule.
-12. Save the recurrence.
-13. Use Create drafts to test the complete refresh, extraction, filtering, subgroup routing, and formatting path without sending the alert.
-14. Review the draft carefully, including recipients, filtered rows, formatting, and report link.
-15. Use Run now for a controlled live test before relying on the schedule.
-
-Fail-closed behavior
-
-The alert sends no user data when:
-
-- The latest semantic-model refresh is not Completed.
-- The selected visual was deleted or cannot be queried.
-- A required row-rule or subgroup column disappeared.
-- Permissions changed or authentication requires reconnection.
-- The result would be truncated or cannot be reproduced safely.
-- The email delivery task cannot be launched.
-
-If the failure occurs during an actual send run, the report owner is notified by email with the recorded reason. Failure notifications use the same desktop email delivery mechanism, so if that email client is completely unavailable, the failure and notification attempt are still recorded but the system cannot email its own outage.
-
-Operational notes
-
-- The machine hosting [INTERNAL TOOL] must be running.
-- The connected work account must retain access to the report and semantic model.
-- The desktop email profile used by the existing alert process must remain configured.
-- Adding or removing ordinary columns from the saved table should be picked up automatically because each run reads the current visual structure.
-- If a column used by a rule or subgroup is removed, the run fails instead of sending an incorrect result.
-
-This is now available for us to test with suitable operational reports. Please use Create drafts first and validate the refresh result, recipients, row rules, subgroup filters, table layout, custom message, and report link before enabling scheduled delivery.
-
-Thanks,
-[YOUR NAME]
+		measure 'Monthly Cancellation Rate' =
+				VAR _HasDateContext =
+					ISCROSSFILTERED ( 'Date'[Date] )
+						|| ISCROSSFILTERED ( 'Date'[StartOfMonth] )
+						|| ISFILTERED ( 'Date Filter'[Period Label] )
+						|| ISFILTERED ( 'Date Filter'[Period Type] )
+				RETURN
+					IF (
+						_HasDateContext,
+						DIVIDE (
+							[Monthly Cancellation Events - Selected Months],
+							[Monthly Opening Subscription Exposure - Selected Months]
+						),
+						CALCULATE (
+							[Cancellation Rate - Current Status],
+							KEEPFILTERS ( Policy[Paid Monthly Subscriber Flag] = 1 )
+						)
+					)
+			formatString: 0.0%
+			displayFolder: Sales\Policy Status
