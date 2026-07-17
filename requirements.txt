@@ -1,223 +1,325 @@
-DEFINE
-    VAR _SalesBase =
-        FILTER (
-            SELECTCOLUMNS (
-                ALL ( Sales ),
-                "Month Key", Sales[Month Key],
-                "Join Sub",
-                    COALESCE (
-                        RELATED ( 'Subsidiary Master'[Subsidiary] ),
-                        Sales[Subsidiary]
-                    ),
-                "Normalized Channel",
-                    SUBSTITUTE (
-                        SUBSTITUTE (
-                            UPPER ( TRIM ( COALESCE ( Sales[Sales Channel], "" ) ) ),
-                            "-",
-                            ""
-                        ),
-                        " ",
-                        ""
-                    ),
-                "Sales Units", COALESCE ( Sales[sales_volume], 0 )
-            ),
-            NOT ISBLANK ( [Month Key] )
-                && [Join Sub] IN { "SGE", "SESAR", "SETK" }
-                && CONTAINSSTRING ( [Normalized Channel], "ESTORE" )
-        )
+createOrReplace
 
-    VAR _SalesByMonthSub =
-        GROUPBY (
-            _SalesBase,
-            [Month Key],
-            [Join Sub],
-            "Sales eStore Units", SUMX ( CURRENTGROUP (), [Sales Units] )
-        )
+	ref table Sales
 
-    VAR _SelloutBase =
-        FILTER (
-            SELECTCOLUMNS (
-                ALL ( 'Sellout Stays' ),
-                "Month Key", 'Sellout Stays'[Month Key],
-                "Join Sub",
-                    COALESCE (
-                        RELATED ( 'Subsidiary Master'[Subsidiary] ),
-                        'Sellout Stays'[Subsidiary]
-                    ),
-                "Sales Channel", COALESCE ( 'Sellout Stays'[Sales Channel], "" ),
-                "Sub Sales Channel", COALESCE ( 'Sellout Stays'[sub_sales_channel_name], "" ),
-                "Sell-in AP1", COALESCE ( 'Sellout Stays'[Sell-in AP1], "" ),
-                "Account / Partner", COALESCE ( 'Sellout Stays'[Account / Partner], "" ),
-                "Sell-in Account", COALESCE ( 'Sellout Stays'[Sell-in Account], "" ),
-                "Stays Units", COALESCE ( 'Sellout Stays'[so_that_stays_units], 0 ),
-                "Total Units", COALESCE ( 'Sellout Stays'[active_units_resolved], 0 )
-            ),
-            NOT ISBLANK ( [Month Key] )
-                && [Join Sub] IN { "SGE", "SESAR", "SETK" }
-        )
+		column 'Attach Channel Bucket' =
+				VAR _Normalized =
+					SUBSTITUTE (
+						SUBSTITUTE (
+							UPPER ( TRIM ( COALESCE ( Sales[Sales Channel], "" ) ) ),
+							"-",
+							""
+						),
+						" ",
+						""
+					)
+				RETURN IF ( CONTAINSSTRING ( _Normalized, "ESTORE" ), "eStore", "Others" )
+			dataType: string
+			summarizeBy: none
+			displayFolder: Attach Rate
 
-    VAR _CandidateRows =
-        UNION (
-            SELECTCOLUMNS (
-                FILTER (
-                    _SelloutBase,
-                    CONTAINSSTRING (
-                        SUBSTITUTE ( SUBSTITUTE ( UPPER ( TRIM ( [Sales Channel] ) ), "-", "" ), " ", "" ),
-                        "ESTORE"
-                    )
-                ),
-                "Month Key", [Month Key],
-                "Join Sub", [Join Sub],
-                "Candidate Field", "Sales Channel",
-                "Candidate Value", [Sales Channel],
-                "Stays Units", [Stays Units],
-                "Total Units", [Total Units]
-            ),
-            SELECTCOLUMNS (
-                FILTER (
-                    _SelloutBase,
-                    CONTAINSSTRING (
-                        SUBSTITUTE ( SUBSTITUTE ( UPPER ( TRIM ( [Sub Sales Channel] ) ), "-", "" ), " ", "" ),
-                        "ESTORE"
-                    )
-                ),
-                "Month Key", [Month Key],
-                "Join Sub", [Join Sub],
-                "Candidate Field", "Sub Sales Channel",
-                "Candidate Value", [Sub Sales Channel],
-                "Stays Units", [Stays Units],
-                "Total Units", [Total Units]
-            ),
-            SELECTCOLUMNS (
-                FILTER (
-                    _SelloutBase,
-                    CONTAINSSTRING (
-                        SUBSTITUTE ( SUBSTITUTE ( UPPER ( TRIM ( [Sell-in AP1] ) ), "-", "" ), " ", "" ),
-                        "ESTORE"
-                    )
-                ),
-                "Month Key", [Month Key],
-                "Join Sub", [Join Sub],
-                "Candidate Field", "Sell-in AP1",
-                "Candidate Value", [Sell-in AP1],
-                "Stays Units", [Stays Units],
-                "Total Units", [Total Units]
-            ),
-            SELECTCOLUMNS (
-                FILTER (
-                    _SelloutBase,
-                    CONTAINSSTRING (
-                        SUBSTITUTE ( SUBSTITUTE ( UPPER ( TRIM ( [Account / Partner] ) ), "-", "" ), " ", "" ),
-                        "ESTORE"
-                    )
-                ),
-                "Month Key", [Month Key],
-                "Join Sub", [Join Sub],
-                "Candidate Field", "Account / Partner",
-                "Candidate Value", [Account / Partner],
-                "Stays Units", [Stays Units],
-                "Total Units", [Total Units]
-            ),
-            SELECTCOLUMNS (
-                FILTER (
-                    _SelloutBase,
-                    CONTAINSSTRING (
-                        SUBSTITUTE ( SUBSTITUTE ( UPPER ( TRIM ( [Sell-in Account] ) ), "-", "" ), " ", "" ),
-                        "ESTORE"
-                    )
-                ),
-                "Month Key", [Month Key],
-                "Join Sub", [Join Sub],
-                "Candidate Field", "Sell-in Account",
-                "Candidate Value", [Sell-in Account],
-                "Stays Units", [Stays Units],
-                "Total Units", [Total Units]
-            )
-        )
+	ref table 'Sellout Stays'
 
-    VAR _CandidateByMonthSub =
-        GROUPBY (
-            _CandidateRows,
-            [Month Key],
-            [Join Sub],
-            [Candidate Field],
-            "Matching Rows", COUNTX ( CURRENTGROUP (), 1 ),
-            "eStore Stays Units", SUMX ( CURRENTGROUP (), [Stays Units] ),
-            "eStore Total Units", SUMX ( CURRENTGROUP (), [Total Units] )
-        )
+		column 'Attach Channel Bucket' =
+				VAR _Normalized =
+					SUBSTITUTE (
+						SUBSTITUTE (
+							UPPER ( TRIM ( COALESCE ( 'Sellout Stays'[Account / Partner], "" ) ) ),
+							"-",
+							""
+						),
+						" ",
+						""
+					)
+				RETURN IF ( CONTAINSSTRING ( _Normalized, "ESTORE" ), "eStore", "Others" )
+			dataType: string
+			summarizeBy: none
+			displayFolder: Attach Rate
 
-    VAR _CandidateValues =
-        GROUPBY (
-            _CandidateRows,
-            [Join Sub],
-            [Candidate Field],
-            [Candidate Value],
-            "Matching Rows", COUNTX ( CURRENTGROUP (), 1 ),
-            "eStore Stays Units", SUMX ( CURRENTGROUP (), [Stays Units] ),
-            "eStore Total Units", SUMX ( CURRENTGROUP (), [Total Units] )
-        )
+	ref table Measures_table
 
-    VAR _MonthlyOutput =
-        SELECTCOLUMNS (
-            _CandidateByMonthSub,
-            "Audit Section", "MONTH + SUB + ESTORE CANDIDATE",
-            "Month Key", [Month Key],
-            "Join Sub", [Join Sub],
-            "Candidate Field", [Candidate Field],
-            "Candidate Value", BLANK (),
-            "Sales eStore Units",
-                VAR _Month = [Month Key]
-                VAR _Sub = [Join Sub]
-                RETURN
-                    MAXX (
-                        FILTER ( _SalesByMonthSub, [Month Key] = _Month && [Join Sub] = _Sub ),
-                        [Sales eStore Units]
-                    ),
-            "Matching Rows", [Matching Rows],
-            "eStore Stays Units", [eStore Stays Units],
-            "eStore Total Units", [eStore Total Units],
-            "Attach Rate - Stays",
-                VAR _Month = [Month Key]
-                VAR _Sub = [Join Sub]
-                VAR _Numerator =
-                    MAXX (
-                        FILTER ( _SalesByMonthSub, [Month Key] = _Month && [Join Sub] = _Sub ),
-                        [Sales eStore Units]
-                    )
-                RETURN DIVIDE ( _Numerator, [eStore Stays Units] ),
-            "Attach Rate - Total",
-                VAR _Month = [Month Key]
-                VAR _Sub = [Join Sub]
-                VAR _Numerator =
-                    MAXX (
-                        FILTER ( _SalesByMonthSub, [Month Key] = _Month && [Join Sub] = _Sub ),
-                        [Sales eStore Units]
-                    )
-                RETURN DIVIDE ( _Numerator, [eStore Total Units] )
-        )
+		measure 'Attach Common Data Start Date' =
+				VAR _SalesStart =
+					CALCULATE ( MIN ( Sales[Reporting Date] ), REMOVEFILTERS () )
+				VAR _SelloutStart =
+					CALCULATE ( MIN ( 'Sellout Stays'[Reporting Date] ), REMOVEFILTERS () )
+				RETURN
+					IF (
+						ISBLANK ( _SalesStart ) || ISBLANK ( _SelloutStart ),
+						BLANK (),
+						MAX ( _SalesStart, _SelloutStart )
+					)
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
 
-    VAR _ValueOutput =
-        SELECTCOLUMNS (
-            _CandidateValues,
-            "Audit Section", "MATCHING ESTORE VALUES",
-            "Month Key", BLANK (),
-            "Join Sub", [Join Sub],
-            "Candidate Field", [Candidate Field],
-            "Candidate Value", [Candidate Value],
-            "Sales eStore Units", BLANK (),
-            "Matching Rows", [Matching Rows],
-            "eStore Stays Units", [eStore Stays Units],
-            "eStore Total Units", [eStore Total Units],
-            "Attach Rate - Stays", BLANK (),
-            "Attach Rate - Total", BLANK ()
-        )
+		measure 'Attach Common Data End Date' =
+				VAR _SalesEnd =
+					CALCULATE ( MAX ( Sales[Reporting Date] ), REMOVEFILTERS () )
+				VAR _SelloutEnd =
+					CALCULATE ( MAX ( 'Sellout Stays'[Reporting Date] ), REMOVEFILTERS () )
+				RETURN
+					IF (
+						ISBLANK ( _SalesEnd ) || ISBLANK ( _SelloutEnd ),
+						BLANK (),
+						MIN ( _SalesEnd, _SelloutEnd )
+					)
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
 
-EVALUATE
-    UNION ( _MonthlyOutput, _ValueOutput )
+		measure 'Attach Period Start Date' =
+				VAR _DataStart = [Attach Common Data Start Date]
+				VAR _DataEnd = [Attach Common Data End Date]
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
+				VAR _RequestedStart =
+					IF (
+						_HasDateContext,
+						MIN ( 'Date'[Date] ),
+						DATE ( YEAR ( _DataEnd ), 1, 1 )
+					)
+				RETURN
+					IF (
+						ISBLANK ( _DataStart ) || ISBLANK ( _DataEnd ),
+						BLANK (),
+						MAX ( _RequestedStart, _DataStart )
+					)
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
 
-ORDER BY
-    [Audit Section],
-    [Month Key],
-    [Join Sub],
-    [Candidate Field],
-    [Candidate Value]
+		measure 'Attach Period End Date' =
+				VAR _DataEnd = [Attach Common Data End Date]
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
+				VAR _RequestedEnd =
+					IF ( _HasDateContext, MAX ( 'Date'[Date] ), _DataEnd )
+				RETURN
+					IF ( ISBLANK ( _DataEnd ), BLANK (), MIN ( _RequestedEnd, _DataEnd ) )
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
+
+		measure 'Attach Sales Volume - Common Grain' =
+				VAR _PeriodStart = [Attach Period Start Date]
+				VAR _PeriodEnd = [Attach Period End Date]
+				VAR _SelectedSubs = VALUES ( 'Subsidiary Master'[Subsidiary] )
+				VAR _SelectedBuckets = VALUES ( Sales[Attach Channel Bucket] )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart )
+							|| ISBLANK ( _PeriodEnd )
+							|| _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							SUM ( Sales[sales_volume] ),
+							REMOVEFILTERS ( Sales ),
+							REMOVEFILTERS ( 'Subsidiary Master' ),
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd ),
+							TREATAS ( _SelectedSubs, 'Subsidiary Master'[Subsidiary] ),
+							TREATAS ( _SelectedBuckets, Sales[Attach Channel Bucket] )
+						)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Helper
+
+		measure 'Attach Sellout Total Units - Common Grain' =
+				VAR _PeriodStart = [Attach Period Start Date]
+				VAR _PeriodEnd = [Attach Period End Date]
+				VAR _SelectedSubs = VALUES ( 'Subsidiary Master'[Subsidiary] )
+				VAR _SelectedBuckets = VALUES ( Sales[Attach Channel Bucket] )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart )
+							|| ISBLANK ( _PeriodEnd )
+							|| _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							SUM ( 'Sellout Stays'[active_units_resolved] ),
+							REMOVEFILTERS ( 'Sellout Stays' ),
+							REMOVEFILTERS ( 'Subsidiary Master' ),
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd ),
+							TREATAS ( _SelectedSubs, 'Sellout Stays'[Subsidiary] ),
+							TREATAS ( _SelectedBuckets, 'Sellout Stays'[Attach Channel Bucket] )
+						)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Helper
+
+		measure 'Attach Sellout Net Units - Common Grain' =
+				VAR _PeriodStart = [Attach Period Start Date]
+				VAR _PeriodEnd = [Attach Period End Date]
+				VAR _SelectedSubs = VALUES ( 'Subsidiary Master'[Subsidiary] )
+				VAR _SelectedBuckets = VALUES ( Sales[Attach Channel Bucket] )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart )
+							|| ISBLANK ( _PeriodEnd )
+							|| _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							SUM ( 'Sellout Stays'[so_that_stays_units] ),
+							REMOVEFILTERS ( 'Sellout Stays' ),
+							REMOVEFILTERS ( 'Subsidiary Master' ),
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd ),
+							TREATAS ( _SelectedSubs, 'Sellout Stays'[Subsidiary] ),
+							TREATAS ( _SelectedBuckets, 'Sellout Stays'[Attach Channel Bucket] )
+						)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Helper
+
+		measure 'Total Sellout Units' = [Attach Sellout Total Units - Common Grain]
+			formatString: #,##0
+			displayFolder: Attach Rate
+
+		measure 'Sellout Active Units' = [Attach Sellout Total Units - Common Grain]
+			formatString: #,##0
+			displayFolder: Attach Rate
+
+		measure 'S/O That Stays Units' = [Attach Sellout Net Units - Common Grain]
+			formatString: #,##0
+			displayFolder: Attach Rate
+
+		measure 'Net of Export Sellout Units' = [Attach Sellout Net Units - Common Grain]
+			formatString: #,##0
+			displayFolder: Attach Rate
+
+		measure 'Attach Rate Total S/O' =
+				DIVIDE (
+					[Attach Sales Volume - Common Grain],
+					[Attach Sellout Total Units - Common Grain]
+				)
+			formatString: 0.0%
+			displayFolder: Attach Rate
+
+		measure 'Attach Rate Net of Export' =
+				DIVIDE (
+					[Attach Sales Volume - Common Grain],
+					[Attach Sellout Net Units - Common Grain]
+				)
+			formatString: 0.0%
+			displayFolder: Attach Rate
+
+		measure 'Raw Attach Rate' = [Attach Rate Net of Export]
+			formatString: 0.0%
+			displayFolder: Attach Rate
+
+		measure 'Excluding Export Attach Rate' = [Attach Rate Net of Export]
+			formatString: 0.0%
+			displayFolder: Attach Rate
+
+		measure 'Attach Rate with Total S/O' = [Attach Rate Total S/O]
+			formatString: 0.0%
+			displayFolder: Attach Rate
+
+		measure 'Channel Attach Rate Total S/O' = [Attach Rate Total S/O]
+			formatString: 0.0%
+			displayFolder: Attach Rate
+
+		measure 'Channel Attach Rate Net of Export' = [Attach Rate Net of Export]
+			formatString: 0.0%
+			displayFolder: Attach Rate
+
+		measure 'eStore Attach Rate' =
+				CALCULATE (
+					[Attach Rate Net of Export],
+					REMOVEFILTERS ( Sales[Sales Channel] ),
+					REMOVEFILTERS ( Sales[Attach Channel Bucket] ),
+					Sales[Attach Channel Bucket] = "eStore"
+				)
+			formatString: 0.0%
+			displayFolder: Attach Rate
+
+		measure 'Attach Rate CY' =
+				VAR _Year = [Analysis Year]
+				VAR _CommonEnd = [Attach Common Data End Date]
+				VAR _Months =
+					FILTER (
+						VALUES ( 'Date'[MonthNum] ),
+						_Year < YEAR ( _CommonEnd )
+							|| ( _Year = YEAR ( _CommonEnd ) && 'Date'[MonthNum] <= MONTH ( _CommonEnd ) )
+					)
+				RETURN
+					CALCULATE (
+						[Raw Attach Rate],
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						TREATAS ( _Months, 'Date'[MonthNum] ),
+						'Date'[Year] = _Year
+					)
+			formatString: 0.0%
+			displayFolder: Chart aliases
+
+		measure 'Attach Rate LY Chart' =
+				VAR _CurrentYear = [Analysis Year]
+				VAR _PriorYear = _CurrentYear - 1
+				VAR _CommonEnd = [Attach Common Data End Date]
+				VAR _Months =
+					FILTER (
+						VALUES ( 'Date'[MonthNum] ),
+						_CurrentYear < YEAR ( _CommonEnd )
+							|| ( _CurrentYear = YEAR ( _CommonEnd ) && 'Date'[MonthNum] <= MONTH ( _CommonEnd ) )
+					)
+				RETURN
+					CALCULATE (
+						[Raw Attach Rate],
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						TREATAS ( _Months, 'Date'[MonthNum] ),
+						'Date'[Year] = _PriorYear
+					)
+			formatString: 0.0%
+			displayFolder: Chart aliases
+
+		measure 'Attach Rate LY-1 Chart' =
+				VAR _CurrentYear = [Analysis Year]
+				VAR _PriorYear = _CurrentYear - 2
+				VAR _CommonEnd = [Attach Common Data End Date]
+				VAR _Months =
+					FILTER (
+						VALUES ( 'Date'[MonthNum] ),
+						_CurrentYear < YEAR ( _CommonEnd )
+							|| ( _CurrentYear = YEAR ( _CommonEnd ) && 'Date'[MonthNum] <= MONTH ( _CommonEnd ) )
+					)
+				RETURN
+					CALCULATE (
+						[Raw Attach Rate],
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						TREATAS ( _Months, 'Date'[MonthNum] ),
+						'Date'[Year] = _PriorYear
+					)
+			formatString: 0.0%
+			displayFolder: Chart aliases
+
+		measure 'Raw Attach Rate LY' = [Attach Rate LY Chart]
+			formatString: 0.0%
+			displayFolder: Attach Rate\LY
+
+		measure 'Raw Attach Rate LY-1' = [Attach Rate LY-1 Chart]
+			formatString: 0.0%
+			displayFolder: Attach Rate\LY
+
+		measure 'Attach Rate Reconciliation Status' =
+				VAR _Start = [Attach Period Start Date]
+				VAR _End = [Attach Period End Date]
+				VAR _Sales = [Attach Sales Volume - Common Grain]
+				VAR _Net = [Attach Sellout Net Units - Common Grain]
+				VAR _Total = [Attach Sellout Total Units - Common Grain]
+				RETURN
+					"Period=" & FORMAT ( _Start, "yyyy-mm-dd" ) & " to " & FORMAT ( _End, "yyyy-mm-dd" )
+						& " | Sales=" & FORMAT ( _Sales, "#,##0" )
+						& " | Net SO=" & FORMAT ( _Net, "#,##0" )
+						& " | Total SO=" & FORMAT ( _Total, "#,##0" )
+						& " | Net rate=" & FORMAT ( DIVIDE ( _Sales, _Net ), "0.000%" )
+						& " | Total rate=" & FORMAT ( DIVIDE ( _Sales, _Total ), "0.000%" )
+			displayFolder: Attach Rate\Diagnostics
