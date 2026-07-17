@@ -2,6 +2,16 @@ createOrReplace
 
 	ref table Sales
 
+		column 'Attach Subsidiary' =
+				COALESCE (
+					RELATED ( 'Subsidiary Master'[Subsidiary] ),
+					Sales[Subsidiary],
+					"__UNMAPPED__"
+				)
+			dataType: string
+			summarizeBy: none
+			displayFolder: Attach Rate
+
 		column 'Attach Channel Bucket' =
 				VAR _Normalized =
 					SUBSTITUTE (
@@ -19,6 +29,16 @@ createOrReplace
 			displayFolder: Attach Rate
 
 	ref table 'Sellout Stays'
+
+		column 'Attach Subsidiary' =
+				COALESCE (
+					RELATED ( 'Subsidiary Master'[Subsidiary] ),
+					'Sellout Stays'[Subsidiary],
+					"__UNMAPPED__"
+				)
+			dataType: string
+			summarizeBy: none
+			displayFolder: Attach Rate
 
 		column 'Attach Channel Bucket' =
 				VAR _Normalized =
@@ -118,7 +138,7 @@ createOrReplace
 							REMOVEFILTERS ( 'Date' ),
 							REMOVEFILTERS ( 'Date Filter' ),
 							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd ),
-							TREATAS ( _SelectedSubs, 'Subsidiary Master'[Subsidiary] ),
+							TREATAS ( _SelectedSubs, Sales[Attach Subsidiary] ),
 							TREATAS ( _SelectedBuckets, Sales[Attach Channel Bucket] )
 						)
 					)
@@ -144,7 +164,7 @@ createOrReplace
 							REMOVEFILTERS ( 'Date' ),
 							REMOVEFILTERS ( 'Date Filter' ),
 							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd ),
-							TREATAS ( _SelectedSubs, 'Sellout Stays'[Subsidiary] ),
+							TREATAS ( _SelectedSubs, 'Sellout Stays'[Attach Subsidiary] ),
 							TREATAS ( _SelectedBuckets, 'Sellout Stays'[Attach Channel Bucket] )
 						)
 					)
@@ -170,7 +190,7 @@ createOrReplace
 							REMOVEFILTERS ( 'Date' ),
 							REMOVEFILTERS ( 'Date Filter' ),
 							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd ),
-							TREATAS ( _SelectedSubs, 'Sellout Stays'[Subsidiary] ),
+							TREATAS ( _SelectedSubs, 'Sellout Stays'[Attach Subsidiary] ),
 							TREATAS ( _SelectedBuckets, 'Sellout Stays'[Attach Channel Bucket] )
 						)
 					)
