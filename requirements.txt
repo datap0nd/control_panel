@@ -9,3 +9,21 @@ createOrReplace
 				)
 			formatString: 0.0%
 			displayFolder: Sales\Policy Status
+
+		measure 'HTML KPI Monthly Cancellation Rate' =
+				VAR _Rate = [Monthly Cancellation Rate]
+				VAR _Value =
+					IF ( ISBLANK ( _Rate ), "--", FORMAT ( _Rate, "0.0%" ) )
+				VAR _Events = [Monthly Cancellation Events - Selected Months]
+				VAR _Exposure = [Monthly Opening Subscription Exposure - Selected Months]
+				VAR _Diagnostic =
+					IF (
+						ISBLANK ( _Exposure ),
+						"No opening exposure",
+						FORMAT ( _Events, "#,##0" ) & " events / " & FORMAT ( _Exposure, "#,##0" ) & " opening exposure"
+					)
+				RETURN
+					"<style>" &
+					"*{box-sizing:border-box}body{margin:0}.card{width:100%;height:100%;min-height:190px;padding:22px 28px;background:#fbfcfe;border:1px solid #cbd8e6;border-top:5px solid #b42318;border-radius:18px;box-shadow:0 8px 20px rgba(23,33,43,.10);font-family:Segoe UI,Arial,sans-serif;color:#17212b;display:flex;flex-direction:column}.head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}.label{font-size:20px;line-height:1.2;font-weight:700;color:#40536a}.info{width:34px;height:34px;flex:0 0 34px;border:1px solid #83b6dc;border-radius:50%;background:#e3f2fd;color:#175c8d;font-size:20px;font-weight:700;display:grid;place-items:center}.value{margin-top:18px;font-size:54px;line-height:1;font-weight:800;letter-spacing:-2px;color:#17212b}.detail{margin-top:auto;padding-top:22px;font-size:13px;line-height:1.3;font-weight:600;color:#68768a}</style>" &
+					"<div class='card'><div class='head'><div class='label'>Weighted monthly<br>cancellation</div><div class='info' title='Monthly cancellation events divided by the sum of each selected month opening active paid-monthly exposure.'>i</div></div><div class='value'>" & _Value & "</div><div class='detail'>" & _Diagnostic & "</div></div>"
+			displayFolder: KPI Cards\HTML
