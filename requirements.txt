@@ -1,74 +1,31 @@
-DEFINE
-    VAR __PeriodStart = [Policy Period Start Date]
-    VAR __PeriodEnd = [Policy Period End Date]
-    VAR __ValidPeriod =
-        NOT ISBLANK ( __PeriodStart )
-            && NOT ISBLANK ( __PeriodEnd )
-            && __PeriodStart <= __PeriodEnd
-    VAR __SafeStart =
-        IF ( __ValidPeriod, __PeriodStart, DATE ( 1900, 1, 1 ) )
-    VAR __SafeEnd =
-        IF ( __ValidPeriod, __PeriodEnd, __SafeStart )
-    VAR __MonthStarts =
-        DISTINCT (
-            SELECTCOLUMNS (
-                CALENDAR ( __SafeStart, __SafeEnd ),
-                "MonthStart", DATE ( YEAR ( [Date] ), MONTH ( [Date] ), 1 )
-            )
-        )
-    VAR __RawNumerator =
-        IF (
-            __ValidPeriod,
-            COUNTROWS (
-                FILTER (
-                    ALL ( Policy ),
-                    COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                        && NOT ISBLANK ( Policy[Cancellation Date] )
-                        && Policy[Cancellation Date] >= __PeriodStart
-                        && Policy[Cancellation Date] <= __PeriodEnd
-                )
-            )
-        )
-    VAR __RawDenominator =
-        IF (
-            __ValidPeriod,
-            SUMX (
-                __MonthStarts,
-                VAR __MonthStart = [MonthStart]
-                RETURN
-                    COUNTROWS (
-                        FILTER (
-                            ALL ( Policy ),
-                            VAR __CoverageStart =
-                                COALESCE (
-                                    Policy[Warranty Start Date],
-                                    Policy[Policy Created Date]
-                                )
-                            RETURN
-                                COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-                                    && NOT ISBLANK ( __CoverageStart )
-                                    && __CoverageStart <= __MonthStart
-                                    && (
-                                        ISBLANK ( Policy[Warranty End Date] )
-                                            || Policy[Warranty End Date] >= __MonthStart
-                                    )
-                                    && (
-                                        ISBLANK ( Policy[Cancellation Date] )
-                                            || Policy[Cancellation Date] > __MonthStart
-                                    )
-                        )
-                    )
-            )
-        )
+createOrReplace
 
-EVALUATE
-    ROW (
-        "Period Start", __PeriodStart,
-        "Period End", __PeriodEnd,
-        "Measure Numerator", [Paid Monthly Cancellation Events],
-        "Measure Denominator", [Paid Monthly Opening Exposure],
-        "Measure Rate", [Monthly Cancellation Rate],
-        "Raw Numerator", __RawNumerator,
-        "Raw Denominator", __RawDenominator,
-        "Raw Rate", DIVIDE ( __RawNumerator, __RawDenominator )
-    )
+	ref table Measures_table
+
+		measure 'Policy Period Start Date' =
+				VAR _DataStart = [Policy Data Start Date]
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
+				VAR _SelectedStart = MIN ( 'Date'[Date] )
+				RETURN
+					IF (
+						ISBLANK ( _DataStart ),
+						BLANK (),
+						IF ( _HasDateContext, _SelectedStart, _DataStart )
+					)
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
+
+		measure 'Policy Period End Date' =
+				VAR _DataEnd = [Policy Data End Date]
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
+				VAR _SelectedEnd = MAX ( 'Date'[Date] )
+				RETURN
+					IF (
+						ISBLANK ( _DataEnd ),
+						BLANK (),
+						IF ( _HasDateContext, MIN ( _SelectedEnd, _DataEnd ), _DataEnd )
+					)
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
