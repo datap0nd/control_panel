@@ -56,8 +56,9 @@ createOrReplace
 		measure 'Attach Common Data End Date' =
 				VAR _SalesEnd =
 					CALCULATE ( MAX ( Sales[Reporting Date] ), REMOVEFILTERS () )
-				VAR _SelloutEnd =
+				VAR _SelloutMonth =
 					CALCULATE ( MAX ( 'Sellout Stays'[Reporting Date] ), REMOVEFILTERS () )
+				VAR _SelloutEnd = EOMONTH ( _SelloutMonth, 0 )
 				RETURN
 					IF (
 						ISBLANK ( _SalesEnd ) || ISBLANK ( _SelloutEnd ),
