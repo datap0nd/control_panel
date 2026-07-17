@@ -3,17 +3,17 @@ createOrReplace
 	ref table Measures_table
 
 		measure 'Active Policies' =
-				VAR _AsOfDate =
-					MAXX (
-						FILTER ( ALL ( Sales ), NOT ISBLANK ( Sales[Reporting Date] ) ),
-						Sales[Reporting Date]
-					)
+				VAR _HasDateContext =
+					ISCROSSFILTERED ( 'Date'[Date] )
+						|| ISCROSSFILTERED ( 'Date'[StartOfMonth] )
+				VAR _LoadedCutoff =
+					MAXX ( FILTER ( ALL ( Sales ), NOT ISBLANK ( Sales[Reporting Date] ) ), Sales[Reporting Date] )
+				VAR _AsOfDate = IF ( _HasDateContext, MAX ( 'Date'[Date] ), _LoadedCutoff )
 				RETURN
 					COUNTROWS (
 						FILTER (
 							ALL ( Policy ),
-							VAR _CoverageStart =
-								COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
+							VAR _CoverageStart = COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
 							VAR _CoverageEnd = Policy[Warranty End Date]
 							VAR _CancellationDate = Policy[Cancellation Date]
 							RETURN
@@ -28,17 +28,17 @@ createOrReplace
 			displayFolder: Sales
 
 		measure 'Active Monthly Subscribers' =
-				VAR _AsOfDate =
-					MAXX (
-						FILTER ( ALL ( Sales ), NOT ISBLANK ( Sales[Reporting Date] ) ),
-						Sales[Reporting Date]
-					)
+				VAR _HasDateContext =
+					ISCROSSFILTERED ( 'Date'[Date] )
+						|| ISCROSSFILTERED ( 'Date'[StartOfMonth] )
+				VAR _LoadedCutoff =
+					MAXX ( FILTER ( ALL ( Sales ), NOT ISBLANK ( Sales[Reporting Date] ) ), Sales[Reporting Date] )
+				VAR _AsOfDate = IF ( _HasDateContext, MAX ( 'Date'[Date] ), _LoadedCutoff )
 				RETURN
 					COUNTROWS (
 						FILTER (
 							ALL ( Policy ),
-							VAR _CoverageStart =
-								COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
+							VAR _CoverageStart = COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
 							VAR _CoverageEnd = Policy[Warranty End Date]
 							VAR _CancellationDate = Policy[Cancellation Date]
 							RETURN
@@ -54,46 +54,35 @@ createOrReplace
 			displayFolder: Sales\Policy Status
 
 		measure 'Monthly Cancellation Events - Selected Months' =
-				VAR _AsOfDate =
-					MAXX (
-						FILTER ( ALL ( Sales ), NOT ISBLANK ( Sales[Reporting Date] ) ),
-						Sales[Reporting Date]
-					)
-				VAR _PeriodLabel = SELECTEDVALUE ( 'Date Filter'[Period Label], "YTD" )
-				VAR _SelectedStart =
-					MINX (
-						CALCULATETABLE ( VALUES ( 'Date Filter'[Date] ), REMOVEFILTERS ( 'Date' ) ),
-						'Date Filter'[Date]
-					)
-				VAR _SelectedEnd =
-					MAXX (
-						CALCULATETABLE ( VALUES ( 'Date Filter'[Date] ), REMOVEFILTERS ( 'Date' ) ),
-						'Date Filter'[Date]
-					)
+				VAR _HasPeriodSelection =
+					ISFILTERED ( 'Date Filter'[Period Label] )
+						|| ISFILTERED ( 'Date Filter'[Period Type] )
+				VAR _HasDateContext =
+					ISCROSSFILTERED ( 'Date'[Date] )
+						|| ISCROSSFILTERED ( 'Date'[StartOfMonth] )
+				VAR _LoadedCutoff =
+					MAXX ( FILTER ( ALL ( Sales ), NOT ISBLANK ( Sales[Reporting Date] ) ), Sales[Reporting Date] )
 				VAR _PeriodStart =
 					SWITCH (
-						_PeriodLabel,
-						"YTD", DATE ( YEAR ( _AsOfDate ), 1, 1 ),
-						"Current Month", DATE ( YEAR ( _AsOfDate ), MONTH ( _AsOfDate ), 1 ),
-						"Last 12 Months", EOMONTH ( _AsOfDate, -12 ) + 1,
-						"Last Year", DATE ( YEAR ( _AsOfDate ) - 1, 1, 1 ),
-						_SelectedStart
+						TRUE (),
+						_HasPeriodSelection,
+							MINX ( CALCULATETABLE ( VALUES ( 'Date Filter'[Date] ), REMOVEFILTERS ( 'Date' ) ), 'Date Filter'[Date] ),
+						_HasDateContext, MIN ( 'Date'[Date] ),
+						DATE ( YEAR ( _LoadedCutoff ), 1, 1 )
 					)
 				VAR _PeriodEnd =
 					SWITCH (
-						_PeriodLabel,
-						"YTD", _AsOfDate,
-						"Current Month", _AsOfDate,
-						"Last 12 Months", _AsOfDate,
-						"Last Year", DATE ( YEAR ( _AsOfDate ) - 1, 12, 31 ),
-						_SelectedEnd
+						TRUE (),
+						_HasPeriodSelection,
+							MAXX ( CALCULATETABLE ( VALUES ( 'Date Filter'[Date] ), REMOVEFILTERS ( 'Date' ) ), 'Date Filter'[Date] ),
+						_HasDateContext, MAX ( 'Date'[Date] ),
+						_LoadedCutoff
 					)
 				VAR _FirstMonth = DATE ( YEAR ( _PeriodStart ), MONTH ( _PeriodStart ), 1 )
 				VAR _LastMonth = DATE ( YEAR ( _PeriodEnd ), MONTH ( _PeriodEnd ), 1 )
-				VAR _MonthCount = DATEDIFF ( _FirstMonth, _LastMonth, MONTH )
 				RETURN
 					SUMX (
-						GENERATESERIES ( 0, _MonthCount, 1 ),
+						GENERATESERIES ( 0, DATEDIFF ( _FirstMonth, _LastMonth, MONTH ), 1 ),
 						VAR _MonthStart = EDATE ( _FirstMonth, [Value] )
 						VAR _EventStart = MAX ( _PeriodStart, _MonthStart )
 						VAR _EventEnd = MIN ( _PeriodEnd, EOMONTH ( _MonthStart, 0 ) )
@@ -113,53 +102,41 @@ createOrReplace
 			displayFolder: Sales\Policy Status\Diagnostics
 
 		measure 'Monthly Opening Subscription Exposure - Selected Months' =
-				VAR _AsOfDate =
-					MAXX (
-						FILTER ( ALL ( Sales ), NOT ISBLANK ( Sales[Reporting Date] ) ),
-						Sales[Reporting Date]
-					)
-				VAR _PeriodLabel = SELECTEDVALUE ( 'Date Filter'[Period Label], "YTD" )
-				VAR _SelectedStart =
-					MINX (
-						CALCULATETABLE ( VALUES ( 'Date Filter'[Date] ), REMOVEFILTERS ( 'Date' ) ),
-						'Date Filter'[Date]
-					)
-				VAR _SelectedEnd =
-					MAXX (
-						CALCULATETABLE ( VALUES ( 'Date Filter'[Date] ), REMOVEFILTERS ( 'Date' ) ),
-						'Date Filter'[Date]
-					)
+				VAR _HasPeriodSelection =
+					ISFILTERED ( 'Date Filter'[Period Label] )
+						|| ISFILTERED ( 'Date Filter'[Period Type] )
+				VAR _HasDateContext =
+					ISCROSSFILTERED ( 'Date'[Date] )
+						|| ISCROSSFILTERED ( 'Date'[StartOfMonth] )
+				VAR _LoadedCutoff =
+					MAXX ( FILTER ( ALL ( Sales ), NOT ISBLANK ( Sales[Reporting Date] ) ), Sales[Reporting Date] )
 				VAR _PeriodStart =
 					SWITCH (
-						_PeriodLabel,
-						"YTD", DATE ( YEAR ( _AsOfDate ), 1, 1 ),
-						"Current Month", DATE ( YEAR ( _AsOfDate ), MONTH ( _AsOfDate ), 1 ),
-						"Last 12 Months", EOMONTH ( _AsOfDate, -12 ) + 1,
-						"Last Year", DATE ( YEAR ( _AsOfDate ) - 1, 1, 1 ),
-						_SelectedStart
+						TRUE (),
+						_HasPeriodSelection,
+							MINX ( CALCULATETABLE ( VALUES ( 'Date Filter'[Date] ), REMOVEFILTERS ( 'Date' ) ), 'Date Filter'[Date] ),
+						_HasDateContext, MIN ( 'Date'[Date] ),
+						DATE ( YEAR ( _LoadedCutoff ), 1, 1 )
 					)
 				VAR _PeriodEnd =
 					SWITCH (
-						_PeriodLabel,
-						"YTD", _AsOfDate,
-						"Current Month", _AsOfDate,
-						"Last 12 Months", _AsOfDate,
-						"Last Year", DATE ( YEAR ( _AsOfDate ) - 1, 12, 31 ),
-						_SelectedEnd
+						TRUE (),
+						_HasPeriodSelection,
+							MAXX ( CALCULATETABLE ( VALUES ( 'Date Filter'[Date] ), REMOVEFILTERS ( 'Date' ) ), 'Date Filter'[Date] ),
+						_HasDateContext, MAX ( 'Date'[Date] ),
+						_LoadedCutoff
 					)
 				VAR _FirstMonth = DATE ( YEAR ( _PeriodStart ), MONTH ( _PeriodStart ), 1 )
 				VAR _LastMonth = DATE ( YEAR ( _PeriodEnd ), MONTH ( _PeriodEnd ), 1 )
-				VAR _MonthCount = DATEDIFF ( _FirstMonth, _LastMonth, MONTH )
 				RETURN
 					SUMX (
-						GENERATESERIES ( 0, _MonthCount, 1 ),
+						GENERATESERIES ( 0, DATEDIFF ( _FirstMonth, _LastMonth, MONTH ), 1 ),
 						VAR _MonthStart = EDATE ( _FirstMonth, [Value] )
 						RETURN
 							COUNTROWS (
 								FILTER (
 									ALL ( Policy ),
-									VAR _CoverageStart =
-										COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
+									VAR _CoverageStart = COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
 									VAR _CoverageEnd = Policy[Warranty End Date]
 									VAR _CancellationDate = Policy[Cancellation Date]
 									RETURN
