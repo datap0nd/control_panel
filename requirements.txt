@@ -1,11 +1,15 @@
 POWER BI CANCELLATION RATE FIX
 
-Part 1 - Fix Policy date ingestion
+Part 1 - Fix the existing Policy M partition in TMDL view
 
-1. In Power BI Desktop, select Transform data.
-2. Select the Policy query.
-3. Open Advanced Editor.
-4. Immediately after the existing #"Promoted Headers" step, insert this step:
+The Policy table was created as an M partition through TMDL. It will not appear in Power Query Editor. Do not create a second Policy query.
+
+1. In Power BI Desktop, open TMDL view.
+2. Create a new TMDL script.
+3. In the Data pane, expand the Policy table and drag the Policy table onto the TMDL script canvas. Power BI will serialize the existing table, including its `partition Policy = m` block and current M source.
+4. Keep the generated `createOrReplace` script. Do not replace it with a second table or rename Policy.
+5. Inside `partition Policy = m`, locate the existing M `let` expression and the `#"Promoted Headers"` step.
+6. Immediately after the existing `#"Promoted Headers"` step, insert this M step:
 
     #"Cleaned Policy Date Text" = Table.TransformColumns(
         #"Promoted Headers",
@@ -20,7 +24,7 @@ Part 1 - Fix Policy date ingestion
         MissingField.UseNull
     ),
 
-5. In the existing #"Changed Type" step, change its input from:
+7. In the existing `#"Changed Type"` step, change its input from:
 
     #"Promoted Headers"
 
@@ -30,7 +34,7 @@ to:
 
 Keep Culture="en-US". This matches the HTML parser's first-choice MM/DD/YYYY interpretation.
 
-6. Immediately after the existing #"Changed Type" step, insert these three steps:
+8. Immediately after the existing `#"Changed Type"` step, insert these three M steps:
 
     #"Added Resolved Policy Created Date" = Table.AddColumn(
         #"Changed Type",
@@ -53,7 +57,7 @@ Keep Culture="en-US". This matches the HTML parser's first-choice MM/DD/YYYY int
         {{"__resolved_policy_created_date", "policy_created_date"}}
     ),
 
-7. Change the input of the existing #"Normalized Product Monthly Amount" step from:
+9. Change the input of the existing `#"Normalized Product Monthly Amount"` step from:
 
     #"Changed Type"
 
@@ -61,11 +65,12 @@ to:
 
     #"Renamed Resolved Policy Created Date"
 
-8. Select Done, then Close & Apply. Confirm the Policy query refreshes without date-conversion errors.
+10. Apply the generated Policy TMDL script.
+11. Refresh the semantic model. The refresh must complete without Policy date-conversion errors.
 
 Part 2 - Replace the cancellation measures
 
-9. Open TMDL view, create a new TMDL script, paste the entire block below, and select Apply:
+12. In TMDL view, create another new TMDL script, paste the entire block below, and select Apply:
 
 createOrReplace
 
@@ -185,11 +190,11 @@ createOrReplace
 			formatString: 0.0%
 			displayFolder: Sales\Policy Status
 
-10. Refresh the HTML KPI visual or switch to another page and back. Its large value already references [Monthly Cancellation Rate], so no visual retargeting is required.
+13. Refresh the HTML KPI visual or switch to another page and back. Its large value already references [Monthly Cancellation Rate], so no visual retargeting is required.
 
 Part 3 - Validate
 
-11. Run this in DAX Query View:
+14. Run this in DAX Query View:
 
 EVALUATE
 CALCULATETABLE (
