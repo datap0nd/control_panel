@@ -1,236 +1,20 @@
 createOrReplace
 
-	ref table Sales
-
-		column 'Attach Subsidiary' =
-				COALESCE (
-					RELATED ( 'Subsidiary Master'[Subsidiary] ),
-					Sales[Subsidiary],
-					"__UNMAPPED__"
-				)
-			dataType: string
-			summarizeBy: none
-			displayFolder: Attach Rate
-
-		column 'Attach Channel Bucket' =
-				VAR _Normalized =
-					SUBSTITUTE (
-						SUBSTITUTE (
-							UPPER ( TRIM ( COALESCE ( Sales[Sales Channel], "" ) ) ),
-							"-",
-							""
-						),
-						" ",
-						""
-					)
-				RETURN IF ( CONTAINSSTRING ( _Normalized, "ESTORE" ), "eStore", "Others" )
-			dataType: string
-			summarizeBy: none
-			displayFolder: Attach Rate
-
-	ref table 'Sellout Stays'
-
-		column 'Attach Subsidiary' =
-				COALESCE (
-					RELATED ( 'Subsidiary Master'[Subsidiary] ),
-					'Sellout Stays'[Subsidiary],
-					"__UNMAPPED__"
-				)
-			dataType: string
-			summarizeBy: none
-			displayFolder: Attach Rate
-
-		column 'Attach Channel Bucket' =
-				VAR _Normalized =
-					SUBSTITUTE (
-						SUBSTITUTE (
-							UPPER ( TRIM ( COALESCE ( 'Sellout Stays'[Account / Partner], "" ) ) ),
-							"-",
-							""
-						),
-						" ",
-						""
-					)
-				RETURN IF ( CONTAINSSTRING ( _Normalized, "ESTORE" ), "eStore", "Others" )
-			dataType: string
-			summarizeBy: none
-			displayFolder: Attach Rate
-
 	ref table Measures_table
 
-		measure 'Attach Common Data Start Date' =
-				VAR _SalesStart =
-					CALCULATE ( MIN ( Sales[Reporting Date] ), REMOVEFILTERS () )
-				VAR _SelloutStart =
-					CALCULATE ( MIN ( 'Sellout Stays'[Reporting Date] ), REMOVEFILTERS () )
-				RETURN
-					IF (
-						ISBLANK ( _SalesStart ) || ISBLANK ( _SelloutStart ),
-						BLANK (),
-						MAX ( _SalesStart, _SelloutStart )
-					)
-			formatString: yyyy-mm-dd
-			isHidden
-			displayFolder: Helper
-
-		measure 'Attach Common Data End Date' =
-				VAR _SalesEnd =
-					CALCULATE ( MAX ( Sales[Reporting Date] ), REMOVEFILTERS () )
-				VAR _SelloutMonth =
-					CALCULATE ( MAX ( 'Sellout Stays'[Reporting Date] ), REMOVEFILTERS () )
-				VAR _SelloutEnd = EOMONTH ( _SelloutMonth, 0 )
-				RETURN
-					IF (
-						ISBLANK ( _SalesEnd ) || ISBLANK ( _SelloutEnd ),
-						BLANK (),
-						MIN ( _SalesEnd, _SelloutEnd )
-					)
-			formatString: yyyy-mm-dd
-			isHidden
-			displayFolder: Helper
-
-		measure 'Attach Period Start Date' =
-				VAR _DataStart = [Attach Common Data Start Date]
-				VAR _DataEnd = [Attach Common Data End Date]
-				VAR _HasDateContext = [Policy Date Context Flag] = 1
-				VAR _RequestedStart =
-					IF (
-						_HasDateContext,
-						MIN ( 'Date'[Date] ),
-						DATE ( YEAR ( _DataEnd ), 1, 1 )
-					)
-				RETURN
-					IF (
-						ISBLANK ( _DataStart ) || ISBLANK ( _DataEnd ),
-						BLANK (),
-						MAX ( _RequestedStart, _DataStart )
-					)
-			formatString: yyyy-mm-dd
-			isHidden
-			displayFolder: Helper
-
-		measure 'Attach Period End Date' =
-				VAR _DataEnd = [Attach Common Data End Date]
-				VAR _HasDateContext = [Policy Date Context Flag] = 1
-				VAR _RequestedEnd =
-					IF ( _HasDateContext, MAX ( 'Date'[Date] ), _DataEnd )
-				RETURN
-					IF ( ISBLANK ( _DataEnd ), BLANK (), MIN ( _RequestedEnd, _DataEnd ) )
-			formatString: yyyy-mm-dd
-			isHidden
-			displayFolder: Helper
-
-		measure 'Attach Sales Volume - Common Grain' =
-				VAR _PeriodStart = [Attach Period Start Date]
-				VAR _PeriodEnd = [Attach Period End Date]
-				VAR _SelectedSubs = VALUES ( 'Subsidiary Master'[Subsidiary] )
-				VAR _SelectedBuckets = VALUES ( Sales[Attach Channel Bucket] )
-				RETURN
-					IF (
-						ISBLANK ( _PeriodStart )
-							|| ISBLANK ( _PeriodEnd )
-							|| _PeriodStart > _PeriodEnd,
-						BLANK (),
-						CALCULATE (
-							SUM ( Sales[sales_volume] ),
-							REMOVEFILTERS ( Sales ),
-							REMOVEFILTERS ( 'Subsidiary Master' ),
-							REMOVEFILTERS ( 'Date' ),
-							REMOVEFILTERS ( 'Date Filter' ),
-							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd ),
-							TREATAS ( _SelectedSubs, Sales[Attach Subsidiary] ),
-							TREATAS ( _SelectedBuckets, Sales[Attach Channel Bucket] )
-						)
-					)
+		measure 'Attach Sales QTY' = [Attach Sales Volume - Common Grain]
 			formatString: #,##0
-			isHidden
-			displayFolder: Helper
+			displayFolder: Attach Rate\Table
 
-		measure 'Attach Sellout Total Units - Common Grain' =
-				VAR _PeriodStart = [Attach Period Start Date]
-				VAR _PeriodEnd = [Attach Period End Date]
-				VAR _SelectedSubs = VALUES ( 'Subsidiary Master'[Subsidiary] )
-				VAR _SelectedBuckets = VALUES ( Sales[Attach Channel Bucket] )
-				RETURN
-					IF (
-						ISBLANK ( _PeriodStart )
-							|| ISBLANK ( _PeriodEnd )
-							|| _PeriodStart > _PeriodEnd,
-						BLANK (),
-						CALCULATE (
-							SUM ( 'Sellout Stays'[active_units_resolved] ),
-							REMOVEFILTERS ( 'Sellout Stays' ),
-							REMOVEFILTERS ( 'Subsidiary Master' ),
-							REMOVEFILTERS ( 'Date' ),
-							REMOVEFILTERS ( 'Date Filter' ),
-							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd ),
-							TREATAS ( _SelectedSubs, 'Sellout Stays'[Attach Subsidiary] ),
-							TREATAS ( _SelectedBuckets, 'Sellout Stays'[Attach Channel Bucket] )
-						)
-					)
+		measure 'Sellout That Stays - Common Grain' = [Attach Sellout Net Units - Common Grain]
 			formatString: #,##0
-			isHidden
-			displayFolder: Helper
+			displayFolder: Attach Rate\Table
 
-		measure 'Attach Sellout Net Units - Common Grain' =
-				VAR _PeriodStart = [Attach Period Start Date]
-				VAR _PeriodEnd = [Attach Period End Date]
-				VAR _SelectedSubs = VALUES ( 'Subsidiary Master'[Subsidiary] )
-				VAR _SelectedBuckets = VALUES ( Sales[Attach Channel Bucket] )
-				RETURN
-					IF (
-						ISBLANK ( _PeriodStart )
-							|| ISBLANK ( _PeriodEnd )
-							|| _PeriodStart > _PeriodEnd,
-						BLANK (),
-						CALCULATE (
-							SUM ( 'Sellout Stays'[so_that_stays_units] ),
-							REMOVEFILTERS ( 'Sellout Stays' ),
-							REMOVEFILTERS ( 'Subsidiary Master' ),
-							REMOVEFILTERS ( 'Date' ),
-							REMOVEFILTERS ( 'Date Filter' ),
-							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd ),
-							TREATAS ( _SelectedSubs, 'Sellout Stays'[Attach Subsidiary] ),
-							TREATAS ( _SelectedBuckets, 'Sellout Stays'[Attach Channel Bucket] )
-						)
-					)
+		measure 'Total Sellout - Common Grain' = [Attach Sellout Total Units - Common Grain]
 			formatString: #,##0
-			isHidden
-			displayFolder: Helper
+			displayFolder: Attach Rate\Table
 
-		measure 'Total Sellout Units' = [Attach Sellout Total Units - Common Grain]
-			formatString: #,##0
-			displayFolder: Attach Rate
-
-		measure 'Sellout Active Units' = [Attach Sellout Total Units - Common Grain]
-			formatString: #,##0
-			displayFolder: Attach Rate
-
-		measure 'S/O That Stays Units' = [Attach Sellout Net Units - Common Grain]
-			formatString: #,##0
-			displayFolder: Attach Rate
-
-		measure 'Net of Export Sellout Units' = [Attach Sellout Net Units - Common Grain]
-			formatString: #,##0
-			displayFolder: Attach Rate
-
-		measure 'Attach Rate Total S/O' =
-				DIVIDE (
-					[Attach Sales Volume - Common Grain],
-					[Attach Sellout Total Units - Common Grain]
-				)
-			formatString: 0.0%
-			displayFolder: Attach Rate
-
-		measure 'Attach Rate Net of Export' =
-				DIVIDE (
-					[Attach Sales Volume - Common Grain],
-					[Attach Sellout Net Units - Common Grain]
-				)
-			formatString: 0.0%
-			displayFolder: Attach Rate
-
-		measure 'Raw Attach Rate' = [Attach Rate Net of Export]
+		measure 'Raw Attach Rate' = [Attach Rate Total S/O]
 			formatString: 0.0%
 			displayFolder: Attach Rate
 
@@ -238,49 +22,45 @@ createOrReplace
 			formatString: 0.0%
 			displayFolder: Attach Rate
 
-		measure 'Attach Rate with Total S/O' = [Attach Rate Total S/O]
-			formatString: 0.0%
-			displayFolder: Attach Rate
-
-		measure 'Channel Attach Rate Total S/O' = [Attach Rate Total S/O]
-			formatString: 0.0%
-			displayFolder: Attach Rate
-
-		measure 'Channel Attach Rate Net of Export' = [Attach Rate Net of Export]
-			formatString: 0.0%
-			displayFolder: Attach Rate
-
-		measure 'eStore Attach Rate' =
+		measure 'Global Attach Rate CY' =
 				CALCULATE (
-					[Attach Rate Net of Export],
-					REMOVEFILTERS ( Sales[Sales Channel] ),
-					REMOVEFILTERS ( Sales[Attach Channel Bucket] ),
-					Sales[Attach Channel Bucket] = "eStore"
+					[Raw Attach Rate],
+					REMOVEFILTERS ( 'Subsidiary Master' ),
+					REMOVEFILTERS ( Sales[Attach Subsidiary] )
 				)
 			formatString: 0.0%
-			displayFolder: Attach Rate
+			displayFolder: Attach Rate\Benchmark
 
-		measure 'Attach Rate CY' =
-				VAR _Year = [Analysis Year]
-				VAR _CommonEnd = [Attach Common Data End Date]
-				VAR _Months =
-					FILTER (
-						VALUES ( 'Date'[MonthNum] ),
-						_Year < YEAR ( _CommonEnd )
-							|| ( _Year = YEAR ( _CommonEnd ) && 'Date'[MonthNum] <= MONTH ( _CommonEnd ) )
-					)
-				RETURN
-					CALCULATE (
-						[Raw Attach Rate],
-						REMOVEFILTERS ( 'Date' ),
-						REMOVEFILTERS ( 'Date Filter' ),
-						TREATAS ( _Months, 'Date'[MonthNum] ),
-						'Date'[Year] = _Year
-					)
+		measure 'Global Excluding Export Attach Rate' =
+				CALCULATE (
+					[Excluding Export Attach Rate],
+					REMOVEFILTERS ( 'Subsidiary Master' ),
+					REMOVEFILTERS ( Sales[Attach Subsidiary] )
+				)
 			formatString: 0.0%
-			displayFolder: Chart aliases
+			displayFolder: Attach Rate\Benchmark
 
-		measure 'Attach Rate LY Chart' =
+		measure 'Raw Attach Rate vs Global' =
+				[Raw Attach Rate] - [Global Attach Rate CY]
+			formatString: +0.0%;-0.0%;0.0%
+			displayFolder: Attach Rate\Benchmark
+
+		measure 'Excluding Export Attach Rate vs Global' =
+				[Excluding Export Attach Rate] - [Global Excluding Export Attach Rate]
+			formatString: +0.0%;-0.0%;0.0%
+			displayFolder: Attach Rate\Benchmark
+
+		measure 'Raw vs Global (pts)' =
+				( [Raw Attach Rate] - [Global Attach Rate CY] ) * 100
+			formatString: +0.0 "pts";-0.0 "pts";0.0 "pts"
+			displayFolder: Attach Rate\Table
+
+		measure 'Excl Export vs Global (pts)' =
+				( [Excluding Export Attach Rate] - [Global Excluding Export Attach Rate] ) * 100
+			formatString: +0.0 "pts";-0.0 "pts";0.0 "pts"
+			displayFolder: Attach Rate\Table
+
+		measure 'Excluding Export Attach Rate LY' =
 				VAR _CurrentYear = [Analysis Year]
 				VAR _PriorYear = _CurrentYear - 1
 				VAR _CommonEnd = [Attach Common Data End Date]
@@ -292,55 +72,27 @@ createOrReplace
 					)
 				RETURN
 					CALCULATE (
-						[Raw Attach Rate],
+						[Excluding Export Attach Rate],
 						REMOVEFILTERS ( 'Date' ),
 						REMOVEFILTERS ( 'Date Filter' ),
 						TREATAS ( _Months, 'Date'[MonthNum] ),
 						'Date'[Year] = _PriorYear
 					)
 			formatString: 0.0%
-			displayFolder: Chart aliases
-
-		measure 'Attach Rate LY-1 Chart' =
-				VAR _CurrentYear = [Analysis Year]
-				VAR _PriorYear = _CurrentYear - 2
-				VAR _CommonEnd = [Attach Common Data End Date]
-				VAR _Months =
-					FILTER (
-						VALUES ( 'Date'[MonthNum] ),
-						_CurrentYear < YEAR ( _CommonEnd )
-							|| ( _CurrentYear = YEAR ( _CommonEnd ) && 'Date'[MonthNum] <= MONTH ( _CommonEnd ) )
-					)
-				RETURN
-					CALCULATE (
-						[Raw Attach Rate],
-						REMOVEFILTERS ( 'Date' ),
-						REMOVEFILTERS ( 'Date Filter' ),
-						TREATAS ( _Months, 'Date'[MonthNum] ),
-						'Date'[Year] = _PriorYear
-					)
-			formatString: 0.0%
-			displayFolder: Chart aliases
-
-		measure 'Raw Attach Rate LY' = [Attach Rate LY Chart]
-			formatString: 0.0%
 			displayFolder: Attach Rate\LY
 
-		measure 'Raw Attach Rate LY-1' = [Attach Rate LY-1 Chart]
-			formatString: 0.0%
+		measure 'Excluding Export Attach Rate vs LY' =
+				DIVIDE (
+					[Excluding Export Attach Rate] - [Excluding Export Attach Rate LY],
+					[Excluding Export Attach Rate LY]
+				)
+			formatString: +0.0%;-0.0%;0.0%
 			displayFolder: Attach Rate\LY
 
-		measure 'Attach Rate Reconciliation Status' =
-				VAR _Start = [Attach Period Start Date]
-				VAR _End = [Attach Period End Date]
-				VAR _Sales = [Attach Sales Volume - Common Grain]
-				VAR _Net = [Attach Sellout Net Units - Common Grain]
-				VAR _Total = [Attach Sellout Total Units - Common Grain]
-				RETURN
-					"Period=" & FORMAT ( _Start, "yyyy-mm-dd" ) & " to " & FORMAT ( _End, "yyyy-mm-dd" )
-						& " | Sales=" & FORMAT ( _Sales, "#,##0" )
-						& " | Net SO=" & FORMAT ( _Net, "#,##0" )
-						& " | Total SO=" & FORMAT ( _Total, "#,##0" )
-						& " | Net rate=" & FORMAT ( DIVIDE ( _Sales, _Net ), "0.000%" )
-						& " | Total rate=" & FORMAT ( DIVIDE ( _Sales, _Total ), "0.000%" )
+		measure 'Attach Table Validation' =
+				"Sales=" & FORMAT ( [Attach Sales QTY], "#,##0" )
+					& " | Total SO=" & FORMAT ( [Total Sellout - Common Grain], "#,##0" )
+					& " | Raw=" & FORMAT ( [Raw Attach Rate], "0.000%" )
+					& " | Net SO=" & FORMAT ( [Sellout That Stays - Common Grain], "#,##0" )
+					& " | Excl=" & FORMAT ( [Excluding Export Attach Rate], "0.000%" )
 			displayFolder: Attach Rate\Diagnostics
