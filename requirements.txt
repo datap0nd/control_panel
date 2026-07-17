@@ -38,184 +38,23 @@ createOrReplace
 			summarizeBy: sum
 			isHidden
 
-		partition Policy = m
-			mode: import
-			source =
-					let
-					    ParseDate = (Value as any) as nullable date =>
-					        let
-					            RawText = if Value = null then null else Text.Trim(Text.From(Value)),
-					            Invalid = RawText = null or RawText = "" or Text.Upper(RawText) = "NULL" or Text.Contains(RawText, "#"),
-					            Parsed =
-					                if Invalid then null
-					                else try Date.FromText(RawText, [Format="MM/dd/yyyy", Culture="en-US"])
-					                otherwise try Date.FromText(RawText, [Culture="en-US"])
-					                otherwise try Date.From(Value)
-					                otherwise null
-					        in
-					            Parsed,
-					    ParseMonthKey = (Value as any) as nullable date =>
-					        let
-					            RawText = if Value = null then null else Text.Trim(Text.From(Value)),
-					            MonthText = if RawText = null or Text.Length(RawText) < 7 then null else Text.Start(RawText, 7) & "-01",
-					            Parsed = if MonthText = null then null else try Date.FromText(MonthText, [Format="yyyy-MM-dd", Culture="en-US"]) otherwise null
-					        in
-					            Parsed,
-					    ParseNumber = (Value as any) as nullable number =>
-					        let
-					            RawText = if Value = null then null else Text.Trim(Text.From(Value)),
-					            CleanText = if RawText = null then null else Text.Replace(RawText, ",", ""),
-					            Parsed =
-					                if CleanText = null or CleanText = "" or Text.Upper(CleanText) = "NULL" or Text.Contains(CleanText, "#") then null
-					                else try Number.From(Value)
-					                otherwise try Number.FromText(CleanText, "en-US")
-					                otherwise null
-					        in
-					            Parsed,
-					    ParseWholeNumber = (Value as any) as nullable number =>
-					        let
-					            Parsed = ParseNumber(Value)
-					        in
-					            if Parsed = null then null else Int64.From(Parsed),
-					    DataFolder = Text.Trim(DataPath),
-					    Backslash = Character.FromNumber(92),
-					    PathSeparator = if Text.EndsWith(DataFolder, Backslash) or Text.EndsWith(DataFolder, "/") then "" else if Text.Contains(DataFolder, Backslash) then Backslash else "/",
-					    PolicyFilePath = DataFolder & PathSeparator & PolicyCsvFileName,
-					    CsvBinary = File.Contents(PolicyFilePath),
-					    Source = Csv.Document(CsvBinary, [Delimiter=",", Encoding=65001, QuoteStyle=QuoteStyle.Csv]),
-					    #"Removed Numbers Title Row" = if (try Text.StartsWith(Text.From(Source{0}[Column1]), "Table ") otherwise false) then Table.Skip(Source, 1) else Source,
-					    #"Promoted Headers" = Table.PromoteHeaders(#"Removed Numbers Title Row", [PromoteAllScalars=true]),
-					    #"Normalized Headers" = Table.TransformColumnNames(#"Promoted Headers", each Text.Trim(_)),
-					    #"Selected Columns" = Table.SelectColumns(#"Normalized Headers", {
-					        "policy_id", "insurance_policy_id", "user_id", "device_unique_id", "product_id",
-					        "policy_created_date", "policy_created_month_key", "country_code", "sales_channel_code",
-					        "policy_status_code", "last_payment_status_text", "insurer_company_type_code", "partner_name",
-					        "sales_partner_key", "store_name", "device_model_name", "payment_type_code", "payment_method_code",
-					        "product_purchase_date", "warranty_start_date", "warranty_end_date", "cancellation_date",
-					        "cancellation_amount", "product_monthly_amount", "product_sale_type", "sale_type",
-					        "service_deleted_flag", "deleted_flag", "load_timestamp", "policy_source_rows",
-					        "duplicate_policy_id_flag", "cancelled_by_date_flag", "warranty_expired_by_date_flag",
-					        "reference_perks_category", "reference_service_product_flag", "reference_device_model_name",
-					        "product_reference_rows", "active_product_reference_rows", "product_reference_ambiguous_flag"
-					    }, MissingField.UseNull),
-					    #"Added Parsed Policy Created Date" = Table.AddColumn(#"Selected Columns", "__policy_created_date", each
-					        let
-					            ExactDate = ParseDate([policy_created_date]),
-					            MonthDate = ParseMonthKey([policy_created_month_key])
-					        in
-					            if ExactDate <> null then ExactDate else MonthDate,
-					        type date),
-					    #"Removed Raw Policy Created Date" = Table.RemoveColumns(#"Added Parsed Policy Created Date", {"policy_created_date"}),
-					    #"Renamed Parsed Policy Created Date" = Table.RenameColumns(#"Removed Raw Policy Created Date", {{"__policy_created_date", "policy_created_date"}}),
-					    #"Parsed Date Columns" = Table.TransformColumns(#"Renamed Parsed Policy Created Date", {
-					        {"product_purchase_date", ParseDate, type date},
-					        {"warranty_start_date", ParseDate, type date},
-					        {"warranty_end_date", ParseDate, type date},
-					        {"cancellation_date", ParseDate, type date}
-					    }, null, MissingField.UseNull),
-					    #"Parsed Numeric Columns" = Table.TransformColumns(#"Parsed Date Columns", {
-					        {"cancellation_amount", ParseNumber, type number},
-					        {"product_monthly_amount", ParseNumber, type number},
-					        {"policy_source_rows", ParseWholeNumber, Int64.Type},
-					        {"duplicate_policy_id_flag", ParseWholeNumber, Int64.Type},
-					        {"cancelled_by_date_flag", ParseWholeNumber, Int64.Type},
-					        {"warranty_expired_by_date_flag", ParseWholeNumber, Int64.Type},
-					        {"product_reference_rows", ParseWholeNumber, Int64.Type},
-					        {"active_product_reference_rows", ParseWholeNumber, Int64.Type},
-					        {"product_reference_ambiguous_flag", ParseWholeNumber, Int64.Type}
-					    }, null, MissingField.UseNull),
-					    #"Changed Text Types" = Table.TransformColumnTypes(#"Parsed Numeric Columns", {
-					        {"policy_id", type text}, {"insurance_policy_id", type text}, {"user_id", type text},
-					        {"device_unique_id", type text}, {"product_id", type text}, {"policy_created_month_key", type text},
-					        {"country_code", type text}, {"sales_channel_code", type text}, {"policy_status_code", type text},
-					        {"last_payment_status_text", type text}, {"insurer_company_type_code", type text}, {"partner_name", type text},
-					        {"sales_partner_key", type text}, {"store_name", type text}, {"device_model_name", type text},
-					        {"payment_type_code", type text}, {"payment_method_code", type text}, {"product_sale_type", type text},
-					        {"sale_type", type text}, {"service_deleted_flag", type text}, {"deleted_flag", type text},
-					        {"load_timestamp", type text}, {"reference_perks_category", type text},
-					        {"reference_service_product_flag", type text}, {"reference_device_model_name", type text}
-					    }, [Culture="en-US", MissingField=MissingField.UseNull]),
-					    #"Normalized Join Keys" = Table.TransformColumns(#"Changed Text Types", {
-					        {"country_code", each if _ = null then null else Text.Upper(Text.Trim(_)), type text},
-					        {"sales_channel_code", each if _ = null then null else Text.Trim(_), type text},
-					        {"policy_status_code", each if _ = null then null else Text.Trim(_), type text},
-					        {"payment_type_code", each if _ = null then null else Text.Trim(_), type text}
-					    }, null, MissingField.UseNull),
-					    #"Merged Subsidiary" = Table.NestedJoin(#"Normalized Join Keys", {"country_code"}, #"Subsidiary Master", {"country_id"}, "Subsidiary Master", JoinKind.LeftOuter),
-					    #"Expanded Subsidiary" = Table.ExpandTableColumn(#"Merged Subsidiary", "Subsidiary Master", {"subsidiary"}, {"subsidiary"}),
-					    #"Filled Subsidiary" = Table.ReplaceValue(#"Expanded Subsidiary", null, "Unmapped", Replacer.ReplaceValue, {"subsidiary"}),
-					    #"Added Payment Type Label" = Table.AddColumn(#"Filled Subsidiary", "payment_type_label", each
-					        let Raw = if [payment_type_code] = null then null else Text.Upper(Text.Trim(Text.From([payment_type_code])))
-					        in if Raw = null or Raw = "" then null
-					           else if List.Contains({"1", "UPFRONT", "UP-FRONT"}, Raw) then "Upfront"
-					           else if List.Contains({"2", "MONTHLY", "MONTH"}, Raw) then "Monthly"
-					           else if List.Contains({"3", "FREE", "FOC"}, Raw) then "Free"
-					           else "Unmapped",
-					        type text),
-					    #"Added Coverage Scope" = Table.AddColumn(#"Added Payment Type Label", "coverage_scope", each
-					        let Product = if [reference_perks_category] = null then null else Text.Upper(Text.Trim(Text.From([reference_perks_category])))
-					        in if Product = null or Product = "" then null
-					           else if Product = "ADH" then "Accidental Damage"
-					           else if Product = "SCR" then "Screen Damage"
-					           else if List.Contains({"EW", "EXW"}, Product) then "Extended Warranty"
-					           else Product,
-					        type text),
-					    #"Added Warranty Duration Days" = Table.AddColumn(#"Added Coverage Scope", "warranty_duration_days", each
-					        if [warranty_start_date] = null or [warranty_end_date] = null or [warranty_end_date] < [warranty_start_date] then null
-					        else Duration.Days([warranty_end_date] - [warranty_start_date]) + 1,
-					        Int64.Type),
-					    #"Added Warranty Duration Months" = Table.AddColumn(#"Added Warranty Duration Days", "warranty_duration_months", each
-					        if [warranty_duration_days] = null then null
-					        else if [warranty_duration_days] >= 330 and [warranty_duration_days] <= 400 then 12
-					        else if [warranty_duration_days] >= 690 and [warranty_duration_days] <= 770 then 24
-					        else if [warranty_duration_days] >= 1030 and [warranty_duration_days] <= 1130 then 36
-					        else Number.Round(Number.From([warranty_duration_days]) / 30.4375, 0),
-					        Int64.Type),
-					    #"Added SC+ Plan Rollup" = Table.AddColumn(#"Added Warranty Duration Months", "scplus_plan_rollup", each
-					        let
-					            Product = if [reference_perks_category] = null then null else Text.Upper(Text.Trim(Text.From([reference_perks_category]))),
-					            Months = [warranty_duration_months]
-					        in
-					            if [payment_type_label] = "Monthly" then "Monthly"
-					            else if Months = 12 then "1YR"
-					            else if Months = 24 then "2YR"
-					            else if Product = "SCR" then "1YR"
-					            else if Product = "ADH" then "2YR"
-					            else "Unmapped",
-					        type text),
-					    #"Added SC+ Plan Type" = Table.AddColumn(#"Added SC+ Plan Rollup", "scplus_plan_type", each
-					        let
-					            Product = if [reference_perks_category] = null then null else Text.Upper(Text.Trim(Text.From([reference_perks_category]))),
-					            Sub = if [subsidiary] = null then null else Text.Upper(Text.Trim(Text.From([subsidiary]))),
-					            Payment = [payment_type_label],
-					            Months = [warranty_duration_months]
-					        in
-					            if Payment = "Monthly" and Sub = "SETK" and Product = "ADH" then "2YR Device Insurance Monthly Subscription"
-					            else if Payment = "Monthly" and List.Contains({"EW", "EXW"}, Product) then "Monthly Pay Plan - Extended Warranty Phase"
-					            else if Payment = "Monthly" and List.Contains({"SGE", "SESAR"}, Sub) then "Monthly Pay Plan"
-					            else if Payment = "Monthly" then "Monthly Plan"
-					            else if Product = "SCR" and Sub = "SETK" then "1YR Screen Protection Insurance"
-					            else if Product = "SCR" then "1YR Screen Damage"
-					            else if Product = "ADH" and Sub = "SETK" then "2YR Device Insurance"
-					            else if Product = "ADH" then "2YR Accidental Damage"
-					            else if List.Contains({"EW", "EXW"}, Product) then "Extended Warranty"
-					            else if Months = 12 then "1YR Plan - Scope Unmapped"
-					            else if Months = 24 then "2YR Plan - Scope Unmapped"
-					            else "Unmapped",
-					        type text),
-					    #"Added Device Category" = Table.AddColumn(#"Added SC+ Plan Type", "device_category_code", each
-					        let Model = if [device_model_name] = null then "" else Text.Upper(Text.Trim(Text.From([device_model_name])))
-					        in if Text.Contains(Model, "TAB") then "2"
-					           else if Text.Contains(Model, "WATCH") or Text.Contains(Model, "FIT") or Text.Contains(Model, "BAND") then "3"
-					           else if Text.Contains(Model, "BUD") then "4"
-					           else if Text.Contains(Model, "RING") then "6"
-					           else "1",
-					        type text),
-					    #"Added Source Type" = Table.AddColumn(#"Added Device Category", "source_type", each "Policy", type text)
-					in
-					    #"Added Source Type"
-
 	ref table Measures_table
+
+		measure 'Policy Date Context Flag' =
+				VAR _DateFiltered =
+					ISFILTERED ( 'Date'[Date] )
+						|| ISFILTERED ( 'Date'[StartOfMonth] )
+						|| ISFILTERED ( 'Date'[Year] )
+						|| ISFILTERED ( 'Date'[Month] )
+						|| ISFILTERED ( 'Date'[YearMonth] )
+				VAR _PeriodFiltered =
+					ISFILTERED ( 'Date Filter'[Date] )
+						|| ISFILTERED ( 'Date Filter'[Period Label] )
+						|| ISFILTERED ( 'Date Filter'[Period Type] )
+				RETURN IF ( _DateFiltered || _PeriodFiltered, 1, 0 )
+			formatString: 0
+			isHidden
+			displayFolder: Helper
 
 		measure 'Policy Row Count' =
 				VAR _CountryCodes = VALUES ( Sales[Country Code] )
@@ -321,12 +160,10 @@ createOrReplace
 			isHidden
 			displayFolder: Helper
 
+
 		measure 'Policy Period Start Date' =
 				VAR _DataEnd = [Policy Data End Date]
-				VAR _HasDateContext =
-					ISCROSSFILTERED ( 'Date'[Date] )
-						|| ISFILTERED ( 'Date Filter'[Period Label] )
-						|| ISFILTERED ( 'Date Filter'[Period Type] )
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
 				VAR _SelectedStart = MIN ( 'Date'[Date] )
 				RETURN
 					IF (
@@ -340,10 +177,7 @@ createOrReplace
 
 		measure 'Policy Period End Date' =
 				VAR _DataEnd = [Policy Data End Date]
-				VAR _HasDateContext =
-					ISCROSSFILTERED ( 'Date'[Date] )
-						|| ISFILTERED ( 'Date Filter'[Period Label] )
-						|| ISFILTERED ( 'Date Filter'[Period Type] )
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
 				VAR _SelectedEnd = MAX ( 'Date'[Date] )
 				RETURN
 					IF (
@@ -356,10 +190,18 @@ createOrReplace
 			displayFolder: Helper
 
 		measure 'Active Policies' =
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
+				VAR _DataStart = [Policy Data Start Date]
 				VAR _PeriodStart = [Policy Period Start Date]
-				VAR _AsOfDate = [Policy Period End Date]
-				VAR _DataEnd = [Policy Data End Date]
-				VAR _UseCurrentStatus = _AsOfDate = _DataEnd
+				VAR _PeriodEnd = [Policy Period End Date]
+				VAR _CurrentStock =
+					CALCULATE (
+						[Policy Row Count],
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						REMOVEFILTERS ( Policy[Policy Created Date] ),
+						KEEPFILTERS ( Policy[Policy Status Code Key] = "1" )
+					)
 				VAR _PolicyRows =
 					CALCULATETABLE (
 						Policy,
@@ -370,34 +212,62 @@ createOrReplace
 						REMOVEFILTERS ( Policy[Warranty End Date] ),
 						REMOVEFILTERS ( Policy[Cancellation Date] )
 					)
-				VAR _Result =
+				VAR _HistoricalStock =
 					CALCULATE (
 						[Policy Row Count],
 						REMOVEFILTERS ( 'Date' ),
 						REMOVEFILTERS ( 'Date Filter' ),
 						REMOVEFILTERS ( Policy[Policy Created Date] ),
-						FILTER (
-							_PolicyRows,
-							VAR _CoverageStart = COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
-							VAR _WarrantyEnd = Policy[Warranty End Date]
-							VAR _CancellationDate = Policy[Cancellation Date]
-							RETURN
-								NOT ISBLANK ( _CoverageStart )
-									&& _CoverageStart <= _AsOfDate
-									&& ( ISBLANK ( _WarrantyEnd ) || _WarrantyEnd >= _AsOfDate )
-									&& ( ISBLANK ( _CancellationDate ) || _CancellationDate > _AsOfDate )
-									&& ( NOT _UseCurrentStatus || Policy[Policy Status Code Key] = "1" )
+						KEEPFILTERS (
+							FILTER (
+								_PolicyRows,
+								VAR _CoverageStart = COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
+								VAR _WarrantyEnd = Policy[Warranty End Date]
+								VAR _CancellationDate = Policy[Cancellation Date]
+								RETURN
+									NOT ISBLANK ( _CoverageStart )
+										&& _CoverageStart <= _PeriodEnd
+										&& ( ISBLANK ( _WarrantyEnd ) || _WarrantyEnd >= _PeriodStart )
+										&& ( ISBLANK ( _CancellationDate ) || _CancellationDate > _PeriodStart )
+							)
 						)
 					)
 				RETURN
 					IF (
-						ISBLANK ( _PeriodStart ) || ISBLANK ( _AsOfDate ) || _PeriodStart > _AsOfDate,
-						BLANK (),
-						COALESCE ( _Result, 0 )
+						NOT _HasDateContext,
+						COALESCE ( _CurrentStock, 0 ),
+						IF (
+							ISBLANK ( _PeriodStart )
+								|| ISBLANK ( _PeriodEnd )
+								|| _PeriodStart > _PeriodEnd
+								|| _PeriodEnd < _DataStart,
+							BLANK (),
+							COALESCE ( _HistoricalStock, 0 )
+						)
 					)
 			formatString: #,##0
 			displayFolder: Sales
 
+		measure 'Active Policies LY' =
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
+				VAR _DataStart = [Policy Data Start Date]
+				VAR _CurrentStart = IF ( _HasDateContext, [Policy Period Start Date], [Policy Data End Date] )
+				VAR _CurrentEnd = IF ( _HasDateContext, [Policy Period End Date], [Policy Data End Date] )
+				VAR _PriorStart = EDATE ( _CurrentStart, -12 )
+				VAR _PriorEnd = EDATE ( _CurrentEnd, -12 )
+				RETURN
+					IF (
+						ISBLANK ( _PriorStart ) || ISBLANK ( _PriorEnd ) || _PriorStart < _DataStart,
+						BLANK (),
+						CALCULATE (
+							[Active Policies],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PriorStart, _PriorEnd )
+						)
+					)
+			formatString: #,##0
+			displayFolder: Sales
 		measure 'Active Monthly Subscribers' =
 				CALCULATE (
 					[Active Policies],
@@ -406,23 +276,14 @@ createOrReplace
 			formatString: #,##0
 			displayFolder: SC+ Plan Classification
 
+
 		measure 'Active Monthly Subscribers LY' =
-				VAR _PeriodStart = [Policy Period Start Date]
-				VAR _PeriodEnd = [Policy Period End Date]
-				RETURN
-					IF (
-						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ),
-						BLANK (),
-						CALCULATE (
-							[Active Monthly Subscribers],
-							REMOVEFILTERS ( 'Date' ),
-							REMOVEFILTERS ( 'Date Filter' ),
-							DATESBETWEEN ( 'Date'[Date], EDATE ( _PeriodStart, -12 ), EDATE ( _PeriodEnd, -12 ) )
-						)
-					)
+				CALCULATE (
+					[Active Policies LY],
+					KEEPFILTERS ( Policy[Paid Monthly Subscriber Flag] = 1 )
+				)
 			formatString: #,##0
 			displayFolder: SC+ Plan Classification
-
 		measure 'Monthly Paid Revenue Units' = [Active Monthly Subscribers]
 			formatString: #,##0
 			displayFolder: SC+ Plan Classification
@@ -430,6 +291,32 @@ createOrReplace
 		measure 'Monthly Paid Revenue Units LY' = [Active Monthly Subscribers LY]
 			formatString: #,##0
 			displayFolder: SC+ Plan Classification
+
+
+		measure 'Paid Monthly Policy Base' =
+				CALCULATE (
+					[Policy Row Count],
+					REMOVEFILTERS ( 'Date' ),
+					REMOVEFILTERS ( 'Date Filter' ),
+					REMOVEFILTERS ( Policy[Policy Created Date] ),
+					KEEPFILTERS ( Policy[Paid Monthly Subscriber Flag] = 1 )
+				)
+			formatString: #,##0
+			isHidden
+			displayFolder: Helper
+
+		measure 'Paid Monthly Final Cancellation Stock' =
+				CALCULATE (
+					[Policy Row Count],
+					REMOVEFILTERS ( 'Date' ),
+					REMOVEFILTERS ( 'Date Filter' ),
+					REMOVEFILTERS ( Policy[Policy Created Date] ),
+					KEEPFILTERS ( Policy[Paid Monthly Subscriber Flag] = 1 ),
+					KEEPFILTERS ( Policy[Policy Status Code Key] IN { "4", "8", "9", "10" } )
+				)
+			formatString: #,##0
+			isHidden
+			displayFolder: Helper
 
 		measure 'Paid Monthly Cancellation Events' =
 				VAR _PeriodStart = [Policy Period Start Date]
@@ -448,23 +335,24 @@ createOrReplace
 						BLANK (),
 						CALCULATE (
 							[Policy Row Count],
-							KEEPFILTERS ( Policy[Paid Monthly Subscriber Flag] = 1 ),
 							REMOVEFILTERS ( 'Date' ),
 							REMOVEFILTERS ( 'Date Filter' ),
 							REMOVEFILTERS ( Policy[Policy Created Date] ),
-							FILTER (
-								_PolicyRows,
-								Policy[Paid Monthly Subscriber Flag] = 1
-									&& NOT ISBLANK ( Policy[Cancellation Date] )
-									&& Policy[Cancellation Date] >= _PeriodStart
-									&& Policy[Cancellation Date] <= _PeriodEnd
+							KEEPFILTERS ( Policy[Paid Monthly Subscriber Flag] = 1 ),
+							KEEPFILTERS (
+								FILTER (
+									_PolicyRows,
+									Policy[Paid Monthly Subscriber Flag] = 1
+										&& NOT ISBLANK ( Policy[Cancellation Date] )
+										&& Policy[Cancellation Date] >= _PeriodStart
+										&& Policy[Cancellation Date] <= _PeriodEnd
+								)
 							)
 						)
 					)
 			formatString: #,##0
 			isHidden
 			displayFolder: Helper
-
 		measure 'Paid Monthly Opening Exposure' =
 				VAR _PeriodStart = [Policy Period Start Date]
 				VAR _PeriodEnd = [Policy Period End Date]
@@ -520,28 +408,39 @@ createOrReplace
 			isHidden
 			displayFolder: Helper
 
+
 		measure 'Monthly Cancellation Rate' =
-				DIVIDE ( [Paid Monthly Cancellation Events], [Paid Monthly Opening Exposure] )
+				IF (
+					[Policy Date Context Flag] = 0,
+					DIVIDE ( [Paid Monthly Final Cancellation Stock], [Paid Monthly Policy Base] ),
+					DIVIDE ( [Paid Monthly Cancellation Events], [Paid Monthly Opening Exposure] )
+				)
 			formatString: 0.0%
 			displayFolder: SC+ Plan Classification
 
 		measure 'Monthly Cancellation Rate LY' =
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
+				VAR _DataStart = [Policy Data Start Date]
 				VAR _PeriodStart = [Policy Period Start Date]
 				VAR _PeriodEnd = [Policy Period End Date]
+				VAR _PriorStart = EDATE ( _PeriodStart, -12 )
+				VAR _PriorEnd = EDATE ( _PeriodEnd, -12 )
 				RETURN
 					IF (
-						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ),
+						NOT _HasDateContext
+							|| ISBLANK ( _PriorStart )
+							|| ISBLANK ( _PriorEnd )
+							|| _PriorStart < _DataStart,
 						BLANK (),
 						CALCULATE (
 							[Monthly Cancellation Rate],
 							REMOVEFILTERS ( 'Date' ),
 							REMOVEFILTERS ( 'Date Filter' ),
-							DATESBETWEEN ( 'Date'[Date], EDATE ( _PeriodStart, -12 ), EDATE ( _PeriodEnd, -12 ) )
+							DATESBETWEEN ( 'Date'[Date], _PriorStart, _PriorEnd )
 						)
 					)
 			formatString: 0.0%
 			displayFolder: SC+ Plan Classification
-
 		measure 'Active Channel Partners' =
 				VAR _PeriodStart = [Policy Period Start Date]
 				VAR _PeriodEnd = [Policy Period End Date]
@@ -624,13 +523,187 @@ createOrReplace
 			formatString: #,##0
 			displayFolder: SC+ Plan Classification
 
+
 		measure 'Policy KPI Validation' =
 				"Rows=" & FORMAT ( CALCULATE ( COUNTROWS ( Policy ), REMOVEFILTERS ( Policy ), REMOVEFILTERS ( 'Date' ), REMOVEFILTERS ( 'Date Filter' ) ), "0" )
 					& " | Start=" & FORMAT ( [Policy Data Start Date], "yyyy-mm-dd" )
 					& " | End=" & FORMAT ( [Policy Data End Date], "yyyy-mm-dd" )
+					& " | DateContext=" & FORMAT ( [Policy Date Context Flag], "0" )
 					& " | Active=" & FORMAT ( [Active Policies], "0" )
 					& " | Monthly=" & FORMAT ( [Active Monthly Subscribers], "0" )
-					& " | Cancels=" & FORMAT ( [Paid Monthly Cancellation Events], "0" )
+					& " | CurrentCancels=" & FORMAT ( [Paid Monthly Final Cancellation Stock], "0" )
+					& " | PaidBase=" & FORMAT ( [Paid Monthly Policy Base], "0" )
+					& " | Events=" & FORMAT ( [Paid Monthly Cancellation Events], "0" )
 					& " | Exposure=" & FORMAT ( [Paid Monthly Opening Exposure], "0" )
 					& " | Rate=" & FORMAT ( [Monthly Cancellation Rate], "0.0000%" )
 			displayFolder: Policy Diagnostics
+
+		measure 'HTML KPI Active Policies' =
+				VAR _AsOfDate = COALESCE ( [Policy Period End Date], [Policy Data End Date] )
+				VAR _SparkStart = DATE ( YEAR ( EDATE ( _AsOfDate, -4 ) ), MONTH ( EDATE ( _AsOfDate, -4 ) ), 1 )
+				VAR _SparkEnd = DATE ( YEAR ( _AsOfDate ), MONTH ( _AsOfDate ), 1 )
+				VAR _StartLabel = FORMAT ( _SparkStart, "MM/yy" )
+				VAR _EndLabel = FORMAT ( _SparkEnd, "MM/yy" )
+				VAR _Css =
+					"<style>" &
+					"*{box-sizing:border-box}.kpi-host{width:100%;height:100%;padding:0;margin:0;font-family:Segoe UI,Arial,sans-serif;color:#17212b}.kpi-card{position:relative;width:100%;height:100%;min-height:198px;padding:12px;display:grid;grid-template-rows:auto auto 1fr auto;gap:8px;background:#fbfcfe;border:1px solid #d8dee8;border-radius:8px;box-shadow:0 10px 26px rgba(23,33,43,.08);overflow:hidden}.card-head{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start}.label{color:#6b7280;font-size:11px;line-height:1.25;font-weight:650}.value{color:#17212b;font-size:26px;line-height:1;font-weight:750;letter-spacing:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.info-wrap{display:inline-grid;place-items:center}.info-button{width:18px;height:18px;display:grid;place-items:center;border:1px solid #c8d8e8;border-radius:50%;background:#e8f1f9;color:#1f4e79;font-size:11px;line-height:1;font-weight:800}.tooltip{position:absolute;z-index:5;top:40px;left:10px;right:10px;width:auto;padding:9px 10px;border:1px solid #b8c3d1;border-radius:7px;background:#fbfcfe;box-shadow:0 12px 26px rgba(23,33,43,.16);color:#17212b;opacity:0;visibility:hidden;transform:translateY(-3px);transition:opacity 160ms ease,transform 160ms ease,visibility 160ms ease;pointer-events:none}.tooltip strong{display:block;margin-bottom:4px;color:#17212b;font-size:10px;line-height:1.25}.tooltip span{display:block;color:#6b7280;font-size:9.5px;line-height:1.35}.info-wrap:hover .tooltip,.info-wrap:focus-within .tooltip{opacity:1;visibility:visible;transform:translateY(0)}.spark-wrap{display:grid;gap:3px;margin-top:1px}.spark{width:100%;height:48px;display:block}.axis{display:flex;justify-content:space-between;color:#8b95a3;font-size:8.5px;line-height:1;font-weight:650}.compare-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:5px;margin-top:1px}.compare{min-width:0;border:1px solid #d8dee8;border-radius:6px;background:#f6f8fb;padding:5px 6px}.compare span{display:block;overflow:hidden;color:#6b7280;font-size:8.5px;line-height:1.15;text-overflow:ellipsis;white-space:nowrap}.compare strong{display:block;margin-top:3px;color:#17212b;font-size:10.5px;line-height:1.1;white-space:nowrap}.compare.good strong{color:#0f766e}.compare.bad strong{color:#9b2c2c}.compare.watch strong{color:#9a6700}.compare.na strong{color:#8b95a3}</style>"
+				VAR _SparkTemplatePrefix = "<div class=""spark-wrap""><svg class=""spark"" viewBox=""0 0 156 42"" preserveAspectRatio=""none"" role=""img""><polygon points=""0,42 "
+				VAR _SparkTemplateMiddle = " 156,42"" fill=""#e8f1f9""></polygon><polyline points="""
+				VAR _SparkTemplateSuffix = """ fill=""none"" stroke=""#1f4e79"" stroke-width=""2.2"" stroke-linecap=""round"" stroke-linejoin=""round""></polyline></svg><div class=""axis""><span>" & _StartLabel & "</span><span>" & _EndLabel & "</span></div></div>"
+				VAR _Series =
+					ADDCOLUMNS (
+						GENERATESERIES ( 0, 4, 1 ),
+						"MetricValue",
+							VAR _MonthStart = EDATE ( _SparkStart, [Value] )
+							RETURN COALESCE ( CALCULATE ( [Active Policies], REMOVEFILTERS ( 'Date' ), REMOVEFILTERS ( 'Date Filter' ), DATESBETWEEN ( 'Date'[Date], _MonthStart, EOMONTH ( _MonthStart, 0 ) ) ), 0 )
+					)
+				VAR _MinValue = MINX ( _Series, [MetricValue] )
+				VAR _MaxValue = MAXX ( _Series, [MetricValue] )
+				VAR _Range = IF ( _MaxValue = _MinValue, 1, _MaxValue - _MinValue )
+				VAR _Points =
+					CONCATENATEX (
+						_Series,
+						VAR _X = [Value] * 39
+						VAR _Y = 5 + DIVIDE ( _MaxValue - [MetricValue], _Range, 0 ) * 30
+						RETURN FORMAT ( _X, "0" ) & "," & FORMAT ( _Y, "0" ),
+						" ",
+						[Value],
+						ASC
+					)
+				VAR _RawValue = [Active Policies]
+				VAR _Value = IF ( ISBLANK ( _RawValue ), "--", FORMAT ( _RawValue, "#,##0" ) )
+				VAR _Prior1Value = [Active Policies LY]
+				VAR _Comp1Value = DIVIDE ( [Active Policies] - _Prior1Value, _Prior1Value )
+				VAR _Comp1Class = IF ( ISBLANK ( _Comp1Value ), "na", IF ( _Comp1Value >= 0, "good", "bad" ) )
+				VAR _Comp1Text = IF ( ISBLANK ( _Comp1Value ), "n/a", FORMAT ( _Comp1Value, "+0.0%;-0.0%;0.0%" ) )
+				VAR _Comp2Value = DIVIDE ( [Active Policies] - CALCULATE ( [Active Policies], REMOVEFILTERS ( 'Date' ), REMOVEFILTERS ( 'Date Filter' ), TREATAS ( SELECTCOLUMNS ( VALUES ( 'Date'[Date] ), "Date", EDATE ( 'Date'[Date], -24 ) ), 'Date'[Date] ) ), CALCULATE ( [Active Policies], REMOVEFILTERS ( 'Date' ), REMOVEFILTERS ( 'Date Filter' ), TREATAS ( SELECTCOLUMNS ( VALUES ( 'Date'[Date] ), "Date", EDATE ( 'Date'[Date], -24 ) ), 'Date'[Date] ) ) )
+				VAR _Comp2Class = IF ( ISBLANK ( _Comp2Value ), "na", IF ( _Comp2Value >= 0, "good", "bad" ) )
+				VAR _Comp2Text = IF ( ISBLANK ( _Comp2Value ), "n/a", FORMAT ( _Comp2Value, "+0.0%;-0.0%;0.0%" ) )
+				VAR _Comp3Class = "na"
+				VAR _Comp3Text = "n/a"
+				VAR _Card =
+					"<article class=""kpi-card""><div class=""card-head""><div class=""label"">Active Policies</div><span class=""info-wrap""><span class=""info-button"">i</span><span class=""tooltip""><strong>Active policy estimate</strong><span>Current stock uses active status. Historical points use warranty and cancellation intervals.</span></span></span></div><div class=""value"">" & _Value & "</div>" &
+					_SparkTemplatePrefix & _Points & _SparkTemplateMiddle & _Points & _SparkTemplateSuffix &
+					"<div class=""compare-grid""><div class=""compare " & _Comp1Class & """><span>vs LY</span><strong>" & _Comp1Text & "</strong></div><div class=""compare " & _Comp3Class & """><span>No Plan</span><strong>" & _Comp3Text & "</strong></div></div></article>"
+				RETURN
+					_Css & "<div class=""kpi-host"">" & _Card & "</div>"
+			displayFolder: KPI Cards\HTML
+
+		measure 'HTML KPI Active Monthly Subscribers' =
+				VAR _AsOfDate = COALESCE ( [Policy Period End Date], [Policy Data End Date] )
+				VAR _SparkStart = DATE ( YEAR ( EDATE ( _AsOfDate, -4 ) ), MONTH ( EDATE ( _AsOfDate, -4 ) ), 1 )
+				VAR _SparkEnd = DATE ( YEAR ( _AsOfDate ), MONTH ( _AsOfDate ), 1 )
+				VAR _StartLabel = FORMAT ( _SparkStart, "MM/yy" )
+				VAR _EndLabel = FORMAT ( _SparkEnd, "MM/yy" )
+				VAR _Css =
+					"<style>" &
+					"*{box-sizing:border-box}.kpi-host{width:100%;height:100%;padding:0;margin:0;font-family:Segoe UI,Arial,sans-serif;color:#17212b}.kpi-card{position:relative;width:100%;height:100%;min-height:198px;padding:12px;display:grid;grid-template-rows:auto auto 1fr auto;gap:8px;background:#fbfcfe;border:1px solid #d8dee8;border-radius:8px;box-shadow:0 10px 26px rgba(23,33,43,.08);overflow:hidden}.card-head{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start}.label{color:#6b7280;font-size:11px;line-height:1.25;font-weight:650}.value{color:#17212b;font-size:26px;line-height:1;font-weight:750;letter-spacing:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.info-wrap{display:inline-grid;place-items:center}.info-button{width:18px;height:18px;display:grid;place-items:center;border:1px solid #c8d8e8;border-radius:50%;background:#e8f1f9;color:#1f4e79;font-size:11px;line-height:1;font-weight:800}.tooltip{position:absolute;z-index:5;top:40px;left:10px;right:10px;width:auto;padding:9px 10px;border:1px solid #b8c3d1;border-radius:7px;background:#fbfcfe;box-shadow:0 12px 26px rgba(23,33,43,.16);color:#17212b;opacity:0;visibility:hidden;transform:translateY(-3px);transition:opacity 160ms ease,transform 160ms ease,visibility 160ms ease;pointer-events:none}.tooltip strong{display:block;margin-bottom:4px;color:#17212b;font-size:10px;line-height:1.25}.tooltip span{display:block;color:#6b7280;font-size:9.5px;line-height:1.35}.info-wrap:hover .tooltip,.info-wrap:focus-within .tooltip{opacity:1;visibility:visible;transform:translateY(0)}.spark-wrap{display:grid;gap:3px;margin-top:1px}.spark{width:100%;height:48px;display:block}.axis{display:flex;justify-content:space-between;color:#8b95a3;font-size:8.5px;line-height:1;font-weight:650}.compare-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:5px;margin-top:1px}.compare{min-width:0;border:1px solid #d8dee8;border-radius:6px;background:#f6f8fb;padding:5px 6px}.compare span{display:block;overflow:hidden;color:#6b7280;font-size:8.5px;line-height:1.15;text-overflow:ellipsis;white-space:nowrap}.compare strong{display:block;margin-top:3px;color:#17212b;font-size:10.5px;line-height:1.1;white-space:nowrap}.compare.good strong{color:#0f766e}.compare.bad strong{color:#9b2c2c}.compare.watch strong{color:#9a6700}.compare.na strong{color:#8b95a3}</style>"
+				VAR _SparkTemplatePrefix = "<div class=""spark-wrap""><svg class=""spark"" viewBox=""0 0 156 42"" preserveAspectRatio=""none"" role=""img""><polygon points=""0,42 "
+				VAR _SparkTemplateMiddle = " 156,42"" fill=""#e8f1f9""></polygon><polyline points="""
+				VAR _SparkTemplateSuffix = """ fill=""none"" stroke=""#1f4e79"" stroke-width=""2.2"" stroke-linecap=""round"" stroke-linejoin=""round""></polyline></svg><div class=""axis""><span>" & _StartLabel & "</span><span>" & _EndLabel & "</span></div></div>"
+				VAR _Series =
+					ADDCOLUMNS (
+						GENERATESERIES ( 0, 4, 1 ),
+						"MetricValue",
+							VAR _MonthStart = EDATE ( _SparkStart, [Value] )
+							RETURN COALESCE ( CALCULATE ( [Active Monthly Subscribers], REMOVEFILTERS ( 'Date' ), REMOVEFILTERS ( 'Date Filter' ), DATESBETWEEN ( 'Date'[Date], _MonthStart, EOMONTH ( _MonthStart, 0 ) ) ), 0 )
+					)
+				VAR _MinValue = MINX ( _Series, [MetricValue] )
+				VAR _MaxValue = MAXX ( _Series, [MetricValue] )
+				VAR _Range = IF ( _MaxValue = _MinValue, 1, _MaxValue - _MinValue )
+				VAR _Points =
+					CONCATENATEX (
+						_Series,
+						VAR _X = [Value] * 39
+						VAR _Y = 5 + DIVIDE ( _MaxValue - [MetricValue], _Range, 0 ) * 30
+						RETURN FORMAT ( _X, "0" ) & "," & FORMAT ( _Y, "0" ),
+						" ",
+						[Value],
+						ASC
+					)
+				VAR _RawValue = [Active Monthly Subscribers]
+				VAR _Value = IF ( ISBLANK ( _RawValue ), "--", FORMAT ( _RawValue, "#,##0" ) )
+				VAR _Prior1Value =
+					[Monthly Paid Revenue Units LY]
+				VAR _Prior2Value =
+					CALCULATE (
+					[Active Monthly Subscribers],
+					REMOVEFILTERS ( 'Date' ),
+					REMOVEFILTERS ( 'Date Filter' ),
+					TREATAS ( SELECTCOLUMNS ( VALUES ( 'Date'[Date] ), "Date", EDATE ( 'Date'[Date], -24 ) ), 'Date'[Date] )
+				)
+				VAR _Comp1Value = DIVIDE ( _RawValue - _Prior1Value, _Prior1Value )
+				VAR _Comp1Class = IF ( ISBLANK ( _Comp1Value ), "na", IF ( _Comp1Value >= 0, "good", "bad" ) )
+				VAR _Comp1Text = IF ( ISBLANK ( _Comp1Value ), "n/a", FORMAT ( _Comp1Value, "+0.0%;-0.0%;0.0%" ) )
+				VAR _Comp2Value = DIVIDE ( _RawValue - _Prior2Value, _Prior2Value )
+				VAR _Comp2Class = IF ( ISBLANK ( _Comp2Value ), "na", IF ( _Comp2Value >= 0, "good", "bad" ) )
+				VAR _Comp2Text = IF ( ISBLANK ( _Comp2Value ), "n/a", FORMAT ( _Comp2Value, "+0.0%;-0.0%;0.0%" ) )
+				VAR _Comp3Class = "na"
+				VAR _Comp3Text = "n/a"
+				VAR _Comp3Label = "No Plan"
+				VAR _Card =
+					"<article class=""kpi-card""><div class=""card-head""><div class=""label"">Active Monthly Subscribers</div><span class=""info-wrap""><span class=""info-button"">i</span><span class=""tooltip""><strong>Monthly paid revenue units</strong><span>Counts active policies with a positive product monthly amount.</span></span></span></div><div class=""value"">" & _Value & "</div>" &
+					_SparkTemplatePrefix & _Points & _SparkTemplateMiddle & _Points & _SparkTemplateSuffix &
+					"<div class=""compare-grid""><div class=""compare " & _Comp1Class & """><span>vs LY</span><strong>" & _Comp1Text & "</strong></div><div class=""compare " & _Comp3Class & """><span>" & _Comp3Label & "</span><strong>" & _Comp3Text & "</strong></div></div></article>"
+				RETURN
+					_Css & "<div class=""kpi-host"">" & _Card & "</div>"
+			displayFolder: KPI Cards\HTML
+
+		measure 'HTML KPI Monthly Cancellation Rate' =
+				VAR _AsOfDate = COALESCE ( [Policy Period End Date], [Policy Data End Date] )
+				VAR _SparkStart = DATE ( YEAR ( EDATE ( _AsOfDate, -4 ) ), MONTH ( EDATE ( _AsOfDate, -4 ) ), 1 )
+				VAR _SparkEnd = DATE ( YEAR ( _AsOfDate ), MONTH ( _AsOfDate ), 1 )
+				VAR _StartLabel = FORMAT ( _SparkStart, "MM/yy" )
+				VAR _EndLabel = FORMAT ( _SparkEnd, "MM/yy" )
+				VAR _Css =
+					"<style>" &
+					"*{box-sizing:border-box}.kpi-host{width:100%;height:100%;padding:0;margin:0;font-family:Segoe UI,Arial,sans-serif;color:#17212b}.kpi-card{position:relative;width:100%;height:100%;min-height:198px;padding:12px;display:grid;grid-template-rows:auto auto 1fr auto;gap:8px;background:#fbfcfe;border:1px solid #d8dee8;border-radius:8px;box-shadow:0 10px 26px rgba(23,33,43,.08);overflow:hidden}.card-head{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start}.label{color:#6b7280;font-size:11px;line-height:1.25;font-weight:650}.value{color:#17212b;font-size:26px;line-height:1;font-weight:750;letter-spacing:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.info-wrap{display:inline-grid;place-items:center}.info-button{width:18px;height:18px;display:grid;place-items:center;border:1px solid #c8d8e8;border-radius:50%;background:#e8f1f9;color:#1f4e79;font-size:11px;line-height:1;font-weight:800}.tooltip{position:absolute;z-index:5;top:40px;left:10px;right:10px;width:auto;padding:9px 10px;border:1px solid #b8c3d1;border-radius:7px;background:#fbfcfe;box-shadow:0 12px 26px rgba(23,33,43,.16);color:#17212b;opacity:0;visibility:hidden;transform:translateY(-3px);transition:opacity 160ms ease,transform 160ms ease,visibility 160ms ease;pointer-events:none}.tooltip strong{display:block;margin-bottom:4px;color:#17212b;font-size:10px;line-height:1.25}.tooltip span{display:block;color:#6b7280;font-size:9.5px;line-height:1.35}.info-wrap:hover .tooltip,.info-wrap:focus-within .tooltip{opacity:1;visibility:visible;transform:translateY(0)}.spark-wrap{display:grid;gap:3px;margin-top:1px}.spark{width:100%;height:48px;display:block}.axis{display:flex;justify-content:space-between;color:#8b95a3;font-size:8.5px;line-height:1;font-weight:650}.compare-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:5px;margin-top:1px}.compare{min-width:0;border:1px solid #d8dee8;border-radius:6px;background:#f6f8fb;padding:5px 6px}.compare span{display:block;overflow:hidden;color:#6b7280;font-size:8.5px;line-height:1.15;text-overflow:ellipsis;white-space:nowrap}.compare strong{display:block;margin-top:3px;color:#17212b;font-size:10.5px;line-height:1.1;white-space:nowrap}.compare.good strong{color:#0f766e}.compare.bad strong{color:#9b2c2c}.compare.watch strong{color:#9a6700}.compare.na strong{color:#8b95a3}</style>"
+				VAR _SparkTemplatePrefix = "<div class=""spark-wrap""><svg class=""spark"" viewBox=""0 0 156 42"" preserveAspectRatio=""none"" role=""img""><polygon points=""0,42 "
+				VAR _SparkTemplateMiddle = " 156,42"" fill=""#e8f1f9""></polygon><polyline points="""
+				VAR _SparkTemplateSuffix = """ fill=""none"" stroke=""#1f4e79"" stroke-width=""2.2"" stroke-linecap=""round"" stroke-linejoin=""round""></polyline></svg><div class=""axis""><span>" & _StartLabel & "</span><span>" & _EndLabel & "</span></div></div>"
+				VAR _Series =
+					ADDCOLUMNS (
+						GENERATESERIES ( 0, 4, 1 ),
+						"MetricValue",
+							VAR _MonthStart = EDATE ( _SparkStart, [Value] )
+							RETURN COALESCE ( CALCULATE ( [Monthly Cancellation Rate], REMOVEFILTERS ( 'Date' ), REMOVEFILTERS ( 'Date Filter' ), DATESBETWEEN ( 'Date'[Date], _MonthStart, EOMONTH ( _MonthStart, 0 ) ) ), 0 )
+					)
+				VAR _MinValue = MINX ( _Series, [MetricValue] )
+				VAR _MaxValue = MAXX ( _Series, [MetricValue] )
+				VAR _Range = IF ( _MaxValue = _MinValue, 1, _MaxValue - _MinValue )
+				VAR _Points =
+					CONCATENATEX (
+						_Series,
+						VAR _X = [Value] * 39
+						VAR _Y = 5 + DIVIDE ( _MaxValue - [MetricValue], _Range, 0 ) * 30
+						RETURN FORMAT ( _X, "0" ) & "," & FORMAT ( _Y, "0" ),
+						" ",
+						[Value],
+						ASC
+					)
+				VAR _RawValue = [Monthly Cancellation Rate]
+				VAR _Value = IF ( ISBLANK ( _RawValue ), "--", FORMAT ( _RawValue, "0.0%" ) )
+				VAR _Prior1Value = [Monthly Cancellation Rate LY]
+				VAR _Prior2Value =
+					CALCULATE (
+					[Monthly Cancellation Rate],
+					REMOVEFILTERS ( 'Date' ),
+					REMOVEFILTERS ( 'Date Filter' ),
+					TREATAS ( SELECTCOLUMNS ( VALUES ( 'Date'[Date] ), "Date", EDATE ( 'Date'[Date], -24 ) ), 'Date'[Date] )
+				)
+				VAR _Comp1Value = IF ( ISBLANK ( _Prior1Value ), BLANK (), _RawValue - _Prior1Value )
+				VAR _Comp1Class = IF ( ISBLANK ( _Comp1Value ), "na", IF ( _Comp1Value <= 0, "good", "bad" ) )
+				VAR _Comp1Text = IF ( ISBLANK ( _Comp1Value ), "n/a", FORMAT ( _Comp1Value * 100, "+0.0 pts;-0.0 pts;0.0 pts" ) )
+				VAR _Comp2Value = _RawValue - _Prior2Value
+				VAR _Comp2Class = IF ( ISBLANK ( _Comp2Value ), "na", IF ( _Comp2Value <= 0, "good", "bad" ) )
+				VAR _Comp2Text = IF ( ISBLANK ( _Comp2Value ), "n/a", FORMAT ( _Comp2Value * 100, "+0.0 pts;-0.0 pts;0.0 pts" ) )
+				VAR _Comp3Class = "na"
+				VAR _Comp3Text = "n/a"
+				VAR _Comp3Label = "No Plan"
+				VAR _Card =
+					"<article class=""kpi-card""><div class=""card-head""><div class=""label"">Monthly Cancellation Rate</div><span class=""info-wrap""><span class=""info-button"">i</span><span class=""tooltip""><strong>Cancellation rate for monthly plans</strong><span>Unfiltered: final paid-monthly cancellations divided by all paid-monthly policies. Filtered: cancellation events divided by monthly opening exposure.</span></span></span></div><div class=""value"">" & _Value & "</div>" &
+					_SparkTemplatePrefix & _Points & _SparkTemplateMiddle & _Points & _SparkTemplateSuffix &
+					"<div class=""compare-grid""><div class=""compare " & _Comp1Class & """><span>vs LY</span><strong>" & _Comp1Text & "</strong></div><div class=""compare " & _Comp3Class & """><span>" & _Comp3Label & "</span><strong>" & _Comp3Text & "</strong></div></div></article>"
+				RETURN
+					_Css & "<div class=""kpi-host"">" & _Card & "</div>"
+			displayFolder: KPI Cards\HTML
