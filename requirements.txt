@@ -1,31 +1,90 @@
-createOrReplace
+DEFINE
+    VAR __DataStart = [Policy Data Start Date]
+    VAR __DataEnd = [Policy Data End Date]
+    VAR __FirstMonth = DATE ( YEAR ( __DataStart ), MONTH ( __DataStart ), 1 )
+    VAR __Months =
+        DISTINCT (
+            SELECTCOLUMNS (
+                CALENDAR ( __FirstMonth, __DataEnd ),
+                "Month Start", DATE ( YEAR ( [Date] ), MONTH ( [Date] ), 1 )
+            )
+        )
+    VAR __MonthlyResults =
+        ADDCOLUMNS (
+            __Months,
+            "Paid Rows Created",
+                VAR __MonthStart = [Month Start]
+                VAR __MonthEnd = MIN ( EOMONTH ( __MonthStart, 0 ), __DataEnd )
+                RETURN
+                    COUNTROWS (
+                        FILTER (
+                            ALL ( Policy ),
+                            COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
+                                && Policy[Policy Created Date] >= __MonthStart
+                                && Policy[Policy Created Date] <= __MonthEnd
+                        )
+                    ),
+            "All Cancellation Events",
+                VAR __MonthStart = [Month Start]
+                VAR __MonthEnd = MIN ( EOMONTH ( __MonthStart, 0 ), __DataEnd )
+                RETURN
+                    COUNTROWS (
+                        FILTER (
+                            ALL ( Policy ),
+                            NOT ISBLANK ( Policy[Cancellation Date] )
+                                && Policy[Cancellation Date] >= __MonthStart
+                                && Policy[Cancellation Date] <= __MonthEnd
+                        )
+                    ),
+            "Numerator",
+                VAR __MonthStart = [Month Start]
+                VAR __MonthEnd = MIN ( EOMONTH ( __MonthStart, 0 ), __DataEnd )
+                RETURN
+                    COUNTROWS (
+                        FILTER (
+                            ALL ( Policy ),
+                            COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
+                                && NOT ISBLANK ( Policy[Cancellation Date] )
+                                && Policy[Cancellation Date] >= __MonthStart
+                                && Policy[Cancellation Date] <= __MonthEnd
+                        )
+                    ),
+            "Denominator",
+                VAR __MonthStart = [Month Start]
+                RETURN
+                    COUNTROWS (
+                        FILTER (
+                            ALL ( Policy ),
+                            VAR __CoverageStart =
+                                COALESCE (
+                                    Policy[Warranty Start Date],
+                                    Policy[Policy Created Date]
+                                )
+                            RETURN
+                                COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
+                                    && NOT ISBLANK ( __CoverageStart )
+                                    && __CoverageStart <= __MonthStart
+                                    && (
+                                        ISBLANK ( Policy[Warranty End Date] )
+                                            || Policy[Warranty End Date] >= __MonthStart
+                                    )
+                                    && (
+                                        ISBLANK ( Policy[Cancellation Date] )
+                                            || Policy[Cancellation Date] > __MonthStart
+                                    )
+                        )
+                    )
+        )
 
-	ref table Measures_table
+EVALUATE
+    SELECTCOLUMNS (
+        __MonthlyResults,
+        "Month Start", [Month Start],
+        "Paid Rows Created", [Paid Rows Created],
+        "All Cancellation Events", [All Cancellation Events],
+        "Numerator", [Numerator],
+        "Denominator", [Denominator],
+        "Rate", DIVIDE ( [Numerator], [Denominator] )
+    )
 
-		measure 'Policy Period Start Date' =
-				VAR _DataStart = [Policy Data Start Date]
-				VAR _HasDateContext = [Policy Date Context Flag] = 1
-				VAR _SelectedStart = MIN ( 'Date'[Date] )
-				RETURN
-					IF (
-						ISBLANK ( _DataStart ),
-						BLANK (),
-						IF ( _HasDateContext, _SelectedStart, _DataStart )
-					)
-			formatString: yyyy-mm-dd
-			isHidden
-			displayFolder: Helper
-
-		measure 'Policy Period End Date' =
-				VAR _DataEnd = [Policy Data End Date]
-				VAR _HasDateContext = [Policy Date Context Flag] = 1
-				VAR _SelectedEnd = MAX ( 'Date'[Date] )
-				RETURN
-					IF (
-						ISBLANK ( _DataEnd ),
-						BLANK (),
-						IF ( _HasDateContext, MIN ( _SelectedEnd, _DataEnd ), _DataEnd )
-					)
-			formatString: yyyy-mm-dd
-			isHidden
-			displayFolder: Helper
+ORDER BY [Month Start]
