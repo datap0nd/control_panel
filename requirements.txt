@@ -6,9 +6,11 @@
 Cancellation Date Parsed
 
 Enter this formula in the first data row. Excel should fill the entire table column automatically:
-=IFERROR(DATE(VALUE(RIGHT([@cancellation_date],4)),VALUE(LEFT([@cancellation_date],2)),VALUE(MID([@cancellation_date],4,2))),"")
+=IF([@cancellation_date]="","",IF(ISNUMBER([@cancellation_date]),INT([@cancellation_date]),IFERROR(LET(x,TRIM([@cancellation_date]),p1,FIND("/",x),p2,FIND("/",x,p1+1),DATE(VALUE(MID(x,p2+1,4)),VALUE(LEFT(x,p1-1)),VALUE(MID(x,p1+1,p2-p1-1)))),"")))
 
-This forces the source text to be interpreted as MM/dd/yyyy and converts ######## or blanks to blank.
+This supports both real Excel dates and text dates written as M/D/YYYY or MM/DD/YYYY. If cancellation_date is already a real Excel date, it keeps the existing date serial instead of parsing that serial as text.
+
+Format this new column as Short Date. For example, 1/28/2025 must remain 1/28/2025. Do not continue if it becomes a large year or a number such as 1388995.
 
 4. Add another column named:
 Product Monthly Amount Parsed
