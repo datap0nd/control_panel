@@ -1,334 +1,460 @@
-DEFINE
-    VAR _SalesDataEnd =
-        CALCULATE ( MAX ( Sales[Reporting Date] ), REMOVEFILTERS () )
-    VAR _PolicyDataEnd =
-        CALCULATE ( MAX ( Policy[Policy Created Date] ), REMOVEFILTERS () )
-    VAR _PeriodEnd = MAX ( _SalesDataEnd, _PolicyDataEnd )
-    VAR _PeriodStart = DATE ( YEAR ( _PeriodEnd ), 1, 1 )
-    VAR _LYStart = EDATE ( _PeriodStart, -12 )
-    VAR _LYEnd = EDATE ( _PeriodEnd, -12 )
-    VAR _CurrentMonthStart = DATE ( YEAR ( _PeriodEnd ), MONTH ( _PeriodEnd ), 1 )
-    VAR _PreviousMonthEnd = EOMONTH ( _PeriodEnd, -1 )
-    VAR _ElapsedMonthFraction =
-        DIVIDE ( DAY ( _PeriodEnd ), DAY ( EOMONTH ( _PeriodEnd, 0 ) ) )
-    VAR _CYDates = CALENDAR ( _PeriodStart, _PeriodEnd )
-    VAR _LYDates = CALENDAR ( _LYStart, _LYEnd )
-    VAR _CompletedMonthDates = CALENDAR ( _PeriodStart, _PreviousMonthEnd )
-    VAR _CurrentMonthDates = CALENDAR ( _CurrentMonthStart, _PeriodEnd )
+createOrReplace
 
-    // Values currently used by the HTML KPI cards.
-    VAR _LiveSalesCY = [Sales QTY CY]
-    VAR _LiveSalesLY = [Sales QTY LY]
-    VAR _LiveSalesPlan = [Sales Plan QTY]
-    VAR _LiveRevenueCY = [Gross Revenue CY]
-    VAR _LiveRevenueLY = [Gross Revenue LY Chart]
-    VAR _LiveRevenuePlan = [Revenue Plan Amount]
-    VAR _LiveMarginCY = [Net Revenue CY]
-    VAR _LiveMarginLY = [Net Revenue LY Chart]
-    VAR _LiveAttachCY = [Attach Rate CY]
-    VAR _LiveAttachLY = [Attach Rate LY Chart]
-    VAR _LiveAttachPlan = [Sales Plan Attach Rate]
-    VAR _LivePoliciesCY = [Active Policies]
-    VAR _LivePoliciesLY =
-        CALCULATE (
-            [Active Policies],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS (
-                SELECTCOLUMNS ( VALUES ( 'Date'[Date] ), "Date", EDATE ( 'Date'[Date], -12 ) ),
-                'Date'[Date]
-            )
-        )
-    VAR _LiveMonthlyCY = [Active Monthly Subscribers]
-    VAR _LiveMonthlyLY = [Active Monthly Subscribers LY]
-    VAR _LiveCancellationCY = [Monthly Cancellation Rate]
-    VAR _LiveCancellationLY = [Monthly Cancellation Rate LY]
+	ref table Measures_table
 
-    // Correct like-for-like actuals: Jan 1 through the latest actual date,
-    // compared with the exact same dates shifted back 12 months.
-    VAR _ExactSalesCY =
-        CALCULATE (
-            [Sales Volume],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _CYDates, 'Date'[Date] )
-        )
-    VAR _ExactSalesLY =
-        CALCULATE (
-            [Sales Volume],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _LYDates, 'Date'[Date] )
-        )
-    VAR _ExactRevenueCY =
-        CALCULATE (
-            [Gross Revenue],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _CYDates, 'Date'[Date] )
-        )
-    VAR _ExactRevenueLY =
-        CALCULATE (
-            [Gross Revenue],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _LYDates, 'Date'[Date] )
-        )
-    VAR _ExactMarginCY =
-        CALCULATE (
-            [Net Revenue / Program Margin],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _CYDates, 'Date'[Date] )
-        )
-    VAR _ExactMarginLY =
-        CALCULATE (
-            [Net Revenue / Program Margin],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _LYDates, 'Date'[Date] )
-        )
-    VAR _ExactAttachCY =
-        CALCULATE (
-            [Raw Attach Rate],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _CYDates, 'Date'[Date] )
-        )
-    VAR _ExactAttachLY =
-        CALCULATE (
-            [Raw Attach Rate],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _LYDates, 'Date'[Date] )
-        )
-    VAR _ExactPoliciesCY =
-        CALCULATE (
-            [Active Policies],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _CYDates, 'Date'[Date] )
-        )
-    VAR _ExactPoliciesLY =
-        CALCULATE (
-            [Active Policies],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _LYDates, 'Date'[Date] )
-        )
-    VAR _ExactMonthlyCY =
-        CALCULATE (
-            [Active Monthly Subscribers],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _CYDates, 'Date'[Date] )
-        )
-    VAR _ExactMonthlyLY =
-        CALCULATE (
-            [Active Monthly Subscribers],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _LYDates, 'Date'[Date] )
-        )
-    VAR _ExactCancellationCY =
-        CALCULATE (
-            [Monthly Cancellation Rate],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _CYDates, 'Date'[Date] )
-        )
-    VAR _ExactCancellationLY =
-        CALCULATE (
-            [Monthly Cancellation Rate],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _LYDates, 'Date'[Date] )
-        )
+		measure 'KPI Comparison Data End Date' =
+				VAR _SalesEnd =
+					CALCULATE ( MAX ( Sales[Reporting Date] ), REMOVEFILTERS () )
+				VAR _PolicyEnd =
+					CALCULATE ( MAX ( Policy[Policy Created Date] ), REMOVEFILTERS () )
+				RETURN
+					MAX ( _SalesEnd, _PolicyEnd )
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
 
-    // Power BI plan tables are monthly. "Full-month plan" is the existing
-    // semantic-model convention. "Prorated plan" is included for comparison.
-    VAR _SalesPlanFullMonths =
-        CALCULATE (
-            [Sales Plan QTY],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _CYDates, 'Date'[Date] )
-        )
-    VAR _SalesPlanCompletedMonths =
-        CALCULATE (
-            [Sales Plan QTY],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _CompletedMonthDates, 'Date'[Date] )
-        )
-    VAR _SalesPlanCurrentMonth =
-        CALCULATE (
-            [Sales Plan QTY],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _CurrentMonthDates, 'Date'[Date] )
-        )
-    VAR _SalesPlanProrated =
-        _SalesPlanCompletedMonths + _SalesPlanCurrentMonth * _ElapsedMonthFraction
-    VAR _RevenuePlanFullMonths =
-        CALCULATE (
-            [Revenue Plan Amount],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _CYDates, 'Date'[Date] )
-        )
-    VAR _RevenuePlanCompletedMonths =
-        CALCULATE (
-            [Revenue Plan Amount],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _CompletedMonthDates, 'Date'[Date] )
-        )
-    VAR _RevenuePlanCurrentMonth =
-        CALCULATE (
-            [Revenue Plan Amount],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _CurrentMonthDates, 'Date'[Date] )
-        )
-    VAR _RevenuePlanProrated =
-        _RevenuePlanCompletedMonths + _RevenuePlanCurrentMonth * _ElapsedMonthFraction
-    VAR _AttachPlanFullMonths =
-        CALCULATE (
-            [Sales Plan Attach Rate],
-            REMOVEFILTERS ( 'Date' ),
-            REMOVEFILTERS ( 'Date Filter' ),
-            TREATAS ( _CYDates, 'Date'[Date] )
-        )
+		measure 'KPI Comparison Period Start Date' =
+				VAR _DataEnd = [KPI Comparison Data End Date]
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
+				VAR _SelectedStart = MIN ( 'Date'[Date] )
+				RETURN
+					IF (
+						ISBLANK ( _DataEnd ),
+						BLANK (),
+						IF ( _HasDateContext, _SelectedStart, DATE ( YEAR ( _DataEnd ), 1, 1 ) )
+					)
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
 
-EVALUATE
-    UNION (
-        ROW (
-            "Metric", "Sales Volume",
-            "Period Start", _PeriodStart,
-            "Period End", _PeriodEnd,
-            "Live CY", _LiveSalesCY,
-            "Live LY", _LiveSalesLY,
-            "Live Plan", _LiveSalesPlan,
-            "Live vs LY", DIVIDE ( _LiveSalesCY - _LiveSalesLY, _LiveSalesLY ),
-            "Live vs Plan", DIVIDE ( _LiveSalesCY, _LiveSalesPlan ),
-            "Exact CY", _ExactSalesCY,
-            "Exact LY", _ExactSalesLY,
-            "Correct vs LY", DIVIDE ( _ExactSalesCY - _ExactSalesLY, _ExactSalesLY ),
-            "Full-month Plan", _SalesPlanFullMonths,
-            "Vs Full-month Plan", DIVIDE ( _ExactSalesCY, _SalesPlanFullMonths ),
-            "Prorated Plan", _SalesPlanProrated,
-            "Vs Prorated Plan", DIVIDE ( _ExactSalesCY, _SalesPlanProrated ),
-            "Comparison Unit", "percent change / attainment"
-        ),
-        ROW (
-            "Metric", "Gross Revenue",
-            "Period Start", _PeriodStart,
-            "Period End", _PeriodEnd,
-            "Live CY", _LiveRevenueCY,
-            "Live LY", _LiveRevenueLY,
-            "Live Plan", _LiveRevenuePlan,
-            "Live vs LY", DIVIDE ( _LiveRevenueCY - _LiveRevenueLY, _LiveRevenueLY ),
-            "Live vs Plan", DIVIDE ( _LiveRevenueCY, _LiveRevenuePlan ),
-            "Exact CY", _ExactRevenueCY,
-            "Exact LY", _ExactRevenueLY,
-            "Correct vs LY", DIVIDE ( _ExactRevenueCY - _ExactRevenueLY, _ExactRevenueLY ),
-            "Full-month Plan", _RevenuePlanFullMonths,
-            "Vs Full-month Plan", DIVIDE ( _ExactRevenueCY, _RevenuePlanFullMonths ),
-            "Prorated Plan", _RevenuePlanProrated,
-            "Vs Prorated Plan", DIVIDE ( _ExactRevenueCY, _RevenuePlanProrated ),
-            "Comparison Unit", "percent change / attainment"
-        ),
-        ROW (
-            "Metric", "Program Margin",
-            "Period Start", _PeriodStart,
-            "Period End", _PeriodEnd,
-            "Live CY", _LiveMarginCY,
-            "Live LY", _LiveMarginLY,
-            "Live Plan", BLANK (),
-            "Live vs LY", DIVIDE ( _LiveMarginCY - _LiveMarginLY, _LiveMarginLY ),
-            "Live vs Plan", BLANK (),
-            "Exact CY", _ExactMarginCY,
-            "Exact LY", _ExactMarginLY,
-            "Correct vs LY", DIVIDE ( _ExactMarginCY - _ExactMarginLY, _ExactMarginLY ),
-            "Full-month Plan", BLANK (),
-            "Vs Full-month Plan", BLANK (),
-            "Prorated Plan", BLANK (),
-            "Vs Prorated Plan", BLANK (),
-            "Comparison Unit", "percent change"
-        ),
-        ROW (
-            "Metric", "Raw Attach Rate",
-            "Period Start", _PeriodStart,
-            "Period End", _PeriodEnd,
-            "Live CY", _LiveAttachCY,
-            "Live LY", _LiveAttachLY,
-            "Live Plan", _LiveAttachPlan,
-            "Live vs LY", _LiveAttachCY - _LiveAttachLY,
-            "Live vs Plan", DIVIDE ( _LiveAttachCY, _LiveAttachPlan ),
-            "Exact CY", _ExactAttachCY,
-            "Exact LY", _ExactAttachLY,
-            "Correct vs LY", _ExactAttachCY - _ExactAttachLY,
-            "Full-month Plan", _AttachPlanFullMonths,
-            "Vs Full-month Plan", DIVIDE ( _ExactAttachCY, _AttachPlanFullMonths ),
-            "Prorated Plan", _AttachPlanFullMonths,
-            "Vs Prorated Plan", DIVIDE ( _ExactAttachCY, _AttachPlanFullMonths ),
-            "Comparison Unit", "percentage-point change / attainment"
-        ),
-        ROW (
-            "Metric", "Active Policies",
-            "Period Start", _PeriodStart,
-            "Period End", _PeriodEnd,
-            "Live CY", _LivePoliciesCY,
-            "Live LY", _LivePoliciesLY,
-            "Live Plan", BLANK (),
-            "Live vs LY", DIVIDE ( _LivePoliciesCY - _LivePoliciesLY, _LivePoliciesLY ),
-            "Live vs Plan", BLANK (),
-            "Exact CY", _ExactPoliciesCY,
-            "Exact LY", _ExactPoliciesLY,
-            "Correct vs LY", DIVIDE ( _ExactPoliciesCY - _ExactPoliciesLY, _ExactPoliciesLY ),
-            "Full-month Plan", BLANK (),
-            "Vs Full-month Plan", BLANK (),
-            "Prorated Plan", BLANK (),
-            "Vs Prorated Plan", BLANK (),
-            "Comparison Unit", "percent change"
-        ),
-        ROW (
-            "Metric", "Active Monthly Subscribers",
-            "Period Start", _PeriodStart,
-            "Period End", _PeriodEnd,
-            "Live CY", _LiveMonthlyCY,
-            "Live LY", _LiveMonthlyLY,
-            "Live Plan", BLANK (),
-            "Live vs LY", DIVIDE ( _LiveMonthlyCY - _LiveMonthlyLY, _LiveMonthlyLY ),
-            "Live vs Plan", BLANK (),
-            "Exact CY", _ExactMonthlyCY,
-            "Exact LY", _ExactMonthlyLY,
-            "Correct vs LY", DIVIDE ( _ExactMonthlyCY - _ExactMonthlyLY, _ExactMonthlyLY ),
-            "Full-month Plan", BLANK (),
-            "Vs Full-month Plan", BLANK (),
-            "Prorated Plan", BLANK (),
-            "Vs Prorated Plan", BLANK (),
-            "Comparison Unit", "percent change"
-        ),
-        ROW (
-            "Metric", "Monthly Cancellation Rate",
-            "Period Start", _PeriodStart,
-            "Period End", _PeriodEnd,
-            "Live CY", _LiveCancellationCY,
-            "Live LY", _LiveCancellationLY,
-            "Live Plan", BLANK (),
-            "Live vs LY", _LiveCancellationCY - _LiveCancellationLY,
-            "Live vs Plan", BLANK (),
-            "Exact CY", _ExactCancellationCY,
-            "Exact LY", _ExactCancellationLY,
-            "Correct vs LY", _ExactCancellationCY - _ExactCancellationLY,
-            "Full-month Plan", BLANK (),
-            "Vs Full-month Plan", BLANK (),
-            "Prorated Plan", BLANK (),
-            "Vs Prorated Plan", BLANK (),
-            "Comparison Unit", "percentage-point change"
-        )
-    )
+		measure 'KPI Comparison Period End Date' =
+				VAR _DataEnd = [KPI Comparison Data End Date]
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
+				VAR _SelectedEnd = MAX ( 'Date'[Date] )
+				RETURN
+					IF (
+						ISBLANK ( _DataEnd ),
+						BLANK (),
+						IF ( _HasDateContext, MIN ( _SelectedEnd, _DataEnd ), _DataEnd )
+					)
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
 
-ORDER BY [Metric]
+		measure 'CY Month Scope Sales Volume' =
+				VAR _PeriodStart = [KPI Comparison Period Start Date]
+				VAR _PeriodEnd = [KPI Comparison Period End Date]
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Sales Volume],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Helper
+
+		measure 'LY Month Scope Sales Volume' =
+				VAR _PeriodStart = EDATE ( [KPI Comparison Period Start Date], -12 )
+				VAR _PeriodEnd = EDATE ( [KPI Comparison Period End Date], -12 )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Sales Volume],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Helper
+
+		measure 'LY-1 Month Scope Sales Volume' =
+				VAR _PeriodStart = EDATE ( [KPI Comparison Period Start Date], -24 )
+				VAR _PeriodEnd = EDATE ( [KPI Comparison Period End Date], -24 )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Sales Volume],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Helper
+
+		measure 'Gross Revenue CY' =
+				VAR _PeriodStart = [KPI Comparison Period Start Date]
+				VAR _PeriodEnd = [KPI Comparison Period End Date]
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Gross Revenue],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0.00
+			displayFolder: Chart aliases
+
+		measure 'Gross Revenue LY Chart' =
+				VAR _PeriodStart = EDATE ( [KPI Comparison Period Start Date], -12 )
+				VAR _PeriodEnd = EDATE ( [KPI Comparison Period End Date], -12 )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Gross Revenue],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0.00
+			displayFolder: Chart aliases
+
+		measure 'Gross Revenue LY-1 Chart' =
+				VAR _PeriodStart = EDATE ( [KPI Comparison Period Start Date], -24 )
+				VAR _PeriodEnd = EDATE ( [KPI Comparison Period End Date], -24 )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Gross Revenue],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0.00
+			displayFolder: Chart aliases
+
+		measure 'Net Revenue CY' =
+				VAR _PeriodStart = [KPI Comparison Period Start Date]
+				VAR _PeriodEnd = [KPI Comparison Period End Date]
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Net Revenue / Program Margin],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0.00
+			displayFolder: Chart aliases
+
+		measure 'Net Revenue LY Chart' =
+				VAR _PeriodStart = EDATE ( [KPI Comparison Period Start Date], -12 )
+				VAR _PeriodEnd = EDATE ( [KPI Comparison Period End Date], -12 )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Net Revenue / Program Margin],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0.00
+			displayFolder: Chart aliases
+
+		measure 'Net Revenue LY-1 Chart' =
+				VAR _PeriodStart = EDATE ( [KPI Comparison Period Start Date], -24 )
+				VAR _PeriodEnd = EDATE ( [KPI Comparison Period End Date], -24 )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Net Revenue / Program Margin],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: #,##0.00
+			displayFolder: Chart aliases
+
+		measure 'Attach Rate CY' =
+				VAR _PeriodStart = [KPI Comparison Period Start Date]
+				VAR _PeriodEnd = [KPI Comparison Period End Date]
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Raw Attach Rate],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: 0.0%
+			displayFolder: Chart aliases
+
+		measure 'Attach Rate LY Chart' =
+				VAR _PeriodStart = EDATE ( [KPI Comparison Period Start Date], -12 )
+				VAR _PeriodEnd = EDATE ( [KPI Comparison Period End Date], -12 )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Raw Attach Rate],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: 0.0%
+			displayFolder: Chart aliases
+
+		measure 'Attach Rate LY-1 Chart' =
+				VAR _PeriodStart = EDATE ( [KPI Comparison Period Start Date], -24 )
+				VAR _PeriodEnd = EDATE ( [KPI Comparison Period End Date], -24 )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Raw Attach Rate],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: 0.0%
+			displayFolder: Chart aliases
+
+		measure 'Profit % CY' =
+				VAR _PeriodStart = [KPI Comparison Period Start Date]
+				VAR _PeriodEnd = [KPI Comparison Period End Date]
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Program Margin Rate],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: 0.0%
+			displayFolder: Chart aliases
+
+		measure 'Profit % LY' =
+				VAR _PeriodStart = EDATE ( [KPI Comparison Period Start Date], -12 )
+				VAR _PeriodEnd = EDATE ( [KPI Comparison Period End Date], -12 )
+				RETURN
+					IF (
+						ISBLANK ( _PeriodStart ) || ISBLANK ( _PeriodEnd ) || _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							[Program Margin Rate],
+							REMOVEFILTERS ( 'Date' ),
+							REMOVEFILTERS ( 'Date Filter' ),
+							DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+						)
+					)
+			formatString: 0.0%
+			displayFolder: Chart aliases
+
+		measure 'Sales Plan QTY' =
+				VAR _SourceType = SELECTEDVALUE ( 'Source'[Source Type] )
+				VAR _UnsupportedDetailFilter =
+					ISFILTERED ( Sales[Device Category] )
+						|| ISFILTERED ( Sales[Device Model] )
+						|| ISFILTERED ( Sales[Product Type] )
+						|| ISFILTERED ( Sales[Payment Type] )
+						|| ISFILTERED ( Sales[SC+ Plan Rollup] )
+						|| ISFILTERED ( Sales[SC+ Plan Type] )
+						|| ISFILTERED ( Sales[Account / Partner] )
+						|| ISINSCOPE ( Sales[Device Category] )
+						|| ISINSCOPE ( Sales[Device Model] )
+						|| ISINSCOPE ( Sales[Product Type] )
+						|| ISINSCOPE ( Sales[Payment Type] )
+						|| ISINSCOPE ( Sales[SC+ Plan Rollup] )
+						|| ISINSCOPE ( Sales[SC+ Plan Type] )
+						|| ISINSCOPE ( Sales[Account / Partner] )
+				VAR _PeriodStart = [KPI Comparison Period Start Date]
+				VAR _PeriodEnd = [KPI Comparison Period End Date]
+				VAR _MonthKeys =
+					CALCULATETABLE (
+						VALUES ( 'Date'[YearMonth] ),
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+					)
+				VAR _SelectedSalesChannels =
+					CALCULATETABLE (
+						VALUES ( Sales[Sales Channel] ),
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' )
+					)
+				RETURN
+					IF (
+						_SourceType IN { "Revenue", "Policy" }
+							|| _UnsupportedDetailFilter
+							|| ISBLANK ( _PeriodStart )
+							|| ISBLANK ( _PeriodEnd )
+							|| _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							SUM ( 'Sales Plan'[plan_value] ),
+							'Sales Plan'[Sales Plan Type] = "Sales",
+							TREATAS ( _MonthKeys, 'Sales Plan'[Month Key] ),
+							TREATAS ( VALUES ( 'Subsidiary Master'[Subsidiary] ), 'Sales Plan'[Subsidiary] ),
+							TREATAS ( _SelectedSalesChannels, 'Sales Plan'[Sales Channel] )
+						)
+					)
+			formatString: #,##0
+			displayFolder: Sales Plan and Revenue Plan
+
+		measure 'Revenue Plan Amount' =
+				VAR _SourceType = SELECTEDVALUE ( 'Source'[Source Type] )
+				VAR _UnsupportedDetailFilter =
+					ISFILTERED ( Sales[Sales Channel] )
+						|| ISFILTERED ( Sales[Device Category] )
+						|| ISFILTERED ( Sales[Device Model] )
+						|| ISFILTERED ( Sales[Product Type] )
+						|| ISFILTERED ( Sales[Payment Type] )
+						|| ISFILTERED ( Sales[SC+ Plan Rollup] )
+						|| ISFILTERED ( Sales[SC+ Plan Type] )
+						|| ISFILTERED ( Sales[Account / Partner] )
+						|| ISINSCOPE ( Sales[Sales Channel] )
+						|| ISINSCOPE ( Sales[Device Category] )
+						|| ISINSCOPE ( Sales[Device Model] )
+						|| ISINSCOPE ( Sales[Product Type] )
+						|| ISINSCOPE ( Sales[Payment Type] )
+						|| ISINSCOPE ( Sales[SC+ Plan Rollup] )
+						|| ISINSCOPE ( Sales[SC+ Plan Type] )
+						|| ISINSCOPE ( Sales[Account / Partner] )
+				VAR _PeriodStart = [KPI Comparison Period Start Date]
+				VAR _PeriodEnd = [KPI Comparison Period End Date]
+				VAR _MonthKeys =
+					CALCULATETABLE (
+						VALUES ( 'Date'[YearMonth] ),
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+					)
+				RETURN
+					IF (
+						_SourceType = "Policy"
+							|| _UnsupportedDetailFilter
+							|| ISBLANK ( _PeriodStart )
+							|| ISBLANK ( _PeriodEnd )
+							|| _PeriodStart > _PeriodEnd,
+						BLANK (),
+						CALCULATE (
+							SUM ( 'Revenue Plan'[plan_value] ),
+							TREATAS ( _MonthKeys, 'Revenue Plan'[Month Key] ),
+							TREATAS ( VALUES ( 'Subsidiary Master'[Subsidiary] ), 'Revenue Plan'[Subsidiary] )
+						)
+					)
+			formatString: #,##0.00
+			displayFolder: Sales Plan and Revenue Plan
+
+		measure 'Sales Plan Attach Rate' =
+				VAR _SourceType = SELECTEDVALUE ( 'Source'[Source Type] )
+				VAR _UnsupportedDetailFilter =
+					ISFILTERED ( Sales[Device Category] )
+						|| ISFILTERED ( Sales[Device Model] )
+						|| ISFILTERED ( Sales[Product Type] )
+						|| ISFILTERED ( Sales[Payment Type] )
+						|| ISFILTERED ( Sales[SC+ Plan Rollup] )
+						|| ISFILTERED ( Sales[SC+ Plan Type] )
+						|| ISFILTERED ( Sales[Account / Partner] )
+						|| ISINSCOPE ( Sales[Device Category] )
+						|| ISINSCOPE ( Sales[Device Model] )
+						|| ISINSCOPE ( Sales[Product Type] )
+						|| ISINSCOPE ( Sales[Payment Type] )
+						|| ISINSCOPE ( Sales[SC+ Plan Rollup] )
+						|| ISINSCOPE ( Sales[SC+ Plan Type] )
+						|| ISINSCOPE ( Sales[Account / Partner] )
+				VAR _PeriodStart = [KPI Comparison Period Start Date]
+				VAR _PeriodEnd = [KPI Comparison Period End Date]
+				VAR _MonthKeys =
+					CALCULATETABLE (
+						VALUES ( 'Date'[YearMonth] ),
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						DATESBETWEEN ( 'Date'[Date], _PeriodStart, _PeriodEnd )
+					)
+				VAR _SelectedSalesChannels =
+					CALCULATETABLE (
+						VALUES ( Sales[Sales Channel] ),
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' )
+					)
+				VAR _PlanGrain =
+					CALCULATETABLE (
+						SUMMARIZE (
+							'Sales Plan',
+							'Sales Plan'[Month Key],
+							'Sales Plan'[Subsidiary],
+							'Sales Plan'[Sales Channel]
+						),
+						TREATAS ( _MonthKeys, 'Sales Plan'[Month Key] ),
+						TREATAS ( VALUES ( 'Subsidiary Master'[Subsidiary] ), 'Sales Plan'[Subsidiary] ),
+						TREATAS ( _SelectedSalesChannels, 'Sales Plan'[Sales Channel] )
+					)
+				VAR _WeightedNumerator =
+					SUMX (
+						_PlanGrain,
+						VAR _PlanUnits =
+							CALCULATE (
+								SUM ( 'Sales Plan'[plan_value] ),
+								'Sales Plan'[Sales Plan Type] = "Sales"
+							)
+						VAR _PlanRate =
+							CALCULATE (
+								AVERAGE ( 'Sales Plan'[plan_value] ),
+								'Sales Plan'[Sales Plan Type] = "Att"
+							)
+						RETURN
+							_PlanUnits * _PlanRate
+					)
+				VAR _PlanUnitsDenominator =
+					SUMX (
+						_PlanGrain,
+						CALCULATE (
+							SUM ( 'Sales Plan'[plan_value] ),
+							'Sales Plan'[Sales Plan Type] = "Sales"
+						)
+					)
+				RETURN
+					IF (
+						_SourceType = "Policy"
+							|| _UnsupportedDetailFilter
+							|| ISBLANK ( _PeriodStart )
+							|| ISBLANK ( _PeriodEnd )
+							|| _PeriodStart > _PeriodEnd,
+						BLANK (),
+						DIVIDE ( _WeightedNumerator, _PlanUnitsDenominator )
+					)
+			formatString: 0.0%
+			displayFolder: Sales Plan and Revenue Plan
