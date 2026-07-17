@@ -3,41 +3,53 @@ createOrReplace
 	ref table Measures_table
 
 		measure 'Active Policies - Period End' =
-				VAR _PeriodEnd = MAX ( 'Date'[Date] )
+				VAR _HasPeriodSelection =
+					ISFILTERED ( 'Date Filter'[Period Label] )
+						|| ISFILTERED ( 'Date Filter'[Period Type] )
+				VAR _PeriodDates =
+					CALCULATETABLE (
+						VALUES ( 'Date Filter'[Date] ),
+						REMOVEFILTERS ( 'Date' )
+					)
+				VAR _PeriodEnd =
+					IF (
+						_HasPeriodSelection,
+						MAXX ( _PeriodDates, 'Date Filter'[Date] ),
+						MAX ( 'Date'[Date] )
+					)
 				VAR _PolicyRows =
 					CALCULATETABLE (
 						Policy,
 						REMOVEFILTERS ( 'Date' ),
 						REMOVEFILTERS ( 'Date Filter' ),
+						REMOVEFILTERS ( Sales[Payment Type] ),
 						REMOVEFILTERS ( Policy[Policy Created Date] ),
 						REMOVEFILTERS ( Policy[Warranty Start Date] ),
 						REMOVEFILTERS ( Policy[Warranty End Date] ),
 						REMOVEFILTERS ( Policy[Cancellation Date] )
 					)
 				RETURN
-					IF (
-						NOT ISBLANK ( _PeriodEnd ),
-						CALCULATE (
-							[Policy Row Count],
-							REMOVEFILTERS ( 'Date' ),
-							REMOVEFILTERS ( 'Date Filter' ),
-							REMOVEFILTERS ( Policy[Policy Created Date] ),
-							REMOVEFILTERS ( Policy[Warranty Start Date] ),
-							REMOVEFILTERS ( Policy[Warranty End Date] ),
-							REMOVEFILTERS ( Policy[Cancellation Date] ),
-							FILTER (
-								_PolicyRows,
-								VAR _CoverageStart =
-									COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
-								VAR _CoverageEnd = Policy[Warranty End Date]
-								VAR _CancellationDate = Policy[Cancellation Date]
-								RETURN
-									Policy[Policy Status Code Key] = "1"
-										&& NOT ISBLANK ( _CoverageStart )
-										&& _CoverageStart <= _PeriodEnd
-										&& ( ISBLANK ( _CoverageEnd ) || _CoverageEnd >= _PeriodEnd )
-										&& ( ISBLANK ( _CancellationDate ) || _CancellationDate > _PeriodEnd )
-							)
+					CALCULATE (
+						[Policy Row Count],
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						REMOVEFILTERS ( Sales[Payment Type] ),
+						REMOVEFILTERS ( Policy[Policy Created Date] ),
+						REMOVEFILTERS ( Policy[Warranty Start Date] ),
+						REMOVEFILTERS ( Policy[Warranty End Date] ),
+						REMOVEFILTERS ( Policy[Cancellation Date] ),
+						FILTER (
+							_PolicyRows,
+							VAR _CoverageStart =
+								COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
+							VAR _CoverageEnd = Policy[Warranty End Date]
+							VAR _CancellationDate = Policy[Cancellation Date]
+							RETURN
+								Policy[Policy Status Code Key] = "1"
+									&& NOT ISBLANK ( _CoverageStart )
+									&& _CoverageStart <= _PeriodEnd
+									&& ( ISBLANK ( _CoverageEnd ) || _CoverageEnd >= _PeriodEnd )
+									&& ( ISBLANK ( _CancellationDate ) || _CancellationDate > _PeriodEnd )
 						)
 					)
 			formatString: #,##0
@@ -45,43 +57,213 @@ createOrReplace
 			displayFolder: Sales\Policy Status\Diagnostics
 
 		measure 'Active Monthly Subscribers - Period End' =
-				VAR _PeriodEnd = MAX ( 'Date'[Date] )
+				VAR _HasPeriodSelection =
+					ISFILTERED ( 'Date Filter'[Period Label] )
+						|| ISFILTERED ( 'Date Filter'[Period Type] )
+				VAR _PeriodDates =
+					CALCULATETABLE (
+						VALUES ( 'Date Filter'[Date] ),
+						REMOVEFILTERS ( 'Date' )
+					)
+				VAR _PeriodEnd =
+					IF (
+						_HasPeriodSelection,
+						MAXX ( _PeriodDates, 'Date Filter'[Date] ),
+						MAX ( 'Date'[Date] )
+					)
 				VAR _PolicyRows =
 					CALCULATETABLE (
 						Policy,
 						REMOVEFILTERS ( 'Date' ),
 						REMOVEFILTERS ( 'Date Filter' ),
+						REMOVEFILTERS ( Sales[Payment Type] ),
 						REMOVEFILTERS ( Policy[Policy Created Date] ),
 						REMOVEFILTERS ( Policy[Warranty Start Date] ),
 						REMOVEFILTERS ( Policy[Warranty End Date] ),
 						REMOVEFILTERS ( Policy[Cancellation Date] )
 					)
 				RETURN
-					IF (
-						NOT ISBLANK ( _PeriodEnd ),
-						CALCULATE (
-							[Policy Row Count],
-							REMOVEFILTERS ( 'Date' ),
-							REMOVEFILTERS ( 'Date Filter' ),
-							REMOVEFILTERS ( Policy[Policy Created Date] ),
-							REMOVEFILTERS ( Policy[Warranty Start Date] ),
-							REMOVEFILTERS ( Policy[Warranty End Date] ),
-							REMOVEFILTERS ( Policy[Cancellation Date] ),
-							FILTER (
-								_PolicyRows,
-								VAR _CoverageStart =
-									COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
-								VAR _CoverageEnd = Policy[Warranty End Date]
-								VAR _CancellationDate = Policy[Cancellation Date]
-								RETURN
-									COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-										&& Policy[Policy Status Code Key] = "1"
-										&& NOT ISBLANK ( _CoverageStart )
-										&& _CoverageStart <= _PeriodEnd
-										&& ( ISBLANK ( _CoverageEnd ) || _CoverageEnd >= _PeriodEnd )
-										&& ( ISBLANK ( _CancellationDate ) || _CancellationDate > _PeriodEnd )
-							)
+					CALCULATE (
+						[Policy Row Count],
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						REMOVEFILTERS ( Sales[Payment Type] ),
+						REMOVEFILTERS ( Policy[Policy Created Date] ),
+						REMOVEFILTERS ( Policy[Warranty Start Date] ),
+						REMOVEFILTERS ( Policy[Warranty End Date] ),
+						REMOVEFILTERS ( Policy[Cancellation Date] ),
+						FILTER (
+							_PolicyRows,
+							VAR _CoverageStart =
+								COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
+							VAR _CoverageEnd = Policy[Warranty End Date]
+							VAR _CancellationDate = Policy[Cancellation Date]
+							RETURN
+								COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
+									&& Policy[Policy Status Code Key] = "1"
+									&& NOT ISBLANK ( _CoverageStart )
+									&& _CoverageStart <= _PeriodEnd
+									&& ( ISBLANK ( _CoverageEnd ) || _CoverageEnd >= _PeriodEnd )
+									&& ( ISBLANK ( _CancellationDate ) || _CancellationDate > _PeriodEnd )
 						)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Sales\Policy Status\Diagnostics
+
+		measure 'Monthly Cancellation Events - Selected Months' =
+				VAR _HasPeriodSelection =
+					ISFILTERED ( 'Date Filter'[Period Label] )
+						|| ISFILTERED ( 'Date Filter'[Period Type] )
+				VAR _PeriodDates =
+					SELECTCOLUMNS (
+						CALCULATETABLE (
+							VALUES ( 'Date Filter'[Date] ),
+							REMOVEFILTERS ( 'Date' )
+						),
+						"__Date", 'Date Filter'[Date],
+						"__Source", 1
+					)
+				VAR _VisualDates =
+					SELECTCOLUMNS (
+						VALUES ( 'Date'[Date] ),
+						"__Date", 'Date'[Date],
+						"__Source", 0
+					)
+				VAR _SelectedDates =
+					SELECTCOLUMNS (
+						FILTER (
+							UNION ( _PeriodDates, _VisualDates ),
+							[__Source] = IF ( _HasPeriodSelection, 1, 0 )
+						),
+						"__Date", [__Date]
+					)
+				VAR _SelectedMonths =
+					DISTINCT (
+						SELECTCOLUMNS (
+							_SelectedDates,
+							"__MonthStart", DATE ( YEAR ( [__Date] ), MONTH ( [__Date] ), 1 )
+						)
+					)
+				VAR _PolicyRows =
+					CALCULATETABLE (
+						Policy,
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						REMOVEFILTERS ( Sales[Payment Type] ),
+						REMOVEFILTERS ( Policy[Policy Created Date] ),
+						REMOVEFILTERS ( Policy[Warranty Start Date] ),
+						REMOVEFILTERS ( Policy[Warranty End Date] ),
+						REMOVEFILTERS ( Policy[Cancellation Date] )
+					)
+				RETURN
+					SUMX (
+						_SelectedMonths,
+						VAR _MonthStart = [__MonthStart]
+						VAR _MonthDates =
+							FILTER (
+								_SelectedDates,
+								[__Date] >= _MonthStart
+									&& [__Date] <= EOMONTH ( _MonthStart, 0 )
+							)
+						VAR _EventStart = MINX ( _MonthDates, [__Date] )
+						VAR _EventEnd = MAXX ( _MonthDates, [__Date] )
+						RETURN
+							CALCULATE (
+								[Policy Row Count],
+								REMOVEFILTERS ( 'Date' ),
+								REMOVEFILTERS ( 'Date Filter' ),
+								REMOVEFILTERS ( Sales[Payment Type] ),
+								REMOVEFILTERS ( Policy[Policy Created Date] ),
+								REMOVEFILTERS ( Policy[Warranty Start Date] ),
+								REMOVEFILTERS ( Policy[Warranty End Date] ),
+								REMOVEFILTERS ( Policy[Cancellation Date] ),
+								FILTER (
+									_PolicyRows,
+									COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
+										&& NOT ISBLANK ( Policy[Cancellation Date] )
+										&& Policy[Cancellation Date] >= _EventStart
+										&& Policy[Cancellation Date] <= _EventEnd
+								)
+							)
+					)
+			formatString: #,##0
+			isHidden
+			displayFolder: Sales\Policy Status\Diagnostics
+
+		measure 'Monthly Opening Subscription Exposure - Selected Months' =
+				VAR _HasPeriodSelection =
+					ISFILTERED ( 'Date Filter'[Period Label] )
+						|| ISFILTERED ( 'Date Filter'[Period Type] )
+				VAR _PeriodDates =
+					SELECTCOLUMNS (
+						CALCULATETABLE (
+							VALUES ( 'Date Filter'[Date] ),
+							REMOVEFILTERS ( 'Date' )
+						),
+						"__Date", 'Date Filter'[Date],
+						"__Source", 1
+					)
+				VAR _VisualDates =
+					SELECTCOLUMNS (
+						VALUES ( 'Date'[Date] ),
+						"__Date", 'Date'[Date],
+						"__Source", 0
+					)
+				VAR _SelectedDates =
+					SELECTCOLUMNS (
+						FILTER (
+							UNION ( _PeriodDates, _VisualDates ),
+							[__Source] = IF ( _HasPeriodSelection, 1, 0 )
+						),
+						"__Date", [__Date]
+					)
+				VAR _SelectedMonths =
+					DISTINCT (
+						SELECTCOLUMNS (
+							_SelectedDates,
+							"__MonthStart", DATE ( YEAR ( [__Date] ), MONTH ( [__Date] ), 1 )
+						)
+					)
+				VAR _PolicyRows =
+					CALCULATETABLE (
+						Policy,
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						REMOVEFILTERS ( Sales[Payment Type] ),
+						REMOVEFILTERS ( Policy[Policy Created Date] ),
+						REMOVEFILTERS ( Policy[Warranty Start Date] ),
+						REMOVEFILTERS ( Policy[Warranty End Date] ),
+						REMOVEFILTERS ( Policy[Cancellation Date] )
+					)
+				RETURN
+					SUMX (
+						_SelectedMonths,
+						VAR _MonthStart = [__MonthStart]
+						RETURN
+							CALCULATE (
+								[Policy Row Count],
+								REMOVEFILTERS ( 'Date' ),
+								REMOVEFILTERS ( 'Date Filter' ),
+								REMOVEFILTERS ( Sales[Payment Type] ),
+								REMOVEFILTERS ( Policy[Policy Created Date] ),
+								REMOVEFILTERS ( Policy[Warranty Start Date] ),
+								REMOVEFILTERS ( Policy[Warranty End Date] ),
+								REMOVEFILTERS ( Policy[Cancellation Date] ),
+								FILTER (
+									_PolicyRows,
+									VAR _CoverageStart =
+										COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
+									VAR _CoverageEnd = Policy[Warranty End Date]
+									VAR _CancellationDate = Policy[Cancellation Date]
+									RETURN
+										COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
+											&& NOT ISBLANK ( _CoverageStart )
+											&& _CoverageStart <= _MonthStart
+											&& ( ISBLANK ( _CoverageEnd ) || _CoverageEnd >= _MonthStart )
+											&& ( ISBLANK ( _CancellationDate ) || _CancellationDate > _MonthStart )
+								)
+							)
 					)
 			formatString: #,##0
 			isHidden
@@ -93,4 +275,12 @@ createOrReplace
 
 		measure 'Active Monthly Subscribers' = [Active Monthly Subscribers - Period End]
 			formatString: #,##0
+			displayFolder: Sales\Policy Status
+
+		measure 'Monthly Cancellation Rate' =
+				DIVIDE (
+					[Monthly Cancellation Events - Selected Months],
+					[Monthly Opening Subscription Exposure - Selected Months]
+				)
+			formatString: 0.0%
 			displayFolder: Sales\Policy Status
