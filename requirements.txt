@@ -1,37 +1,334 @@
-// Run in Tabular Editor Advanced Scripting while connected to the open model.
-// Targets the card label, so the current tooltip wording does not need to match the offline dump.
+DEFINE
+    VAR _SalesDataEnd =
+        CALCULATE ( MAX ( Sales[Reporting Date] ), REMOVEFILTERS () )
+    VAR _PolicyDataEnd =
+        CALCULATE ( MAX ( Policy[Policy Created Date] ), REMOVEFILTERS () )
+    VAR _PeriodEnd = MAX ( _SalesDataEnd, _PolicyDataEnd )
+    VAR _PeriodStart = DATE ( YEAR ( _PeriodEnd ), 1, 1 )
+    VAR _LYStart = EDATE ( _PeriodStart, -12 )
+    VAR _LYEnd = EDATE ( _PeriodEnd, -12 )
+    VAR _CurrentMonthStart = DATE ( YEAR ( _PeriodEnd ), MONTH ( _PeriodEnd ), 1 )
+    VAR _PreviousMonthEnd = EOMONTH ( _PeriodEnd, -1 )
+    VAR _ElapsedMonthFraction =
+        DIVIDE ( DAY ( _PeriodEnd ), DAY ( EOMONTH ( _PeriodEnd, 0 ) ) )
+    VAR _CYDates = CALENDAR ( _PeriodStart, _PeriodEnd )
+    VAR _LYDates = CALENDAR ( _LYStart, _LYEnd )
+    VAR _CompletedMonthDates = CALENDAR ( _PeriodStart, _PreviousMonthEnd )
+    VAR _CurrentMonthDates = CALENDAR ( _CurrentMonthStart, _PeriodEnd )
 
-var heading = "Period-end active policy snapshot";
-var body = "Counts policies with active status whose coverage started by the final selected date, warranty has not ended, and cancellation is blank or later than that date. This is a stock at period end, not policies created during the period.";
-var pattern = "(<div class=\"\"label\"\">Active Policies</div>.*?<span class=\"\"tooltip\"\">)<strong>.*?</strong><span>.*?</span>";
-var replacementCount = 0;
-var updatedMeasures = new System.Collections.Generic.List<string>();
+    // Values currently used by the HTML KPI cards.
+    VAR _LiveSalesCY = [Sales QTY CY]
+    VAR _LiveSalesLY = [Sales QTY LY]
+    VAR _LiveSalesPlan = [Sales Plan QTY]
+    VAR _LiveRevenueCY = [Gross Revenue CY]
+    VAR _LiveRevenueLY = [Gross Revenue LY Chart]
+    VAR _LiveRevenuePlan = [Revenue Plan Amount]
+    VAR _LiveMarginCY = [Net Revenue CY]
+    VAR _LiveMarginLY = [Net Revenue LY Chart]
+    VAR _LiveAttachCY = [Attach Rate CY]
+    VAR _LiveAttachLY = [Attach Rate LY Chart]
+    VAR _LiveAttachPlan = [Sales Plan Attach Rate]
+    VAR _LivePoliciesCY = [Active Policies]
+    VAR _LivePoliciesLY =
+        CALCULATE (
+            [Active Policies],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS (
+                SELECTCOLUMNS ( VALUES ( 'Date'[Date] ), "Date", EDATE ( 'Date'[Date], -12 ) ),
+                'Date'[Date]
+            )
+        )
+    VAR _LiveMonthlyCY = [Active Monthly Subscribers]
+    VAR _LiveMonthlyLY = [Active Monthly Subscribers LY]
+    VAR _LiveCancellationCY = [Monthly Cancellation Rate]
+    VAR _LiveCancellationLY = [Monthly Cancellation Rate LY]
 
-foreach (var measure in Model.AllMeasures)
-{
-    var expression = measure.Expression ?? "";
-    var matches = System.Text.RegularExpressions.Regex.Matches(
-        expression,
-        pattern,
-        System.Text.RegularExpressions.RegexOptions.Singleline |
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase
-    ).Count;
+    // Correct like-for-like actuals: Jan 1 through the latest actual date,
+    // compared with the exact same dates shifted back 12 months.
+    VAR _ExactSalesCY =
+        CALCULATE (
+            [Sales Volume],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _CYDates, 'Date'[Date] )
+        )
+    VAR _ExactSalesLY =
+        CALCULATE (
+            [Sales Volume],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _LYDates, 'Date'[Date] )
+        )
+    VAR _ExactRevenueCY =
+        CALCULATE (
+            [Gross Revenue],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _CYDates, 'Date'[Date] )
+        )
+    VAR _ExactRevenueLY =
+        CALCULATE (
+            [Gross Revenue],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _LYDates, 'Date'[Date] )
+        )
+    VAR _ExactMarginCY =
+        CALCULATE (
+            [Net Revenue / Program Margin],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _CYDates, 'Date'[Date] )
+        )
+    VAR _ExactMarginLY =
+        CALCULATE (
+            [Net Revenue / Program Margin],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _LYDates, 'Date'[Date] )
+        )
+    VAR _ExactAttachCY =
+        CALCULATE (
+            [Raw Attach Rate],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _CYDates, 'Date'[Date] )
+        )
+    VAR _ExactAttachLY =
+        CALCULATE (
+            [Raw Attach Rate],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _LYDates, 'Date'[Date] )
+        )
+    VAR _ExactPoliciesCY =
+        CALCULATE (
+            [Active Policies],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _CYDates, 'Date'[Date] )
+        )
+    VAR _ExactPoliciesLY =
+        CALCULATE (
+            [Active Policies],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _LYDates, 'Date'[Date] )
+        )
+    VAR _ExactMonthlyCY =
+        CALCULATE (
+            [Active Monthly Subscribers],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _CYDates, 'Date'[Date] )
+        )
+    VAR _ExactMonthlyLY =
+        CALCULATE (
+            [Active Monthly Subscribers],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _LYDates, 'Date'[Date] )
+        )
+    VAR _ExactCancellationCY =
+        CALCULATE (
+            [Monthly Cancellation Rate],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _CYDates, 'Date'[Date] )
+        )
+    VAR _ExactCancellationLY =
+        CALCULATE (
+            [Monthly Cancellation Rate],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _LYDates, 'Date'[Date] )
+        )
 
-    if (matches == 0)
-        continue;
+    // Power BI plan tables are monthly. "Full-month plan" is the existing
+    // semantic-model convention. "Prorated plan" is included for comparison.
+    VAR _SalesPlanFullMonths =
+        CALCULATE (
+            [Sales Plan QTY],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _CYDates, 'Date'[Date] )
+        )
+    VAR _SalesPlanCompletedMonths =
+        CALCULATE (
+            [Sales Plan QTY],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _CompletedMonthDates, 'Date'[Date] )
+        )
+    VAR _SalesPlanCurrentMonth =
+        CALCULATE (
+            [Sales Plan QTY],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _CurrentMonthDates, 'Date'[Date] )
+        )
+    VAR _SalesPlanProrated =
+        _SalesPlanCompletedMonths + _SalesPlanCurrentMonth * _ElapsedMonthFraction
+    VAR _RevenuePlanFullMonths =
+        CALCULATE (
+            [Revenue Plan Amount],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _CYDates, 'Date'[Date] )
+        )
+    VAR _RevenuePlanCompletedMonths =
+        CALCULATE (
+            [Revenue Plan Amount],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _CompletedMonthDates, 'Date'[Date] )
+        )
+    VAR _RevenuePlanCurrentMonth =
+        CALCULATE (
+            [Revenue Plan Amount],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _CurrentMonthDates, 'Date'[Date] )
+        )
+    VAR _RevenuePlanProrated =
+        _RevenuePlanCompletedMonths + _RevenuePlanCurrentMonth * _ElapsedMonthFraction
+    VAR _AttachPlanFullMonths =
+        CALCULATE (
+            [Sales Plan Attach Rate],
+            REMOVEFILTERS ( 'Date' ),
+            REMOVEFILTERS ( 'Date Filter' ),
+            TREATAS ( _CYDates, 'Date'[Date] )
+        )
 
-    measure.Expression = System.Text.RegularExpressions.Regex.Replace(
-        expression,
-        pattern,
-        match => match.Groups[1].Value + "<strong>" + heading + "</strong><span>" + body + "</span>",
-        System.Text.RegularExpressions.RegexOptions.Singleline |
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase
-    );
-    replacementCount += matches;
-    updatedMeasures.Add(measure.Name);
-}
+EVALUATE
+    UNION (
+        ROW (
+            "Metric", "Sales Volume",
+            "Period Start", _PeriodStart,
+            "Period End", _PeriodEnd,
+            "Live CY", _LiveSalesCY,
+            "Live LY", _LiveSalesLY,
+            "Live Plan", _LiveSalesPlan,
+            "Live vs LY", DIVIDE ( _LiveSalesCY - _LiveSalesLY, _LiveSalesLY ),
+            "Live vs Plan", DIVIDE ( _LiveSalesCY, _LiveSalesPlan ),
+            "Exact CY", _ExactSalesCY,
+            "Exact LY", _ExactSalesLY,
+            "Correct vs LY", DIVIDE ( _ExactSalesCY - _ExactSalesLY, _ExactSalesLY ),
+            "Full-month Plan", _SalesPlanFullMonths,
+            "Vs Full-month Plan", DIVIDE ( _ExactSalesCY, _SalesPlanFullMonths ),
+            "Prorated Plan", _SalesPlanProrated,
+            "Vs Prorated Plan", DIVIDE ( _ExactSalesCY, _SalesPlanProrated ),
+            "Comparison Unit", "percent change / attainment"
+        ),
+        ROW (
+            "Metric", "Gross Revenue",
+            "Period Start", _PeriodStart,
+            "Period End", _PeriodEnd,
+            "Live CY", _LiveRevenueCY,
+            "Live LY", _LiveRevenueLY,
+            "Live Plan", _LiveRevenuePlan,
+            "Live vs LY", DIVIDE ( _LiveRevenueCY - _LiveRevenueLY, _LiveRevenueLY ),
+            "Live vs Plan", DIVIDE ( _LiveRevenueCY, _LiveRevenuePlan ),
+            "Exact CY", _ExactRevenueCY,
+            "Exact LY", _ExactRevenueLY,
+            "Correct vs LY", DIVIDE ( _ExactRevenueCY - _ExactRevenueLY, _ExactRevenueLY ),
+            "Full-month Plan", _RevenuePlanFullMonths,
+            "Vs Full-month Plan", DIVIDE ( _ExactRevenueCY, _RevenuePlanFullMonths ),
+            "Prorated Plan", _RevenuePlanProrated,
+            "Vs Prorated Plan", DIVIDE ( _ExactRevenueCY, _RevenuePlanProrated ),
+            "Comparison Unit", "percent change / attainment"
+        ),
+        ROW (
+            "Metric", "Program Margin",
+            "Period Start", _PeriodStart,
+            "Period End", _PeriodEnd,
+            "Live CY", _LiveMarginCY,
+            "Live LY", _LiveMarginLY,
+            "Live Plan", BLANK (),
+            "Live vs LY", DIVIDE ( _LiveMarginCY - _LiveMarginLY, _LiveMarginLY ),
+            "Live vs Plan", BLANK (),
+            "Exact CY", _ExactMarginCY,
+            "Exact LY", _ExactMarginLY,
+            "Correct vs LY", DIVIDE ( _ExactMarginCY - _ExactMarginLY, _ExactMarginLY ),
+            "Full-month Plan", BLANK (),
+            "Vs Full-month Plan", BLANK (),
+            "Prorated Plan", BLANK (),
+            "Vs Prorated Plan", BLANK (),
+            "Comparison Unit", "percent change"
+        ),
+        ROW (
+            "Metric", "Raw Attach Rate",
+            "Period Start", _PeriodStart,
+            "Period End", _PeriodEnd,
+            "Live CY", _LiveAttachCY,
+            "Live LY", _LiveAttachLY,
+            "Live Plan", _LiveAttachPlan,
+            "Live vs LY", _LiveAttachCY - _LiveAttachLY,
+            "Live vs Plan", DIVIDE ( _LiveAttachCY, _LiveAttachPlan ),
+            "Exact CY", _ExactAttachCY,
+            "Exact LY", _ExactAttachLY,
+            "Correct vs LY", _ExactAttachCY - _ExactAttachLY,
+            "Full-month Plan", _AttachPlanFullMonths,
+            "Vs Full-month Plan", DIVIDE ( _ExactAttachCY, _AttachPlanFullMonths ),
+            "Prorated Plan", _AttachPlanFullMonths,
+            "Vs Prorated Plan", DIVIDE ( _ExactAttachCY, _AttachPlanFullMonths ),
+            "Comparison Unit", "percentage-point change / attainment"
+        ),
+        ROW (
+            "Metric", "Active Policies",
+            "Period Start", _PeriodStart,
+            "Period End", _PeriodEnd,
+            "Live CY", _LivePoliciesCY,
+            "Live LY", _LivePoliciesLY,
+            "Live Plan", BLANK (),
+            "Live vs LY", DIVIDE ( _LivePoliciesCY - _LivePoliciesLY, _LivePoliciesLY ),
+            "Live vs Plan", BLANK (),
+            "Exact CY", _ExactPoliciesCY,
+            "Exact LY", _ExactPoliciesLY,
+            "Correct vs LY", DIVIDE ( _ExactPoliciesCY - _ExactPoliciesLY, _ExactPoliciesLY ),
+            "Full-month Plan", BLANK (),
+            "Vs Full-month Plan", BLANK (),
+            "Prorated Plan", BLANK (),
+            "Vs Prorated Plan", BLANK (),
+            "Comparison Unit", "percent change"
+        ),
+        ROW (
+            "Metric", "Active Monthly Subscribers",
+            "Period Start", _PeriodStart,
+            "Period End", _PeriodEnd,
+            "Live CY", _LiveMonthlyCY,
+            "Live LY", _LiveMonthlyLY,
+            "Live Plan", BLANK (),
+            "Live vs LY", DIVIDE ( _LiveMonthlyCY - _LiveMonthlyLY, _LiveMonthlyLY ),
+            "Live vs Plan", BLANK (),
+            "Exact CY", _ExactMonthlyCY,
+            "Exact LY", _ExactMonthlyLY,
+            "Correct vs LY", DIVIDE ( _ExactMonthlyCY - _ExactMonthlyLY, _ExactMonthlyLY ),
+            "Full-month Plan", BLANK (),
+            "Vs Full-month Plan", BLANK (),
+            "Prorated Plan", BLANK (),
+            "Vs Prorated Plan", BLANK (),
+            "Comparison Unit", "percent change"
+        ),
+        ROW (
+            "Metric", "Monthly Cancellation Rate",
+            "Period Start", _PeriodStart,
+            "Period End", _PeriodEnd,
+            "Live CY", _LiveCancellationCY,
+            "Live LY", _LiveCancellationLY,
+            "Live Plan", BLANK (),
+            "Live vs LY", _LiveCancellationCY - _LiveCancellationLY,
+            "Live vs Plan", BLANK (),
+            "Exact CY", _ExactCancellationCY,
+            "Exact LY", _ExactCancellationLY,
+            "Correct vs LY", _ExactCancellationCY - _ExactCancellationLY,
+            "Full-month Plan", BLANK (),
+            "Vs Full-month Plan", BLANK (),
+            "Prorated Plan", BLANK (),
+            "Vs Prorated Plan", BLANK (),
+            "Comparison Unit", "percentage-point change"
+        )
+    )
 
-if (replacementCount == 0)
-    Error("No Active Policies HTML card was found. No model changes were made.");
-else
-    Info("Updated Active Policies tooltip in " + replacementCount + " card instance(s): " + string.Join(" | ", updatedMeasures));
+ORDER BY [Metric]
