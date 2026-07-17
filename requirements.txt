@@ -1,25 +1,419 @@
-1. Open policy.csv in Excel.
+DEFINE
+    VAR _SalesMaxDate =
+        CALCULATE ( MAX ( Sales[Reporting Date] ), REMOVEFILTERS () )
+    VAR _PolicyMaxDate =
+        CALCULATE ( MAX ( Policy[Policy Created Date] ), REMOVEFILTERS () )
+    VAR _PeriodEnd =
+        MIN ( _SalesMaxDate, _PolicyMaxDate )
+    VAR _PeriodStart =
+        DATE ( YEAR ( _PeriodEnd ), 1, 1 )
 
-2. Click inside the data and press Ctrl+T. Confirm "My table has headers."
+    VAR _MonthStarts =
+        SELECTCOLUMNS (
+            GENERATESERIES ( 0, DATEDIFF ( _PeriodStart, _PeriodEnd, MONTH ), 1 ),
+            "Month Start", EDATE ( _PeriodStart, [Value] )
+        )
 
-3. Do not parse or modify cancellation_date. It is already a date.
+    VAR _MonthlyCore =
+        GENERATE (
+            _MonthStarts,
+            VAR _MonthStart = [Month Start]
+            VAR _MonthEnd = MIN ( EOMONTH ( _MonthStart, 0 ), _PeriodEnd )
+            VAR _SalesRows =
+                COUNTROWS (
+                    FILTER (
+                        ALL ( Sales ),
+                        Sales[Reporting Date] >= _MonthStart
+                            && Sales[Reporting Date] <= _MonthEnd
+                    )
+                )
+            VAR _SalesVolume =
+                SUMX (
+                    FILTER (
+                        ALL ( Sales ),
+                        Sales[Reporting Date] >= _MonthStart
+                            && Sales[Reporting Date] <= _MonthEnd
+                    ),
+                    Sales[sales_volume]
+                )
+            VAR _GrossRevenue =
+                SUMX (
+                    FILTER (
+                        ALL ( Sales ),
+                        Sales[Reporting Date] >= _MonthStart
+                            && Sales[Reporting Date] <= _MonthEnd
+                    ),
+                    Sales[gross_revenue]
+                )
+            VAR _ProgramMargin =
+                SUMX (
+                    FILTER (
+                        ALL ( Sales ),
+                        Sales[Reporting Date] >= _MonthStart
+                            && Sales[Reporting Date] <= _MonthEnd
+                    ),
+                    Sales[net_revenue_program_margin]
+                )
+            VAR _SubsidiaryRevenue =
+                SUMX (
+                    FILTER (
+                        ALL ( Sales ),
+                        Sales[Reporting Date] >= _MonthStart
+                            && Sales[Reporting Date] <= _MonthEnd
+                    ),
+                    Sales[subsidiary_revenue]
+                )
+            VAR _RevenueUnits =
+                SUMX (
+                    FILTER (
+                        ALL ( Sales ),
+                        Sales[Reporting Date] >= _MonthStart
+                            && Sales[Reporting Date] <= _MonthEnd
+                    ),
+                    Sales[revenue_units]
+                )
+            VAR _NewPolicyProxy =
+                SUMX (
+                    FILTER (
+                        ALL ( 'Aggregated Policy' ),
+                        'Aggregated Policy'[Policy Created Date] >= _MonthStart
+                            && 'Aggregated Policy'[Policy Created Date] <= _MonthEnd
+                    ),
+                    'Aggregated Policy'[New Policy Count]
+                )
+            VAR _ActivePolicies =
+                COUNTROWS (
+                    FILTER (
+                        ALL ( Policy ),
+                        VAR _CoverageStart =
+                            COALESCE (
+                                Policy[Warranty Start Date],
+                                Policy[Policy Created Date]
+                            )
+                        RETURN
+                            TRIM ( Policy[Policy Status] & "" ) = "1"
+                                && _CoverageStart <= _MonthEnd
+                                && (
+                                    ISBLANK ( Policy[Warranty End Date] )
+                                        || Policy[Warranty End Date] >= _MonthEnd
+                                )
+                                && (
+                                    ISBLANK ( Policy[Cancellation Date] )
+                                        || Policy[Cancellation Date] > _MonthEnd
+                                )
+                    )
+                )
+            VAR _ActiveMonthly =
+                COUNTROWS (
+                    FILTER (
+                        ALL ( Policy ),
+                        VAR _CoverageStart =
+                            COALESCE (
+                                Policy[Warranty Start Date],
+                                Policy[Policy Created Date]
+                            )
+                        RETURN
+                            TRIM ( Policy[Policy Status] & "" ) = "1"
+                                && COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
+                                && _CoverageStart <= _MonthEnd
+                                && (
+                                    ISBLANK ( Policy[Warranty End Date] )
+                                        || Policy[Warranty End Date] >= _MonthEnd
+                                )
+                                && (
+                                    ISBLANK ( Policy[Cancellation Date] )
+                                        || Policy[Cancellation Date] > _MonthEnd
+                                )
+                    )
+                )
+            VAR _AllCancellations =
+                COUNTROWS (
+                    FILTER (
+                        ALL ( Policy ),
+                        Policy[Cancellation Date] >= _MonthStart
+                            && Policy[Cancellation Date] <= _MonthEnd
+                    )
+                )
+            VAR _PaidCancellations =
+                COUNTROWS (
+                    FILTER (
+                        ALL ( Policy ),
+                        COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
+                            && Policy[Cancellation Date] >= _MonthStart
+                            && Policy[Cancellation Date] <= _MonthEnd
+                    )
+                )
+            VAR _OpeningExposure =
+                COUNTROWS (
+                    FILTER (
+                        ALL ( Policy ),
+                        VAR _CoverageStart =
+                            COALESCE (
+                                Policy[Warranty Start Date],
+                                Policy[Policy Created Date]
+                            )
+                        RETURN
+                            COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
+                                && _CoverageStart <= _MonthStart
+                                && (
+                                    ISBLANK ( Policy[Warranty End Date] )
+                                        || Policy[Warranty End Date] >= _MonthStart
+                                )
+                                && (
+                                    ISBLANK ( Policy[Cancellation Date] )
+                                        || Policy[Cancellation Date] > _MonthStart
+                                )
+                    )
+                )
+            VAR _Expiries =
+                COUNTROWS (
+                    FILTER (
+                        ALL ( Policy ),
+                        Policy[Warranty End Date] >= _MonthStart
+                            && Policy[Warranty End Date] <= _MonthEnd
+                            && (
+                                ISBLANK ( Policy[Cancellation Date] )
+                                    || Policy[Cancellation Date] > Policy[Warranty End Date]
+                            )
+                    )
+                )
+            RETURN
+                ROW (
+                    "Sort", 2,
+                    "Section", "MONTH",
+                    "Period", FORMAT ( _MonthStart, "yyyy-MM" ),
+                    "Period Start", _MonthStart,
+                    "Period End", _MonthEnd,
+                    "Sales Rows", _SalesRows,
+                    "Policy Rows", BLANK (),
+                    "Aggregated Policy Rows", BLANK (),
+                    "Sales Volume", _SalesVolume,
+                    "Gross Revenue", _GrossRevenue,
+                    "Program Margin", _ProgramMargin,
+                    "Program Margin Rate", DIVIDE ( _ProgramMargin, _GrossRevenue ),
+                    "Subsidiary Revenue", _SubsidiaryRevenue,
+                    "Revenue Units", _RevenueUnits,
+                    "New Policy Proxy", _NewPolicyProxy,
+                    "Active Partners", BLANK (),
+                    "Active Policies", _ActivePolicies,
+                    "Active Monthly Subscribers", _ActiveMonthly,
+                    "All Cancellation Events", _AllCancellations,
+                    "Paid Monthly Cancellations", _PaidCancellations,
+                    "Opening Paid Exposure", _OpeningExposure,
+                    "Weighted Cancellation Rate", DIVIDE ( _PaidCancellations, _OpeningExposure ),
+                    "Expiries", _Expiries,
+                    "Positive Monthly Amount Rows", BLANK (),
+                    "Rows With Cancellation Date", BLANK ()
+                )
+        )
 
-4. Add one new column named:
-June 2026 Numerator
+    VAR _MonthlyRows =
+        SELECTCOLUMNS (
+            _MonthlyCore,
+            "Sort", [Sort],
+            "Section", [Section],
+            "Period", [Period],
+            "Period Start", [Period Start],
+            "Period End", [Period End],
+            "Sales Rows", [Sales Rows],
+            "Policy Rows", [Policy Rows],
+            "Aggregated Policy Rows", [Aggregated Policy Rows],
+            "Sales Volume", [Sales Volume],
+            "Gross Revenue", [Gross Revenue],
+            "Program Margin", [Program Margin],
+            "Program Margin Rate", [Program Margin Rate],
+            "Subsidiary Revenue", [Subsidiary Revenue],
+            "Revenue Units", [Revenue Units],
+            "New Policy Proxy", [New Policy Proxy],
+            "Active Partners", [Active Partners],
+            "Active Policies", [Active Policies],
+            "Active Monthly Subscribers", [Active Monthly Subscribers],
+            "All Cancellation Events", [All Cancellation Events],
+            "Paid Monthly Cancellations", [Paid Monthly Cancellations],
+            "Opening Paid Exposure", [Opening Paid Exposure],
+            "Weighted Cancellation Rate", [Weighted Cancellation Rate],
+            "Expiries", [Expiries],
+            "Positive Monthly Amount Rows", [Positive Monthly Amount Rows],
+            "Rows With Cancellation Date", [Rows With Cancellation Date]
+        )
 
-Use this formula:
+    VAR _YtdSales =
+        FILTER (
+            ALL ( Sales ),
+            Sales[Reporting Date] >= _PeriodStart
+                && Sales[Reporting Date] <= _PeriodEnd
+        )
+    VAR _YtdPolicy =
+        FILTER (
+            ALL ( Policy ),
+            Policy[Policy Created Date] >= _PeriodStart
+                && Policy[Policy Created Date] <= _PeriodEnd
+        )
+    VAR _YtdAggregate =
+        FILTER (
+            ALL ( 'Aggregated Policy' ),
+            'Aggregated Policy'[Policy Created Date] >= _PeriodStart
+                && 'Aggregated Policy'[Policy Created Date] <= _PeriodEnd
+        )
+    VAR _YtdSalesVolume = SUMX ( _YtdSales, Sales[sales_volume] )
+    VAR _YtdGrossRevenue = SUMX ( _YtdSales, Sales[gross_revenue] )
+    VAR _YtdProgramMargin = SUMX ( _YtdSales, Sales[net_revenue_program_margin] )
+    VAR _YtdActivePolicies =
+        COUNTROWS (
+            FILTER (
+                ALL ( Policy ),
+                VAR _CoverageStart =
+                    COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
+                RETURN
+                    TRIM ( Policy[Policy Status] & "" ) = "1"
+                        && _CoverageStart <= _PeriodEnd
+                        && (
+                            ISBLANK ( Policy[Warranty End Date] )
+                                || Policy[Warranty End Date] >= _PeriodEnd
+                        )
+                        && (
+                            ISBLANK ( Policy[Cancellation Date] )
+                                || Policy[Cancellation Date] > _PeriodEnd
+                        )
+            )
+        )
+    VAR _YtdActiveMonthly =
+        COUNTROWS (
+            FILTER (
+                ALL ( Policy ),
+                VAR _CoverageStart =
+                    COALESCE ( Policy[Warranty Start Date], Policy[Policy Created Date] )
+                RETURN
+                    TRIM ( Policy[Policy Status] & "" ) = "1"
+                        && COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
+                        && _CoverageStart <= _PeriodEnd
+                        && (
+                            ISBLANK ( Policy[Warranty End Date] )
+                                || Policy[Warranty End Date] >= _PeriodEnd
+                        )
+                        && (
+                            ISBLANK ( Policy[Cancellation Date] )
+                                || Policy[Cancellation Date] > _PeriodEnd
+                        )
+            )
+        )
+    VAR _YtdAllCancellations =
+        COUNTROWS (
+            FILTER (
+                ALL ( Policy ),
+                Policy[Cancellation Date] >= _PeriodStart
+                    && Policy[Cancellation Date] <= _PeriodEnd
+            )
+        )
+    VAR _YtdPaidCancellations =
+        COUNTROWS (
+            FILTER (
+                ALL ( Policy ),
+                COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
+                    && Policy[Cancellation Date] >= _PeriodStart
+                    && Policy[Cancellation Date] <= _PeriodEnd
+            )
+        )
+    VAR _YtdExpiries =
+        COUNTROWS (
+            FILTER (
+                ALL ( Policy ),
+                Policy[Warranty End Date] >= _PeriodStart
+                    && Policy[Warranty End Date] <= _PeriodEnd
+                    && (
+                        ISBLANK ( Policy[Cancellation Date] )
+                            || Policy[Cancellation Date] > Policy[Warranty End Date]
+                    )
+            )
+        )
+    VAR _WeightedNumerator =
+        SUMX ( _MonthlyRows, [Paid Monthly Cancellations] )
+    VAR _WeightedDenominator =
+        SUMX ( _MonthlyRows, [Opening Paid Exposure] )
 
-=--AND([@cancellation_date]>=DATE(2026,6,1),[@cancellation_date]<DATE(2026,7,1),[@product_monthly_amount]>0)
+    VAR _ControlRow =
+        ROW (
+            "Sort", 0,
+            "Section", "CONTROL",
+            "Period", "FULL MODEL",
+            "Period Start", _PeriodStart,
+            "Period End", _PeriodEnd,
+            "Sales Rows", COUNTROWS ( ALL ( Sales ) ),
+            "Policy Rows", COUNTROWS ( ALL ( Policy ) ),
+            "Aggregated Policy Rows", COUNTROWS ( ALL ( 'Aggregated Policy' ) ),
+            "Sales Volume", BLANK (),
+            "Gross Revenue", BLANK (),
+            "Program Margin", BLANK (),
+            "Program Margin Rate", BLANK (),
+            "Subsidiary Revenue", BLANK (),
+            "Revenue Units", BLANK (),
+            "New Policy Proxy", BLANK (),
+            "Active Partners", BLANK (),
+            "Active Policies", BLANK (),
+            "Active Monthly Subscribers", BLANK (),
+            "All Cancellation Events", BLANK (),
+            "Paid Monthly Cancellations", BLANK (),
+            "Opening Paid Exposure", BLANK (),
+            "Weighted Cancellation Rate", BLANK (),
+            "Expiries", BLANK (),
+            "Positive Monthly Amount Rows",
+                COUNTROWS (
+                    FILTER (
+                        ALL ( Policy ),
+                        COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
+                    )
+                ),
+            "Rows With Cancellation Date",
+                COUNTROWS (
+                    FILTER ( ALL ( Policy ), NOT ISBLANK ( Policy[Cancellation Date] ) )
+                )
+        )
 
-5. Insert a PivotTable from the table.
+    VAR _YtdRow =
+        ROW (
+            "Sort", 1,
+            "Section", "YTD",
+            "Period", FORMAT ( _PeriodStart, "yyyy-MM-dd" ) & " to " & FORMAT ( _PeriodEnd, "yyyy-MM-dd" ),
+            "Period Start", _PeriodStart,
+            "Period End", _PeriodEnd,
+            "Sales Rows", COUNTROWS ( _YtdSales ),
+            "Policy Rows", COUNTROWS ( _YtdPolicy ),
+            "Aggregated Policy Rows", COUNTROWS ( _YtdAggregate ),
+            "Sales Volume", _YtdSalesVolume,
+            "Gross Revenue", _YtdGrossRevenue,
+            "Program Margin", _YtdProgramMargin,
+            "Program Margin Rate", DIVIDE ( _YtdProgramMargin, _YtdGrossRevenue ),
+            "Subsidiary Revenue", SUMX ( _YtdSales, Sales[subsidiary_revenue] ),
+            "Revenue Units", SUMX ( _YtdSales, Sales[revenue_units] ),
+            "New Policy Proxy", SUMX ( _YtdAggregate, 'Aggregated Policy'[New Policy Count] ),
+            "Active Partners",
+                COUNTROWS (
+                    SUMMARIZE (
+                        FILTER (
+                            _YtdAggregate,
+                            NOT ISBLANK ( 'Aggregated Policy'[Partner Name] )
+                                && TRIM ( 'Aggregated Policy'[Partner Name] ) <> ""
+                        ),
+                        'Aggregated Policy'[Partner Name]
+                    )
+                ),
+            "Active Policies", _YtdActivePolicies,
+            "Active Monthly Subscribers", _YtdActiveMonthly,
+            "All Cancellation Events", _YtdAllCancellations,
+            "Paid Monthly Cancellations", _YtdPaidCancellations,
+            "Opening Paid Exposure", _WeightedDenominator,
+            "Weighted Cancellation Rate", DIVIDE ( _WeightedNumerator, _WeightedDenominator ),
+            "Expiries", _YtdExpiries,
+            "Positive Monthly Amount Rows", BLANK (),
+            "Rows With Cancellation Date", BLANK ()
+        )
 
-6. Set the PivotTable fields:
-- Rows: payment_type_code
-- Values: June 2026 Numerator
-- Value Field Settings: Sum
+    VAR _Result =
+        UNION ( _ControlRow, _YtdRow, _MonthlyRows )
 
-Expected result:
-- payment_type_code 2 = 20
-- Grand Total = 20
+EVALUATE
+    _Result
 
-Do not create a parsed-date column. Do not count policy_id.
+ORDER BY
+    [Sort],
+    [Period Start]
