@@ -3,23 +3,26 @@ SCREENSHOT VALIDATION - FLOWCHART, TASKS, AND READY-TO-SEND MESSAGES
 
 FLOWCHART
 
-SETUP FLOW
+PROMPT SETUP FLOW
 
-[J requests the criteria from E]
+[Criteria received from the business criteria owner]
                  |
                  v
-[E obtains criteria for every Region, Operator, and Stage]
+[CSV attached and sent to the prompt owner]
                  |
                  v
-[N creates the prompt files and completes the mapping CSV]
+[Prompt owner fills one row for every Sub, App, and KPI combination]
                  |
                  v
-[Prompt configuration is ready]
+[All initial prompt versions are set to 1]
+                 |
+                 v
+[Completed prompt CSV is ready for the daily process]
 
 
 DAILY SCREENSHOT FLOW
 
-[T and S capture about five Stages per Region and Operator]
+[Screenshot process captures about five KPIs per Sub and App]
                  |
                  v
 [Save each PNG using the status-first filename convention]
@@ -31,7 +34,7 @@ DAILY SCREENSHOT FLOW
 [Daily process discovers a new PNG]
                  |
                  v
-[Parse Status, Region, Operator, Stage, and timestamp]
+[Parse Status, Sub, App, KPI, and timestamp]
                  |
                  v
         [Is Status capturefailed?]
@@ -44,8 +47,8 @@ DAILY SCREENSHOT FLOW
 [Skip prompt and       [Status is capture]
  model evaluation]            |
        |                       v
-       |              [Find N's prompt using
-       |               Region, Operator, Stage]
+       |              [Find the latest prompt using
+       |               Sub, App, and KPI]
        |                       |
        |                       v
        |              [Evaluate the screenshot]
@@ -58,13 +61,13 @@ DAILY SCREENSHOT FLOW
        +--------------+-----------------+
                       |
                       v
-[Write one historical row to bi_reporting.screenshot_evaluations]
+[Write one historical row to REPORTING_SCHEMA.screenshot_evaluations]
                       |
                       v
-[F receives the updated full-history table daily]
+[Database consumer receives the full-history table daily]
 
 
-IMPORTANT STATUS RULES
+IMPORTANT STATUS AND FILENAME RULES
 
 Status is the first filename attribute.
 
@@ -75,145 +78,169 @@ The only accepted Status values are:
 
 The filename format is:
 
-Status__Region__Operator__Stage__YYYYMMDD_HHMMSS.png
+Status__Sub__App__KPI__YYYYMMDD_HHMMSS.png
 
 Examples:
 
-capture__Region-1__Operator-1__Stage-A__20260720_165748.png
-capture__Region-1__Operator-1__Stage-B__20260720_165752.png
-capturefailed__Region-1__Operator-1__Stage-C__20260720_165801.png
+capture__Sub-1__App-1__KPI-A__20260720_165748.png
+capture__Sub-1__App-1__KPI-B__20260720_165752.png
+capturefailed__Sub-1__App-1__KPI-C__20260720_165801.png
 
 The filename is the screenshot identifier. A separate Capture ID is not required.
 
-There will be approximately five Stages for every Region and Operator combination. This produces approximately five rows for each Region and Operator test run.
+There will be approximately five KPIs for every Sub and App combination. This produces approximately five rows for each Sub and App test run.
+
+
+PROMPT CSV RULES
+
+The prompt CSV columns are:
+
+sub
+app
+kpi
+prompt_version
+prompt
+
+Example:
+
+sub,app,kpi,prompt_version,prompt
+Sub-1,App-1,KPI-A,1,"Check whether the required visual elements are displayed correctly."
+
+Every Sub, App, and KPI combination must have one initial prompt row.
+
+All initial prompts will use prompt_version 1.
+
+When a prompt changes later:
+
+- Add another row for the same Sub, App, and KPI combination.
+- Increase prompt_version from 1 to 2, then 3, and so on.
+- Do not delete or overwrite previous prompt versions.
+- Use the highest prompt_version by default for new screenshots.
+- Do not automatically reprocess historical screenshots.
+- Keep the prompt_version on every SQL result so it is clear which prompt generated that result.
+
+Status is not part of prompt selection.
+
+Files with Status capture use Sub, App, and KPI to select the latest prompt.
+
+Files with Status capturefailed skip prompt selection and visual evaluation.
 
 
 MY TASK FLOW
 
-1. Contact T and S to confirm the screenshot format, status handling, filename structure, sample files, timestamp timezone, and permanent shared-folder path.
+1. Contact the screenshot process owners to confirm the screenshot format, status handling, filename structure, sample files, timestamp timezone, and permanent shared-folder path.
 
-2. Create the mapping CSV template with these columns:
+2. Send the attached prompt CSV to the prompt owner.
 
-   region
-   operator
-   stage
-   prompt_file
-   prompt_version
-   enabled
+3. Receive the completed prompt CSV with one version 1 prompt for every Sub, App, and KPI combination.
 
-3. Send the mapping template to N after N receives the criteria requested from E by J.
+4. Build the daily screenshot-processing flow.
 
-4. Receive the completed mapping and prompt files from N.
+5. Store the full evaluation history in REPORTING_SCHEMA.screenshot_evaluations.
 
-5. Build the daily screenshot-processing flow.
-
-6. Store the full evaluation history in bi_reporting.screenshot_evaluations.
-
-7. Give F the final table structure and confirm whether any additional reporting columns are required.
+6. Give the database consumer the final table structure and confirm whether any additional reporting columns are required.
 
 
-MESSAGE TO T AND S
+MESSAGE TO THE SCREENSHOT PROCESS OWNERS
 
-Hey T and S,
+Hey,
 
 I’m defining the input for the screenshot-validation process and need to confirm what the screenshot process will provide.
 
-For each Region and Operator combination, we expect to capture approximately five different Stages. For now, we can call them Stage A, Stage B, Stage C, and so on.
+For each Sub and App combination, we expect to capture approximately five different KPIs. For now, we can call them KPI A, KPI B, KPI C, and so on.
 
 For every screenshot, I need:
 
 - PNG format
 - Full screenshot at its original resolution
 - Status
-- Region
-- Operator
-- Stage
+- Sub
+- App
+- KPI
 - Capture date and time
 
 Status must be the first part of the filename. The only Status values will be capture and capturefailed.
 
 I’m proposing the following filename format:
 
-Status__Region__Operator__Stage__YYYYMMDD_HHMMSS.png
+Status__Sub__App__KPI__YYYYMMDD_HHMMSS.png
 
 For example:
 
-capture__Region-1__Operator-1__Stage-A__20260720_165748.png
-capture__Region-1__Operator-1__Stage-B__20260720_165752.png
-capturefailed__Region-1__Operator-1__Stage-C__20260720_165801.png
+capture__Sub-1__App-1__KPI-A__20260720_165748.png
+capture__Sub-1__App-1__KPI-B__20260720_165752.png
+capturefailed__Sub-1__App-1__KPI-C__20260720_165801.png
 
 The filename will be the screenshot identifier, so I do not need a separate Capture ID.
 
-Can you confirm whether this filename format works with the screenshot process? If you already have a format in place, please send me two or three exact filename examples covering different Stages.
+Can you confirm whether this filename format works with the screenshot process? If you already have a format in place, please send me two or three exact filename examples covering different KPIs.
 
 I also need to understand what happens when capture fails. Is no file created, or is a failure file or record produced? The daily process can only record capturefailed if an artifact is available for it to detect. If a failure artifact is produced, please send me an example of its filename and format.
 
 Please also send me:
 
 - The path to the permanent shared project folder where the PNGs will be saved
-- Two or three sample PNGs covering different Stages so I can test the technical ingestion
+- Two or three sample PNGs covering different KPIs so I can test the technical ingestion
 - Confirmation of the timezone used in the filename timestamp
 
 The sample PNGs do not need to be classified as good or bad. I only need them to verify that the process can find, read, and send the images correctly.
 
 
-MESSAGE TO N
+MESSAGE TO THE PROMPT OWNER
 
-Hi N,
+Hi,
 
-J has already asked E to obtain the criteria for each Region, Operator, and Stage combination.
+We have now received the criteria for the required Sub, App, and KPI combinations.
 
-Once you receive those criteria, I need the final prompt configuration for the screenshot-validation process.
+I have attached the CSV that will be used by the screenshot-validation process. It contains these columns:
 
-I will create and send you a mapping CSV template containing these columns:
-
-region
-operator
-stage
-prompt_file
+sub
+app
+kpi
 prompt_version
-enabled
+prompt
 
-I need you to:
+Please complete one row for every required Sub, App, and KPI combination.
 
-1. Confirm which prompt applies to each Region, Operator, and Stage combination.
+For this initial version:
 
-2. Create one prompt criteria file for each distinct set of criteria. The same prompt file can be reused where the criteria are identical.
+- Set prompt_version to 1 for every row.
+- Place the complete prompt text in the prompt column.
+- Include every combination from the received criteria.
+- Flag any combination where the criteria are missing or unclear.
 
-3. Populate the mapping CSV with the correct prompt file for every required combination.
+The prompt_version field records which prompt generated each screenshot result. For now, all prompts will be version 1.
 
-4. Set the initial approved prompts to version 1.
+If a prompt changes later, we will add a new row for the same Sub, App, and KPI with the next version number. We will not delete or overwrite the previous version. The highest version will be used by default for new screenshots.
 
-5. Increase the prompt version whenever the criteria change.
+Historical screenshots will not be automatically processed again when a new prompt version is added. Their existing results will remain linked to the prompt version originally used.
 
-6. Confirm when the prompt files and mapping are ready for production use.
+My code will add the technical instructions requiring a structured pass or fail result and a reason. The prompt column should contain the business criteria used to evaluate the screenshot.
 
-My code will add the technical instructions requiring a structured response containing a pass or fail result and a reason. Your prompt files should contain the actual business criteria used to decide whether the screenshot passes or fails.
+Labelled pass and fail screenshots are not production inputs to my process. If you need examples to test prompt quality, please coordinate those with the business criteria owner.
 
-Status is not part of the prompt mapping. Files with Status capture will use Region, Operator, and Stage to select a prompt. Files with Status capturefailed will skip prompt selection and visual validation.
-
-Labelled pass and fail screenshots are not production inputs to my process. If you need examples to test and validate the prompt quality, please coordinate those with E. I only need the final prompt files and the completed mapping.
-
-Please flag any combination for which the criteria are missing or unclear instead of creating assumptions inside the prompt.
+Please confirm once the attached CSV is complete and ready for use.
 
 
-EMAIL TO F
+EMAIL TO THE DATABASE CONSUMER
 
 Subject: Proposed screenshot evaluation table
 
-Hi F,
+Hi,
 
 I am defining the output table for the screenshot-validation process.
 
 The table will be:
 
-bi_reporting.screenshot_evaluations
+REPORTING_SCHEMA.screenshot_evaluations
 
 The process will update the table daily.
 
-I propose keeping the full evaluation history. Existing results will not be overwritten. If a screenshot is evaluated again with a different prompt version or model version, it will create a new evaluation row.
+I propose keeping the full evaluation history. Existing results will not be overwritten.
 
-Each row will represent one screenshot evaluation for a specific Region, Operator, and Stage.
+When a prompt changes, the latest prompt version will be used for new screenshots. Historical screenshots will not be automatically processed again. Each result will record the prompt version that generated it.
+
+Each row will represent one screenshot evaluation for a specific Sub, App, and KPI.
 
 The proposed columns are:
 
@@ -223,9 +250,9 @@ The proposed columns are:
 - source_filename: Complete source filename including the .png extension
 - image_sha256: Screenshot fingerprint used for audit and integrity checks
 - capture_status: capture or capturefailed, taken from the first filename attribute
-- region: Region from the screenshot filename
-- operator: Operator from the screenshot filename
-- stage: Screenshot stage, such as Stage A or Stage B
+- sub: Sub from the screenshot filename
+- app: App from the screenshot filename
+- kpi: KPI from the screenshot filename
 - captured_at: Date and time when the screenshot was captured
 - processing_status: Indicates whether technical processing succeeded
 - validation_result: Pass, fail, or blank when no valid visual result exists
