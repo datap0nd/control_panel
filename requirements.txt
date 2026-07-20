@@ -1,26 +1,37 @@
-Subject: Dashboard update - completed work and remaining confirmations
+Subject: Dashboard progress update - completed improvements and remaining decisions
 
 Hi all,
 
-Here is a short update on the dashboard work.
+Here is a summary of the dashboard improvements completed over the last few days and the decisions still required.
 
 Completed:
 
-- The Sales Plan comparison now accounts for partial months, so actuals are compared with the elapsed portion of the monthly plan.
-- The historical Active Policies trend has been corrected and checked.
-- The cancellation-rate calculation has been reviewed and accepted. We also confirmed that the monthly offer launched this year.
-- The Period behavior has been corrected so clearing the filter shows the full Sales history instead of automatically showing YTD. The final live-dashboard check is still required.
-- The source review found that the difference between total Sales of 185,660 and Aggregated New Policies of 171,808 is mainly Turkey. Turkey contributes 15,190 Sales, mostly E-Store, but no matching policy records appear in either Policy source. We also found that Aggregated Policy runs through 9 July, while Sales and Policy detail stop on 5 July.
+- Prorated every monthly Sales Plan value to match the days included in the actual data. A half-month of actuals is now compared with a half-month of Plan instead of the full monthly target.
+- Corrected the Sales KPI period behavior. Clearing the Period filter was silently forcing a YTD result; it now shows the complete available Sales history and avoids showing misleading Plan or prior-year comparisons without a selected period.
+- Corrected the Executive monthly charts. They were repeating cumulative values at each month, which made trends appear flat or overstated; each point now represents that individual month.
+- Aligned current and prior-year KPI comparisons to the exact selected dates rather than comparing broad calendar-month groups.
+- Restricted Sales Plan comparisons to the level supported by the Plan source. Unsupported channel, product, device, payment, and partner views now return no comparison instead of a misleading target.
+- Corrected the current Active Policies KPI so it shows the current active stock rather than every policy that was active at any time during the selected period.
+- Rebuilt the historical Active Policies trend as true month-end snapshots. Policies that closed later are now still counted in the months when they were active.
+- Corrected Active Monthly Subscribers to represent active subscribers at month-end rather than monthly sales or revenue activity.
+- Aligned the paid-monthly subscriber history with the confirmed launch timing, preventing comparisons against periods when the offer did not yet exist.
+- Reworked the cancellation rate so monthly cancellation events are compared with the appropriate opening subscriber base and then combined consistently across selected months.
+- Corrected Policy date handling so source dates are interpreted in the intended format and do not shift between days and months.
+- Standardized Policy statuses into clear Active, Expired, Cancelled, and Review groups so variations in source wording no longer change the dashboard classification.
+- Separated partner reporting from Sales reporting. Because the Sales sources do not contain a partner, account, or store field, partner views now use New Policies as an explicitly separate proxy rather than being presented as Sales.
+- Corrected the Sales-to-Policy reconciliation after confirming that Turkey is intentionally outside Policy coverage, so the comparison now uses an aligned country scope.
+- Reviewed the Attach Rate grain across Sales and Sellout and limited the comparison to dimensions supported by both sources, avoiding unsupported account or store-level matching.
+- Removed B2B as a separate Plan-mapping issue because the approved actual-versus-Plan comparison does not match individual Sales channels.
+- Corrected the September source header so the Plan month loads consistently with the other months.
 
 Still pending:
 
-- Confirm whether Turkey is intentionally excluded from the Policy extracts and align the July extraction dates.
-- Confirm whether the June cancellation increase is genuine business activity or a source-data issue.
-- Confirm the ERP scope: Gross or Net actuals, currency, latest closed month, Plan version, and whether the view should cover the total subsidiary or only the mapped program.
-- Confirm whether SES can be separated from Other in Sellout. Without this, the E-Store plus SES Attach actual-versus-Plan comparison should not be published.
-- Confirm whether the detailed Sales source tables contain any partner, account, or store field that is not included in the current extract.
+- Confirm the ERP scope: Gross or Net actuals, reporting currency, latest closed month, Plan version, and whether the view should cover the full subsidiary or only the mapped program.
+- Confirm whether SES can be separated from Other in Sellout. Until that mapping is reliable, the E-Store plus SES Attach actual-versus-Plan comparison should remain unpublished.
+- Complete the final live-dashboard validation of the Period filter behavior across KPI cards and charts.
+- Refresh the Information page with the confirmed definitions and complete the final dashboard quality review.
 
-Once these points are confirmed, I will update the Information page and complete the final dashboard review.
+Once the remaining business decisions are confirmed, the dashboard can move to final sign-off.
 
 Best regards,
 Rafael
