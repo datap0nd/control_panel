@@ -1,25 +1,73 @@
-Dashboard TODO
+createOrReplace
 
-TODO
+	ref table Measures_table
 
-1. ERP owner: Confirm the posted actual and Plan, Gross or Net, currency, latest closed month, and whether reporting should cover total subsidiary results or only the mapped program.
+		measure 'KPI Comparison Data End Date' =
+				CALCULATE (
+					MAX ( Sales[Reporting Date] ),
+					REMOVEFILTERS ()
+				)
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
 
-2. Sellout owner: Confirm whether the experience-store channel can be reliably separated from Other in Sellout. If yes, calculate Attach actual versus Plan using only the online-store and experience-store channels on both sides. Until then, do not publish that comparison.
+		measure 'KPI Comparison Period Start Date' =
+				VAR _DataStart =
+					CALCULATE (
+						MIN ( Sales[Reporting Date] ),
+						REMOVEFILTERS ()
+					)
+				VAR _DataEnd = [KPI Comparison Data End Date]
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
+				VAR _SelectedStart = MIN ( 'Date'[Date] )
+				RETURN
+					IF (
+						ISBLANK ( _DataStart ) || ISBLANK ( _DataEnd ),
+						BLANK (),
+						IF ( _HasDateContext, MAX ( _SelectedStart, _DataStart ), _DataStart )
+					)
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
 
-3. Policy owner: Confirm whether the June paid-monthly cancellation spike is genuine or a source-data issue.
+		measure 'KPI Comparison Period End Date' =
+				VAR _DataEnd = [KPI Comparison Data End Date]
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
+				VAR _SelectedEnd = MAX ( 'Date'[Date] )
+				RETURN
+					IF (
+						ISBLANK ( _DataEnd ),
+						BLANK (),
+						IF ( _HasDateContext, MIN ( _SelectedEnd, _DataEnd ), _DataEnd )
+					)
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
 
-4. Sales source schemas: Check the exact daily-country and monthly aggregate tables for any partner, account, or store field. The Revenue table is already checked and has none.
+		measure 'Policy Period Start Date' =
+				VAR _DataStart = [Policy Data Start Date]
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
+				VAR _SelectedStart = MIN ( 'Date'[Date] )
+				RETURN
+					IF (
+						ISBLANK ( _DataStart ),
+						BLANK (),
+						IF ( _HasDateContext, _SelectedStart, _DataStart )
+					)
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
 
-After the answers
-
-- Implement the confirmed Attach and ERP scopes.
-- Update the Information page.
-- Run final dashboard QA.
-
-DONE
-
-- Sales Plan proration was applied and validated.
-- Historical Active Policies trend was applied and visually checked.
-- Cancellation-rate calculation was accepted, the monthly launch year was confirmed, and the source header was corrected.
-- Revenue schema was reviewed: it has channel-level data but no partner, account, or store field.
-- The Active Policy Count field in Revenue was identified and intentionally deferred.
+		measure 'Policy Period End Date' =
+				VAR _DataEnd = [Policy Data End Date]
+				VAR _HasDateContext = [Policy Date Context Flag] = 1
+				VAR _SelectedEnd = MAX ( 'Date'[Date] )
+				RETURN
+					IF (
+						ISBLANK ( _DataEnd ),
+						BLANK (),
+						IF ( _HasDateContext, MIN ( _SelectedEnd, _DataEnd ), _DataEnd )
+					)
+			formatString: yyyy-mm-dd
+			isHidden
+			displayFolder: Helper
