@@ -1,79 +1,27 @@
-# Power BI Dashboard To-Do
+# Dashboard To-Do
 
-Scope: work-PC Power BI semantic model and report. The browser dashboard is out of scope.
+## Done
 
-## Completed
+- Cancellation-rate calculation confirmed.
+- B2B Plan mapping closed.
+- E-Store versus Other attach bucket reviewed.
+- Paid-monthly start-date question sent to the table owner.
+- Historical Active Policies TMDL applied.
 
-- [x] Approve the weighted monthly cancellation-rate formula and benchmark.
-- [x] Remove B2B Plan mapping as an unresolved topic. Actual-versus-Plan reporting remains at month plus subsidiary, without channel matching.
-- [x] Review and accept the E-Store versus Other attach bucket.
-- [x] Send the source owner the question about the paid-monthly population beginning in February 2026.
-- [x] Apply the Historical Active Policies month-end trend TMDL.
+## Next
 
-## Immediate validation after the applied TMDL
+1. **Validate Active Policies:** refresh the model and confirm the trend shows month-end stock, the latest partial month stops at the data cutoff, and future months are blank.
 
-- [ ] Refresh or recalculate the model.
-- [ ] Confirm every Historical Active Policies point is a month-end stock, not a count of policies active at any time during the month.
-- [ ] Confirm the latest partial month uses the policy data cutoff rather than calendar month-end.
-- [ ] Confirm months after the data cutoff are blank.
-- [ ] Check the trend under subsidiary and service-type filters.
+2. **Get the remaining business answers:**
+   - Why does the paid-monthly population begin in February 2026?
+   - Are the January-March and June cancellation spikes genuine?
+   - Should ERP show total-subsidiary revenue or program-only revenue?
+   - What identifies export versus retained Sellout?
 
-## Waiting for owner or business responses
+3. **Fix Plan comparison:** change `Sept` to `Sep`, prorate the open-month Plan by elapsed calendar days, and update the Information page.
 
-- [ ] Confirm whether the paid-monthly population genuinely starts in February 2026 or whether earlier records are missing because of migration, extraction, or payment mapping.
-- [ ] Ask the business to validate the cancellation pattern: January 200.0%, February 650.0%, March 107.1%, and June 38.5%.
-- [ ] Ask the ERP gating question: should ERP show total-subsidiary financial context or only revenue attributable to the program?
-- [ ] Confirm what identifies export versus retained or non-export Sellout.
+4. **Improve detail only when mappings exist:** add one level below E-Store versus Other, replace the export placeholder, and rename `Active Partners` to `Partners with New Policies`.
 
-## ERP integration after the gating answer
+5. **Final QA last:** remove misleading ERP placeholders and leftover debug content, run one complete DAX benchmark, reload Desktop, and visually check every report page.
 
-- [ ] Keep current Sales-derived Gross Revenue clearly separated from ERP revenue.
-- [ ] If the answer is total-subsidiary context, build a clearly labelled Subsidiary ERP Net Sales block.
-- [ ] If the answer is program-attributable revenue, obtain an approved ERP-to-program mapping before building visuals.
-- [ ] Confirm Net Sales versus Gross Sales. Recommended default: Net Sales.
-- [ ] Preserve the original Version field and identify Posted Actual, Plan, and Forecast.
-- [ ] Confirm the latest officially closed month, reporting currency, unit scale, subsidiaries, and P&L lines.
-- [ ] Compare ERP actual only with the matching P&L Plan for identical months, subsidiaries, currency, and line definition.
-- [ ] Add Actual, Plan, attainment, variance amount, YoY, monthly trend, and subsidiary variance.
-- [ ] Keep fake or Sales-derived ERP-labelled visuals disabled until the real ERP fact is validated.
-
-## Sales Plan
-
-- [ ] Correct the September header from `Sept` to `Sep` in the source workbook.
-- [ ] Implement elapsed-calendar-day proration for the open month using the actual data cutoff.
-- [ ] Validate the prorated Plan total and attainment by subsidiary and overall.
-- [ ] Apply the Information Page HTML TMDL so the current full-month Plan limitation is visible until proration is implemented.
-- [ ] After proration is live, replace the Information-page TODO wording with the implemented rule.
-
-## Attach-rate detail
-
-- [x] Keep the reviewed E-Store versus Other bucket.
-- [ ] Decide what one deeper level the business actually needs: detailed channel, account, partner, or store.
-- [ ] Obtain a reliable shared key or owner-controlled crosswalk for that deeper level.
-- [ ] Replace the placeholder export exclusion rows with an approved source flag or maintained account list.
-- [ ] Keep unsupported detailed attach rates hidden until the crosswalk and export rule reconcile.
-
-## Partner metric cleanup
-
-- [ ] Rename `Active Partners` to `Partners with New Policies` unless the business wants a true current-status partner metric.
-- [ ] Exclude blank, placeholder, and numeric-only partner values consistently.
-- [ ] Re-run the partner benchmark after the exclusion rule is fixed.
-
-## Information page and report wording
-
-- [ ] Confirm the Information page states the implemented metric definitions and supported grains.
-- [ ] Remove stale claims of channel-level Plan matching.
-- [ ] State that current Gross Revenue is not ERP revenue.
-- [ ] State that the E-Store versus Other attach bucket is reviewed and that one deeper level remains pending.
-- [ ] Keep paid-monthly source anomalies listed as awaiting owner validation.
-
-## Final production-signoff plan, tackle last
-
-- [ ] Create one comprehensive live DAX benchmark covering KPI values, periods, numerators, denominators, and comparison measures.
-- [ ] Remove or hide misleading ERP placeholders, leftover debug pages, orphaned measures, and stale tooltips.
-- [ ] Verify blank guards for Attach variance measures and blank matrix rows.
-- [ ] Run the PBIR layout and field-reference audit.
-- [ ] Reload Power BI Desktop after the final batch of model and report changes.
-- [ ] Validate every visible page using a fresh PDF export or rendered screenshots.
-- [ ] Test slicers, default periods, partial-month behavior, tooltips, navigation, and unsupported-grain blanks.
-- [ ] Record final benchmarks and only then mark the report production-ready.
+Do not build ERP visuals until the total-subsidiary versus program-only question is answered.
