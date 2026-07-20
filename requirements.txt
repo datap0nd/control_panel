@@ -1,74 +1,81 @@
-SCREENSHOT VALIDATION - AGREED FLOW
+SCREENSHOT VALIDATION - FLOWCHART, TASKS, AND READY-TO-SEND MESSAGES
 
 
-1. PURPOSE
+FLOWCHART
 
-The process will run daily, read screenshots from a permanent shared folder, select the correct visual criteria, evaluate each successfully captured screenshot with the configured vision model, and write the result to SQL.
+SETUP FLOW
 
-The process finishes only when the SQL result has been written successfully.
-
-
-2. RESPONSIBILITIES
-
-Business criteria coordinator
-
-- Contacts the relevant business teams.
-- Obtains the criteria for each Region, Operator, and Stage combination.
-- Business criteria collection is already in progress.
-
-Prompt owner
-
-- Receives the business criteria.
-- Creates the prompt criteria files.
-- Completes the prompt mapping.
-- Owns prompt versions and prompt changes.
-- Coordinates any labelled pass and fail examples needed for prompt testing.
-
-Screenshot process owners
-
-- Produce the screenshots.
-- Save the images as PNG files.
-- Apply the agreed filename convention.
-- Provide the permanent shared-folder path.
-- Explain what artifact is produced when capture fails.
-- Provide a few unlabelled sample PNGs for technical ingestion testing.
-
-Pipeline owner
-
-- Creates the mapping CSV template.
-- Reads and validates the screenshot filenames.
-- Selects the correct prompt.
-- Calls the configured vision model.
-- Validates the model response.
-- Writes the final evaluation to SQL.
-- Prevents duplicate processing.
-
-Database consumer
-
-- Consumes the daily output table.
-- Confirms whether any additional reporting columns are required.
+[J requests the criteria from E]
+                 |
+                 v
+[E obtains criteria for every Region, Operator, and Stage]
+                 |
+                 v
+[N creates the prompt files and completes the mapping CSV]
+                 |
+                 v
+[Prompt configuration is ready]
 
 
-3. SCREENSHOT IDENTIFIER AND FILENAME
+DAILY SCREENSHOT FLOW
 
-The filename is the screenshot identifier. A separate Capture ID is not required.
+[T and S capture about five Stages per Region and Operator]
+                 |
+                 v
+[Save each PNG using the status-first filename convention]
+                 |
+                 v
+[PNG becomes available in the permanent shared folder]
+                 |
+                 v
+[Daily process discovers a new PNG]
+                 |
+                 v
+[Parse Status, Region, Operator, Stage, and timestamp]
+                 |
+                 v
+        [Is Status capturefailed?]
+                 |
+       +---------+---------+
+       |                   |
+      YES                  NO
+       |                   |
+       v                   v
+[Skip prompt and       [Status is capture]
+ model evaluation]            |
+       |                       v
+       |              [Find N's prompt using
+       |               Region, Operator, Stage]
+       |                       |
+       |                       v
+       |              [Evaluate the screenshot]
+       |                       |
+       |              +--------+--------+
+       |              |                 |
+       |              v                 v
+       |        [Pass or fail]    [Technical error]
+       |              |                 |
+       +--------------+-----------------+
+                      |
+                      v
+[Write one historical row to bi_reporting.screenshot_evaluations]
+                      |
+                      v
+[F receives the updated full-history table daily]
 
-The attributes must appear in this order:
 
-1. Status
-2. Region
-3. Operator
-4. Stage
-5. Capture date and time
+IMPORTANT STATUS RULES
 
-Filename format:
-
-Status__Region__Operator__Stage__YYYYMMDD_HHMMSS.png
+Status is the first filename attribute.
 
 The only accepted Status values are:
 
 - capture
 - capturefailed
+
+The filename format is:
+
+Status__Region__Operator__Stage__YYYYMMDD_HHMMSS.png
 
 Examples:
 
@@ -76,174 +83,44 @@ capture__Region-1__Operator-1__Stage-A__20260720_165748.png
 capture__Region-1__Operator-1__Stage-B__20260720_165752.png
 capturefailed__Region-1__Operator-1__Stage-C__20260720_165801.png
 
-The screenshot_id stored in SQL will be the complete filename without the .png extension.
+The filename is the screenshot identifier. A separate Capture ID is not required.
 
-There will be approximately five Stages for every Region and Operator combination. This produces approximately five evaluation rows for each Region and Operator test run.
+There will be approximately five Stages for every Region and Operator combination. This produces approximately five rows for each Region and Operator test run.
 
-The Region, Operator, and Stage values in the filename must match the values in the prompt mapping.
 
-The design assumes that the screenshot process will not create two files with the same Status, Region, Operator, Stage, and timestamp within the same second.
+MY TASK FLOW
 
+1. Contact T and S to confirm the screenshot format, status handling, filename structure, sample files, timestamp timezone, and permanent shared-folder path.
 
-4. SHARED-FOLDER INPUT
+2. Create the mapping CSV template with these columns:
 
-The screenshot process owners will provide the path to one permanent shared project folder.
+   region
+   operator
+   stage
+   prompt_file
+   prompt_version
+   enabled
 
-The daily pipeline will read new PNG files from that folder.
+3. Send the mapping template to N after N receives the criteria requested from E by J.
 
-The screenshot process owners do not need to provide labelled good or bad examples. The pipeline owner only needs two or three representative PNGs to test that the files can be found, opened, parsed, and sent correctly.
+4. Receive the completed mapping and prompt files from N.
 
-One point must still be confirmed: when Status is capturefailed, the screenshot process must produce an artifact that the daily pipeline can discover. If no file or record is produced, the pipeline has no way to detect or store the capture failure.
+5. Build the daily screenshot-processing flow.
 
+6. Store the full evaluation history in bi_reporting.screenshot_evaluations.
 
-5. PROMPT MAPPING
+7. Give F the final table structure and confirm whether any additional reporting columns are required.
 
-The pipeline owner will create the mapping CSV template.
 
-The mapping columns are:
+MESSAGE TO T AND S
 
-region
-operator
-stage
-prompt_file
-prompt_version
-enabled
+Hey T and S,
 
-Example row:
+I’m defining the input for the screenshot-validation process and need to confirm what the screenshot process will provide.
 
-Region-1,Operator-1,Stage-A,prompts/region-1_operator-1_stage-a.txt,1,true
+For each Region and Operator combination, we expect to capture approximately five different Stages. For now, we can call them Stage A, Stage B, Stage C, and so on.
 
-Status is not part of the prompt mapping.
-
-Files with Status capture use the Region, Operator, and Stage values to select a prompt.
-
-Files with Status capturefailed skip prompt selection and skip the vision model.
-
-The prompt owner may reuse the same prompt file for multiple combinations when the criteria are identical.
-
-When prompt criteria change, the prompt owner must increase prompt_version. Previous evaluation rows remain in SQL as history.
-
-A missing, disabled, or duplicated mapping is a technical processing error. It is not a visual failure.
-
-
-6. MODEL PROCESSING
-
-For a file with Status capture, the pipeline will:
-
-1. Validate that the file is a readable PNG.
-2. Parse Status, Region, Operator, Stage, and captured time from the filename.
-3. Find exactly one enabled mapping for the Region, Operator, and Stage.
-4. Load the mapped prompt criteria file.
-5. Add the fixed technical instructions and response format.
-6. Send the screenshot and criteria to the configured vision model.
-7. Accept only a structured pass or fail result with a non-empty reason.
-8. Write the final evaluation to SQL.
-
-The valid visual results are:
-
-- pass
-- fail
-
-A timeout, unavailable service, invalid response, missing mapping, or unreadable PNG is a technical processing error. A technical processing error must never be converted into a visual fail.
-
-
-7. CAPTURE-FAILURE PROCESSING
-
-For an input with Status capturefailed, the pipeline will:
-
-1. Parse the available filename attributes.
-2. Skip prompt selection.
-3. Skip the vision model.
-4. Write a SQL row showing that capture failed and validation was not performed.
-
-The output will be:
-
-capture_status = capturefailed
-processing_status = skipped
-validation_result = blank
-
-
-8. SQL OUTPUT
-
-Target table:
-
-REPORTING_SCHEMA.screenshot_evaluations
-
-Update frequency:
-
-Daily
-
-History:
-
-Full history will be retained. Existing evaluations will not be overwritten. Re-evaluation with a different prompt version or model version creates a new evaluation row.
-
-Row definition:
-
-One row represents one screenshot evaluation using one prompt version and one model version.
-
-Proposed columns:
-
-- evaluation_id: Unique identifier for the evaluation
-- evaluation_key: Prevents the same evaluation from being created twice
-- screenshot_id: Complete source filename without the .png extension
-- source_filename: Complete source filename including the .png extension
-- image_sha256: Screenshot fingerprint for integrity and audit
-- capture_status: capture or capturefailed, taken from the first filename attribute
-- region: Region taken from the filename
-- operator: Operator taken from the filename
-- stage: Stage taken from the filename
-- captured_at: Capture date and time taken from the filename
-- processing_status: succeeded, skipped, or error
-- validation_result: pass, fail, or blank
-- validation_reason: Reason for a valid pass or fail result
-- prompt_version: Prompt version used for the evaluation
-- model_id: Model version used for the evaluation
-- attempt_count: Number of processing attempts
-- error_code: Technical error category
-- error_message: Technical error detail
-- created_at: Date and time when the evaluation row was created
-- completed_at: Date and time when processing finished
-
-Raw model responses will not be stored in the reporting table.
-
-Technical errors will be stored as:
-
-processing_status = error
-validation_result = blank
-error_code = populated
-error_message = populated
-
-
-9. DAILY END-TO-END FLOW
-
-1. The screenshot process saves the daily files in the permanent shared folder.
-
-2. The pipeline discovers PNG files that have not already been processed for the same prompt and model version.
-
-3. The pipeline validates and parses the filename.
-
-4. If Status is capturefailed, the pipeline skips visual validation and writes a skipped row to SQL.
-
-5. If Status is capture, the pipeline finds the prompt using Region, Operator, and Stage.
-
-6. The pipeline sends the screenshot and selected criteria to the configured vision model.
-
-7. A valid pass or fail result is written to SQL with the reason.
-
-8. A technical error is written to SQL with a blank validation result and populated error details.
-
-9. The database consumer receives the updated full-history table on the daily schedule.
-
-
-10. READY-TO-SEND MESSAGE TO THE SCREENSHOT PROCESS OWNERS
-
-Hey,
-
-I’m finalising the input requirements for the screenshot-validation process and need to confirm what the screenshot process will provide.
-
-For each Region and Operator combination, we expect approximately five different Stages. For now, we can call them Stage A, Stage B, Stage C, and so on.
-
-For each screenshot, I need:
+For every screenshot, I need:
 
 - PNG format
 - Full screenshot at its original resolution
@@ -255,11 +132,11 @@ For each screenshot, I need:
 
 Status must be the first part of the filename. The only Status values will be capture and capturefailed.
 
-The proposed filename format is:
+I’m proposing the following filename format:
 
 Status__Region__Operator__Stage__YYYYMMDD_HHMMSS.png
 
-Examples:
+For example:
 
 capture__Region-1__Operator-1__Stage-A__20260720_165748.png
 capture__Region-1__Operator-1__Stage-B__20260720_165752.png
@@ -267,9 +144,9 @@ capturefailed__Region-1__Operator-1__Stage-C__20260720_165801.png
 
 The filename will be the screenshot identifier, so I do not need a separate Capture ID.
 
-Can you confirm whether this format works with the screenshot process? If you already have a format in place, please send me two or three exact filename examples covering different Stages.
+Can you confirm whether this filename format works with the screenshot process? If you already have a format in place, please send me two or three exact filename examples covering different Stages.
 
-I also need to understand what happens when capture fails. Is no file created, or is some kind of failure file or record produced? The daily process can only record capturefailed if an artifact is available for it to detect.
+I also need to understand what happens when capture fails. Is no file created, or is a failure file or record produced? The daily process can only record capturefailed if an artifact is available for it to detect. If a failure artifact is produced, please send me an example of its filename and format.
 
 Please also send me:
 
@@ -280,15 +157,15 @@ Please also send me:
 The sample PNGs do not need to be classified as good or bad. I only need them to verify that the process can find, read, and send the images correctly.
 
 
-11. READY-TO-SEND MESSAGE TO THE PROMPT OWNER
+MESSAGE TO N
 
-Hi,
+Hi N,
 
-The business criteria for each Region, Operator, and Stage combination have already been requested from the business criteria coordinator.
+J has already asked E to obtain the criteria for each Region, Operator, and Stage combination.
 
 Once you receive those criteria, I need the final prompt configuration for the screenshot-validation process.
 
-I will create and send you a mapping CSV template with these columns:
+I will create and send you a mapping CSV template containing these columns:
 
 region
 operator
@@ -301,7 +178,7 @@ I need you to:
 
 1. Confirm which prompt applies to each Region, Operator, and Stage combination.
 
-2. Create one prompt criteria file for each distinct set of criteria. The same prompt file can be reused when the criteria are identical.
+2. Create one prompt criteria file for each distinct set of criteria. The same prompt file can be reused where the criteria are identical.
 
 3. Populate the mapping CSV with the correct prompt file for every required combination.
 
@@ -311,26 +188,28 @@ I need you to:
 
 6. Confirm when the prompt files and mapping are ready for production use.
 
-My code will add the technical instructions requiring a structured pass or fail result and a reason. Your prompt files should contain the business criteria used to decide whether the screenshot passes or fails.
+My code will add the technical instructions requiring a structured response containing a pass or fail result and a reason. Your prompt files should contain the actual business criteria used to decide whether the screenshot passes or fails.
 
-Labelled pass and fail screenshots are not production inputs to my process. If you need examples to test and validate prompt quality, please coordinate those with the business criteria coordinator. I only need the final prompt files and completed mapping.
+Status is not part of the prompt mapping. Files with Status capture will use Region, Operator, and Stage to select a prompt. Files with Status capturefailed will skip prompt selection and visual validation.
+
+Labelled pass and fail screenshots are not production inputs to my process. If you need examples to test and validate the prompt quality, please coordinate those with E. I only need the final prompt files and the completed mapping.
 
 Please flag any combination for which the criteria are missing or unclear instead of creating assumptions inside the prompt.
 
 
-12. READY-TO-SEND EMAIL TO THE DATABASE CONSUMER
+EMAIL TO F
 
 Subject: Proposed screenshot evaluation table
 
-Hi,
+Hi F,
 
 I am defining the output table for the screenshot-validation process.
 
-The proposed table is:
+The table will be:
 
-REPORTING_SCHEMA.screenshot_evaluations
+bi_reporting.screenshot_evaluations
 
-The table will be updated daily.
+The process will update the table daily.
 
 I propose keeping the full evaluation history. Existing results will not be overwritten. If a screenshot is evaluated again with a different prompt version or model version, it will create a new evaluation row.
 
@@ -338,58 +217,44 @@ Each row will represent one screenshot evaluation for a specific Region, Operato
 
 The proposed columns are:
 
-- evaluation_id
-- evaluation_key
-- screenshot_id
-- source_filename
-- image_sha256
-- capture_status
-- region
-- operator
-- stage
-- captured_at
-- processing_status
-- validation_result
-- validation_reason
-- prompt_version
-- model_id
-- attempt_count
-- error_code
-- error_message
-- created_at
-- completed_at
+- evaluation_id: Unique identifier for the evaluation
+- evaluation_key: Prevents the same evaluation from being created twice
+- screenshot_id: Complete source filename without the .png extension
+- source_filename: Complete source filename including the .png extension
+- image_sha256: Screenshot fingerprint used for audit and integrity checks
+- capture_status: capture or capturefailed, taken from the first filename attribute
+- region: Region from the screenshot filename
+- operator: Operator from the screenshot filename
+- stage: Screenshot stage, such as Stage A or Stage B
+- captured_at: Date and time when the screenshot was captured
+- processing_status: Indicates whether technical processing succeeded
+- validation_result: Pass, fail, or blank when no valid visual result exists
+- validation_reason: Reason provided for the pass or fail result
+- prompt_version: Version of the prompt used for the evaluation
+- model_id: Model version used for the evaluation
+- attempt_count: Number of processing attempts
+- error_code: Technical error category
+- error_message: Technical error details
+- created_at: Date and time when the evaluation row was created
+- completed_at: Date and time when processing finished
 
-The capture_status field will contain capture or capturefailed, based on the first attribute of the screenshot filename.
+Technical errors will be stored in the same table. They will be recorded as follows:
 
-Technical errors will be stored with processing_status set to error, validation_result left blank, and error_code and error_message populated. This prevents a technical problem from being reported as a visual failure.
+processing_status = error
+validation_result = blank
+error_code = populated
+error_message = populated
 
-Capture failures will be stored with capture_status set to capturefailed, processing_status set to skipped, and validation_result left blank.
+This ensures that a technical processing problem is not incorrectly reported as a visual failure.
+
+If screenshot capture fails before visual validation, the row will be recorded as follows:
+
+capture_status = capturefailed
+processing_status = skipped
+validation_result = blank
 
 Raw model responses will not be stored in the reporting table.
 
 Please confirm whether you require any additional columns beyond those listed above.
 
 Thanks.
-
-
-13. REMAINING CONFIRMATIONS
-
-From the screenshot process owners:
-
-- Confirm the filename format.
-- Confirm the exact Region, Operator, and Stage values that will appear in filenames.
-- Confirm what artifact is produced for capturefailed.
-- Provide the permanent shared-folder path.
-- Provide two or three unlabelled sample PNGs.
-- Confirm the timestamp timezone.
-
-From the prompt owner:
-
-- Return the completed mapping CSV.
-- Return the prompt criteria files.
-- Confirm prompt version 1 is ready.
-- Flag missing or unclear criteria.
-
-From the database consumer:
-
-- Confirm whether any additional output columns are required.
