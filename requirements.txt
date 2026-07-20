@@ -1,126 +1,26 @@
-createOrReplace
+Subject: Dashboard update - completed work and remaining confirmations
 
-	ref table Measures_table
+Hi all,
 
-		measure 'KPI Comparison Data End Date' =
-				CALCULATE (
-					MAX ( Sales[Reporting Date] ),
-					REMOVEFILTERS ()
-				)
-			formatString: yyyy-mm-dd
-			isHidden
-			displayFolder: Helper
+Here is a short update on the dashboard work.
 
-		measure 'KPI Comparison Period Start Date' =
-				VAR _DataStart =
-					CALCULATE (
-						MIN ( Sales[Reporting Date] ),
-						REMOVEFILTERS ()
-					)
-				VAR _DataEnd = [KPI Comparison Data End Date]
-				VAR _HasDateContext = [Policy Date Context Flag] = 1
-				VAR _SelectedStart = MIN ( 'Date'[Date] )
-				RETURN
-					IF (
-						ISBLANK ( _DataStart ) || ISBLANK ( _DataEnd ),
-						BLANK (),
-						IF ( _HasDateContext, MAX ( _SelectedStart, _DataStart ), _DataStart )
-					)
-			formatString: yyyy-mm-dd
-			isHidden
-			displayFolder: Helper
+Completed:
 
-		measure 'KPI Comparison Period End Date' =
-				VAR _DataEnd = [KPI Comparison Data End Date]
-				VAR _HasDateContext = [Policy Date Context Flag] = 1
-				VAR _SelectedEnd = MAX ( 'Date'[Date] )
-				RETURN
-					IF (
-						ISBLANK ( _DataEnd ),
-						BLANK (),
-						IF ( _HasDateContext, MIN ( _SelectedEnd, _DataEnd ), _DataEnd )
-					)
-			formatString: yyyy-mm-dd
-			isHidden
-			displayFolder: Helper
+- The Sales Plan comparison now accounts for partial months, so actuals are compared with the elapsed portion of the monthly plan.
+- The historical Active Policies trend has been corrected and checked.
+- The cancellation-rate calculation has been reviewed and accepted. We also confirmed that the monthly offer launched this year.
+- The Period behavior has been corrected so clearing the filter shows the full Sales history instead of automatically showing YTD. The final live-dashboard check is still required.
+- The source review found that the difference between total Sales of 185,660 and Aggregated New Policies of 171,808 is mainly Turkey. Turkey contributes 15,190 Sales, mostly E-Store, but no matching policy records appear in either Policy source. We also found that Aggregated Policy runs through 9 July, while Sales and Policy detail stop on 5 July.
 
-		measure 'HTML KPI Sales Volume' =
-				VAR _AsOfDate = COALESCE ( [KPI Sales Sparkline Anchor Date], MAX ( 'Date'[Date] ), TODAY () )
-				VAR _SparkStart = DATE ( YEAR ( EDATE ( _AsOfDate, -4 ) ), MONTH ( EDATE ( _AsOfDate, -4 ) ), 1 )
-				VAR _SparkEnd = DATE ( YEAR ( _AsOfDate ), MONTH ( _AsOfDate ), 1 )
-				VAR _StartLabel = FORMAT ( _SparkStart, "MM/yy" )
-				VAR _EndLabel = FORMAT ( _SparkEnd, "MM/yy" )
-				VAR _Css =
-					"<style>" &
-					"*{box-sizing:border-box}.kpi-host{width:100%;height:100%;padding:0;margin:0;font-family:Segoe UI,Arial,sans-serif;color:#17212b}.kpi-card{position:relative;width:100%;height:100%;min-height:198px;padding:12px;display:grid;grid-template-rows:auto auto 1fr auto;gap:8px;background:#fbfcfe;border:1px solid #d8dee8;border-radius:8px;box-shadow:0 10px 26px rgba(23,33,43,.08);overflow:hidden}.card-head{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start}.label{color:#6b7280;font-size:11px;line-height:1.25;font-weight:650}.value{color:#17212b;font-size:26px;line-height:1;font-weight:750;letter-spacing:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.info-wrap{display:inline-grid;place-items:center}.info-button{width:18px;height:18px;display:grid;place-items:center;border:1px solid #c8d8e8;border-radius:50%;background:#e8f1f9;color:#1f4e79;font-size:11px;line-height:1;font-weight:800}.tooltip{position:absolute;z-index:5;top:40px;left:10px;right:10px;width:auto;padding:9px 10px;border:1px solid #b8c3d1;border-radius:7px;background:#fbfcfe;box-shadow:0 12px 26px rgba(23,33,43,.16);color:#17212b;opacity:0;visibility:hidden;transform:translateY(-3px);transition:opacity 160ms ease,transform 160ms ease,visibility 160ms ease;pointer-events:none}.tooltip strong{display:block;margin-bottom:4px;color:#17212b;font-size:10px;line-height:1.25}.tooltip span{display:block;color:#6b7280;font-size:9.5px;line-height:1.35}.info-wrap:hover .tooltip,.info-wrap:focus-within .tooltip{opacity:1;visibility:visible;transform:translateY(0)}.spark-wrap{display:grid;gap:3px;margin-top:1px}.spark{width:100%;height:48px;display:block}.axis{display:flex;justify-content:space-between;color:#8b95a3;font-size:8.5px;line-height:1;font-weight:650}.compare-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:5px;margin-top:1px}.compare{min-width:0;border:1px solid #d8dee8;border-radius:6px;background:#f6f8fb;padding:5px 6px}.compare span{display:block;overflow:hidden;color:#6b7280;font-size:8.5px;line-height:1.15;text-overflow:ellipsis;white-space:nowrap}.compare strong{display:block;margin-top:3px;color:#17212b;font-size:10.5px;line-height:1.1;white-space:nowrap}.compare.good strong{color:#0f766e}.compare.bad strong{color:#9b2c2c}.compare.watch strong{color:#9a6700}.compare.na strong{color:#8b95a3}</style>"
-				VAR _SparkTemplatePrefix = "<div class=""spark-wrap""><svg class=""spark"" viewBox=""0 0 156 42"" preserveAspectRatio=""none"" role=""img""><polygon points=""0,42 "
-				VAR _SparkTemplateMiddle = " 156,42"" fill=""#e8f1f9""></polygon><polyline points="""
-				VAR _SparkTemplateSuffix = """ fill=""none"" stroke=""#1f4e79"" stroke-width=""2.2"" stroke-linecap=""round"" stroke-linejoin=""round""></polyline></svg><div class=""axis""><span>" & _StartLabel & "</span><span>" & _EndLabel & "</span></div></div>"
-				VAR _Series =
-					ADDCOLUMNS (
-						GENERATESERIES ( 0, 4, 1 ),
-						"MetricValue",
-							VAR _MonthStart = EDATE ( _SparkStart, [Value] )
-							RETURN COALESCE ( CALCULATE ( [Sales Volume], REMOVEFILTERS ( 'Date' ), REMOVEFILTERS ( 'Date Filter' ), DATESBETWEEN ( 'Date'[Date], _MonthStart, EOMONTH ( _MonthStart, 0 ) ) ), 0 )
-					)
-				VAR _MinValue = MINX ( _Series, [MetricValue] )
-				VAR _MaxValue = MAXX ( _Series, [MetricValue] )
-				VAR _Range = IF ( _MaxValue = _MinValue, 1, _MaxValue - _MinValue )
-				VAR _Points =
-					CONCATENATEX (
-						_Series,
-						VAR _X = [Value] * 39
-						VAR _Y = 5 + DIVIDE ( _MaxValue - [MetricValue], _Range, 0 ) * 30
-						RETURN FORMAT ( _X, "0" ) & "," & FORMAT ( _Y, "0" ),
-						" ",
-						[Value],
-						ASC
-					)
-				VAR _HasSelectedPeriod = [Policy Date Context Flag] = 1
-				VAR _RawValue = [Sales QTY CY]
-				VAR _Value = IF ( ISBLANK ( _RawValue ), "--", FORMAT ( _RawValue, "#,##0" ) )
-				VAR _Comp1Value = IF ( _HasSelectedPeriod, DIVIDE ( [Sales QTY CY] - [Sales QTY LY], [Sales QTY LY] ) )
-				VAR _Comp1Class = IF ( ISBLANK ( _Comp1Value ), "na", IF ( _Comp1Value >= 0, "good", "bad" ) )
-				VAR _Comp1Text = IF ( ISBLANK ( _Comp1Value ), "n/a", FORMAT ( _Comp1Value, "+0.0%;-0.0%;0.0%" ) )
-				VAR _Comp2Value = IF ( _HasSelectedPeriod, DIVIDE ( [Sales QTY CY] - [Sales QTY LY-1], [Sales QTY LY-1] ) )
-				VAR _Comp2Class = IF ( ISBLANK ( _Comp2Value ), "na", IF ( _Comp2Value >= 0, "good", "bad" ) )
-				VAR _Comp2Text = IF ( ISBLANK ( _Comp2Value ), "n/a", FORMAT ( _Comp2Value, "+0.0%;-0.0%;0.0%" ) )
-				VAR _Comp3Value = IF ( _HasSelectedPeriod, DIVIDE ( [Sales QTY CY], [Sales Plan QTY] ) )
-				VAR _Comp3Class = IF ( ISBLANK ( _Comp3Value ), "na", IF ( _Comp3Value >= 1, "good", IF ( _Comp3Value >= 0.95, "watch", "bad" ) ) )
-				VAR _Comp3Text = IF ( ISBLANK ( _Comp3Value ), "n/a", FORMAT ( _Comp3Value, "0.0%" ) )
-				VAR _Card =
-					"<article class=""kpi-card""><div class=""card-head""><div class=""label"">Sales Volume</div><span class=""info-wrap""><span class=""info-button"">i</span><span class=""tooltip""><strong>Sum of sales_volume from Sales</strong><span>Adds sales units for the selected period. With Period cleared, it shows the complete loaded Sales history and suppresses period comparisons.</span></span></span></div><div class=""value"">" & _Value & "</div>" &
-					_SparkTemplatePrefix & _Points & _SparkTemplateMiddle & _Points & _SparkTemplateSuffix &
-					"<div class=""compare-grid""><div class=""compare " & _Comp1Class & """><span>vs LY</span><strong>" & _Comp1Text & "</strong></div><div class=""compare " & _Comp3Class & """><span>vs Plan</span><strong>" & _Comp3Text & "</strong></div></div></article>"
-				RETURN
-					_Css & "<div class=""kpi-host"">" & _Card & "</div>"
-			displayFolder: KPI Cards\HTML
-			lineageTag: e14c0c7a-d2c3-480c-a919-213909f5f3e9
+Still pending:
 
-		measure 'Policy Period Start Date' =
-				VAR _DataStart = [Policy Data Start Date]
-				VAR _HasDateContext = [Policy Date Context Flag] = 1
-				VAR _SelectedStart = MIN ( 'Date'[Date] )
-				RETURN
-					IF (
-						ISBLANK ( _DataStart ),
-						BLANK (),
-						IF ( _HasDateContext, _SelectedStart, _DataStart )
-					)
-			formatString: yyyy-mm-dd
-			isHidden
-			displayFolder: Helper
+- Confirm whether Turkey is intentionally excluded from the Policy extracts and align the July extraction dates.
+- Confirm whether the June cancellation increase is genuine business activity or a source-data issue.
+- Confirm the ERP scope: Gross or Net actuals, currency, latest closed month, Plan version, and whether the view should cover the total subsidiary or only the mapped program.
+- Confirm whether SES can be separated from Other in Sellout. Without this, the E-Store plus SES Attach actual-versus-Plan comparison should not be published.
+- Confirm whether the detailed Sales source tables contain any partner, account, or store field that is not included in the current extract.
 
-		measure 'Policy Period End Date' =
-				VAR _DataEnd = [Policy Data End Date]
-				VAR _HasDateContext = [Policy Date Context Flag] = 1
-				VAR _SelectedEnd = MAX ( 'Date'[Date] )
-				RETURN
-					IF (
-						ISBLANK ( _DataEnd ),
-						BLANK (),
-						IF ( _HasDateContext, MIN ( _SelectedEnd, _DataEnd ), _DataEnd )
-					)
-			formatString: yyyy-mm-dd
-			isHidden
-			displayFolder: Helper
+Once these points are confirmed, I will update the Information page and complete the final dashboard review.
+
+Best regards,
+Rafael
