@@ -1,85 +1,10 @@
-createOrReplace
-
-	ref table Measures_table
-
-		measure 'Sales Plan QTY' =
-				VAR _SourceType = SELECTEDVALUE ( 'Source'[Source Type] )
-				VAR _UnsupportedDetailFilter =
-					ISFILTERED ( Sales[Country Code] )
-						|| ISFILTERED ( Sales[Sales Channel] )
-						|| ISFILTERED ( Sales[Device Category] )
-						|| ISFILTERED ( Sales[Device Model] )
-						|| ISFILTERED ( Sales[Product Type] )
-						|| ISFILTERED ( Sales[Payment Type] )
-						|| ISFILTERED ( Sales[SC+ Plan Rollup] )
-						|| ISFILTERED ( Sales[SC+ Plan Type] )
-						|| ISFILTERED ( Sales[Account / Partner] )
-						|| ISINSCOPE ( Sales[Country Code] )
-						|| ISINSCOPE ( Sales[Sales Channel] )
-						|| ISINSCOPE ( Sales[Device Category] )
-						|| ISINSCOPE ( Sales[Device Model] )
-						|| ISINSCOPE ( Sales[Product Type] )
-						|| ISINSCOPE ( Sales[Payment Type] )
-						|| ISINSCOPE ( Sales[SC+ Plan Rollup] )
-						|| ISINSCOPE ( Sales[SC+ Plan Type] )
-						|| ISINSCOPE ( Sales[Account / Partner] )
-				VAR _PeriodStart = [KPI Comparison Period Start Date]
-				VAR _RequestedPeriodEnd = [KPI Comparison Period End Date]
-				VAR _SalesDataEnd =
-					CALCULATE (
-						MAX ( Sales[Reporting Date] ),
-						REMOVEFILTERS ()
-					)
-				VAR _ComparablePeriodEnd =
-					IF (
-						NOT ISBLANK ( _RequestedPeriodEnd )
-							&& NOT ISBLANK ( _SalesDataEnd ),
-						MIN ( _RequestedPeriodEnd, _SalesDataEnd )
-					)
-				VAR _MonthScope =
-					CALCULATETABLE (
-						SUMMARIZE (
-							'Date',
-							'Date'[YearMonth],
-							'Date'[StartOfMonth]
-						),
-						REMOVEFILTERS ( 'Date' ),
-						REMOVEFILTERS ( 'Date Filter' ),
-						DATESBETWEEN ( 'Date'[Date], _PeriodStart, _ComparablePeriodEnd )
-					)
-				VAR _SelectedSubsidiaries = VALUES ( 'Subsidiary Master'[Subsidiary] )
-				VAR _ProratedPlan =
-					SUMX (
-						_MonthScope,
-						VAR _MonthKey = 'Date'[YearMonth]
-						VAR _MonthStart = 'Date'[StartOfMonth]
-						VAR _MonthEnd = EOMONTH ( _MonthStart, 0 )
-						VAR _EffectiveStart = MAX ( _PeriodStart, _MonthStart )
-						VAR _EffectiveEnd = MIN ( _ComparablePeriodEnd, _MonthEnd )
-						VAR _SelectedDays =
-							MAX ( 0, DATEDIFF ( _EffectiveStart, _EffectiveEnd, DAY ) + 1 )
-						VAR _DaysInMonth = DAY ( _MonthEnd )
-						VAR _MonthlyPlan =
-							CALCULATE (
-								SUM ( 'Sales Plan'[plan_value] ),
-								'Sales Plan'[Sales Plan Type] = "Sales",
-								REMOVEFILTERS ( 'Sales Plan'[Sales Channel] ),
-								TREATAS ( { _MonthKey }, 'Sales Plan'[Month Key] ),
-								TREATAS ( _SelectedSubsidiaries, 'Sales Plan'[Subsidiary] )
-							)
-						RETURN
-							_MonthlyPlan * DIVIDE ( _SelectedDays, _DaysInMonth )
-					)
-				RETURN
-					IF (
-						_SourceType IN { "Revenue", "Policy" }
-							|| _UnsupportedDetailFilter
-							|| ISBLANK ( _PeriodStart )
-							|| ISBLANK ( _ComparablePeriodEnd )
-							|| _PeriodStart > _ComparablePeriodEnd,
-						BLANK (),
-						_ProratedPlan
-					)
-			formatString: #,##0
-			displayFolder: Sales Plan and Revenue Plan
-			lineageTag: a5ab6581-81ba-4b51-aeea-b812edfd5ac8
+EVALUATE
+ROW (
+    "Period Start", [KPI Comparison Period Start Date],
+    "Requested Period End", [KPI Comparison Period End Date],
+    "Sales Data End",
+        CALCULATE ( MAX ( Sales[Reporting Date] ), REMOVEFILTERS () ),
+    "Prorated Sales Plan", [Sales Plan QTY],
+    "Sales Actual", [Sales QTY CY],
+    "Sales Attainment", [Sales QTY A/R]
+)
