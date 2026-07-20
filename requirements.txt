@@ -1,1 +1,108 @@
-Should ERP show total-subsidiary financial context, or only revenue attributable to the program?
+Cancellation and B2B are now removed from the unresolved backlog. B2B was removed as a mapping blocker, not excluded from actual totals.
+
+## Reorganized work order
+
+1. Define ERP purpose and scope.
+2. Apply the Historical Active Policies fix.
+3. Preserve E-Store versus Other attach reporting and investigate one deeper level.
+4. Correct September, implement Plan proration, and update the Information page.
+5. Obtain paid-monthly source and business confirmation.
+6. Create a separate production-signoff plan last.
+
+### 1. ERP integration
+
+Do not replace the existing Gross Revenue card with ERP. Operational Sales revenue and financial ERP revenue are different facts.
+
+There are two legitimate ERP products:
+
+- **Financial context, recommended MVP:** Subsidiary ERP Net Sales, Plan, attainment, YoY, monthly trend, and subsidiary variance through the latest closed month.
+- **Program-attributable ERP revenue:** The same analysis, but filtered through an approved item, segment, market, account, profit-center, or similar program mapping.
+
+The business would probably want:
+
+- Net Sales actual versus matching P&L Plan
+- Plan attainment and variance amount
+- YoY
+- Monthly Actual versus Plan versus LY
+- Subsidiary contribution and variance
+- Optionally, a Gross Sales to deductions to Net Sales bridge
+- Later, reconciliation between operational Sales and ERP financials
+
+Technically, ERP should be a separate monthly fact table related through shared Date and Subsidiary dimensions. It must retain Version, scenario, currency, scale, close status, and available program-mapping fields.
+
+The gating question is:
+
+> Should ERP show total-subsidiary financial context, or only revenue attributable to the program?
+
+My recommendation is total-subsidiary ERP Net Sales first, clearly labelled as financial context. Program ERP revenue should wait for an approved mapping.
+
+### 2. Historical Active Policies
+
+Yes, it is fixable with one TMDL script. I prepared [Historical Active Policies - Month End Trend.tmdl](</Users/rafaelcunha/Documents/HTML_Care/artifacts/powerbi/Historical Active Policies - Month End Trend.tmdl>).
+
+It replaces only `Active Policies Last 12M`, keeps the existing visual binding, evaluates each point at month-end, and caps the latest partial month at the data cutoff. No PBIR change is required.
+
+It has not been applied or benchmarked against the live model yet.
+
+### 3. Attach detail
+
+Recorded as decided:
+
+- E-Store versus Other is reviewed and accepted.
+- One deeper level remains a possible enhancement.
+- That deeper level requires a reliable shared key or owner-controlled crosswalk.
+- Raw detailed-channel results should not be inferred from text matching.
+
+### 4. Plan and Information page
+
+- B2B is closed as a mapping topic.
+- `Sept -> Sep` remains a source-workbook TODO.
+- Open-month Plan must use elapsed-calendar-day proration.
+- The current measure still uses the full monthly target.
+
+You had not put the proration warning in the current Power BI dashboard. It existed only in the supporting documentation. I prepared [Information Page - Current Decisions.tmdl](</Users/rafaelcunha/Documents/HTML_Care/artifacts/powerbi/Information Page - Current Decisions.tmdl>) to add that warning and correct the stale metric definitions.
+
+The script replaces the existing HTML measure without rebinding the visual. The page remains hidden from the normal tab view, which is a separate PBIR setting if that visibility should change.
+
+### 5. Paid-monthly emails
+
+**Table owner**
+
+**Subject:** Confirm paid-monthly subscriber data start
+
+Hi [Name],
+
+Paid-monthly subscribers are identified using `Product Monthly Amount > 0`. The month-end active population is 0 in January 2026, 1 in February, 342 in March, 448 in April, 576 in May, 759 in June, and 786 as of July 5. We also found no qualifying prior-year paid-monthly opening population.
+
+Could you confirm whether February 2026 is the genuine start of this population, or whether earlier records are missing because of migration, extraction, or payment-mapping gaps?
+
+Thanks,  
+[Name]
+
+**Business owner**
+
+**Subject:** Validate paid-monthly cancellation pattern
+
+Hi [Name],
+
+The paid-monthly cancellation calculation has been validated as monthly cancellation events divided by monthly opening exposure. The source produces:
+
+- January: 2 / 1 = 200.0%
+- February: 13 / 2 = 650.0%
+- March: 15 / 14 = 107.1%
+- April: 65 / 1,104 = 5.9%
+- May: 94 / 1,238 = 7.6%
+- June: 525 / 1,364 = 38.5%
+
+The calculation is working as defined, but the January-March results and June increase need business confirmation.
+
+Do these results reflect genuine launch or migration behavior, or should some events or population records be corrected or reclassified?
+
+Thanks,  
+[Name]
+
+“Active Partners” currently means distinct partners with at least one newly created policy during the selected period. It does not mean commercially active partners. The 64-66 variation comes from changing extracts and incomplete placeholder exclusions.
+
+My recommendation is to rename it **Partners with New Policies**. That is clearer and turns the remaining work into a small filter-and-benchmark cleanup.
+
+The reordered decisions are recorded in [agent_handoff.md](</Users/rafaelcunha/Documents/HTML_Care/docs/agent_handoff.md>). `git diff --check` passed. No live TMDL application, Desktop reload, commit, or push was performed.
