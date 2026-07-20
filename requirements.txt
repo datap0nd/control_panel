@@ -1,10 +1,15 @@
-EVALUATE
-ROW (
-    "Period Start", [KPI Comparison Period Start Date],
-    "Requested Period End", [KPI Comparison Period End Date],
-    "Sales Data End",
-        CALCULATE ( MAX ( Sales[Reporting Date] ), REMOVEFILTERS () ),
-    "Prorated Sales Plan", [Sales Plan QTY],
-    "Sales Actual", [Sales QTY CY],
-    "Sales Attainment", [Sales QTY A/R]
-)
+Dashboard TODO
+
+Questions for business owners
+
+1. ERP owner: Which posted actual and Plan should the dashboard use, Gross or Net, in which currency, and through which closed month? Should it show total subsidiary results or only the mapped program?
+
+2. Sellout owner: Can the experience-store channel be reliably separated from Other in Sellout? If yes, Attach actual versus Plan will use only the online-store and experience-store channels on both sides. Until then, do not publish that comparison.
+
+3. Policy owner: Is the June paid-monthly cancellation spike genuine, or is it a source-data issue?
+
+After the answers
+
+- Implement the confirmed Attach and ERP scopes.
+- Update the Information page.
+- Run final dashboard QA.
