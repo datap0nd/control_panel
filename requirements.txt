@@ -1,14 +1,39 @@
-Agreed. Each Region / Operator test run will produce approximately five screenshots, one per stage. The filename itself will be the source identifier.
+SCREENSHOT VALIDATION - TASKS AND READY-TO-SEND MESSAGES
 
-This also means stage must be added to the mapping CSV and SQL table.
 
-REVISED MESSAGE TO T AND S
+MY TASK FLOW
 
-Hey T and S, I’m defining the input for the screenshot-validation process and need to confirm what the screenshot process will provide.
+1. Contact T and S to confirm the screenshot format, filename structure, failure behaviour, sample files, and permanent shared-folder path.
 
-For each Region / Operator combination, we will capture approximately five different stages. For now, we can call them Stage A, Stage B, and so on.
+2. Create the mapping CSV template with these columns:
 
-For each screenshot, I need:
+   region
+   operator
+   stage
+   prompt_file
+   prompt_version
+   enabled
+
+3. Send the mapping template to N after N receives the criteria requested from E by J.
+
+4. Receive the completed mapping and prompt files from N.
+
+5. Build the daily screenshot-processing flow.
+
+6. Store the full evaluation history in bi_reporting.screenshot_evaluations.
+
+7. Give F the final table structure and confirm whether any additional reporting columns are required.
+
+
+MESSAGE TO T AND S
+
+Hey T and S,
+
+I’m defining the input for the screenshot-validation process and need to confirm what the screenshot process will provide.
+
+For each Region and Operator combination, we expect to capture approximately five different stages. For now, we can call them Stage A, Stage B, Stage C, and so on.
+
+For every screenshot, I need:
 
 - PNG format
 - Full screenshot at its original resolution
@@ -17,39 +42,124 @@ For each screenshot, I need:
 - Stage
 - Capture date and time
 
-I’m proposing this filename format:
+I’m proposing the following filename format:
 
 Region__Operator__Stage-A__YYYYMMDD_HHMMSS.png
 
-Examples:
+For example:
 
 Region-1__Operator-1__Stage-A__20260720_165748.png
 Region-1__Operator-1__Stage-B__20260720_165752.png
 
-The filename will be the identifier, so a separate Capture ID is not required.
+The filename will be the screenshot identifier, so I do not need a separate Capture ID.
 
-Can you confirm whether this format works with the screenshot process? If you already have a format, please send me two or three exact examples covering different stages.
+Can you confirm whether this filename format works with the screenshot process? If you already have a format in place, please send me two or three exact filename examples covering different stages.
 
-I also need to understand what happens when screenshot capture fails. Is no file created, or is some kind of failure file produced?
+I also need to understand what happens when screenshot capture fails. Is no file created, or is a failure file produced? If a failure file is produced, please send me an example of its filename and format.
 
-Finally, please send me the path to the permanent shared project folder where the PNGs will be saved, plus two or three sample PNGs so I can test the technical ingestion.
+Please also send me:
 
-I do not need the samples classified as good or bad.
+- The path to the permanent shared project folder where the PNGs will be saved
+- Two or three sample PNGs covering different stages so I can test the technical ingestion
 
-UPDATED NAMING CONTRACT
+The sample PNGs do not need to be classified as good or bad. I only need them to verify that the process can find, read, and send the images correctly.
 
-Region__Operator__Stage__YYYYMMDD_HHMMSS.png
 
-The filename is unique provided the screenshot process does not create two screenshots for the same Region, Operator, and Stage within the same second.
+MESSAGE TO N
 
-REQUIRED DOWNSTREAM CHANGES
+Hi N,
 
-The mapping CSV becomes:
+J has already asked E to obtain the criteria for each Region, Operator, and Stage combination.
 
-region,operator,stage,prompt_file,prompt_version,enabled
+Once you receive those criteria, I need the final prompt configuration for the screenshot-validation process.
 
-The SQL table must also include:
+I will create and send you a mapping CSV template containing these columns:
 
+region
+operator
 stage
+prompt_file
+prompt_version
+enabled
 
-Each test run will generate approximately five rows per Region / Operator, one row for each stage.
+I need you to:
+
+1. Confirm which prompt applies to each Region, Operator, and Stage combination.
+
+2. Create one prompt criteria file for each distinct set of criteria. The same prompt file can be reused where the criteria are identical.
+
+3. Populate the mapping CSV with the correct prompt file for every required combination.
+
+4. Set the initial approved prompts to version 1.
+
+5. Increase the prompt version whenever the criteria change.
+
+6. Confirm when the prompt files and mapping are ready for production use.
+
+My code will add the technical instructions requiring a structured response containing a pass or fail result and a reason. Your prompt files should contain the actual business criteria used to decide whether the screenshot passes or fails.
+
+Labelled pass and fail screenshots are not production inputs to my process. If you need examples to test and validate the prompt quality, please coordinate those with E. I only need the final prompt files and the completed mapping.
+
+Please flag any combination for which the criteria are missing or unclear instead of creating assumptions inside the prompt.
+
+
+EMAIL TO F
+
+Subject: Proposed screenshot evaluation table
+
+Hi F,
+
+I am defining the output table for the screenshot-validation process.
+
+The table will be:
+
+bi_reporting.screenshot_evaluations
+
+The process will update the table daily.
+
+I propose keeping the full evaluation history. Existing results will not be overwritten. If a screenshot is evaluated again with a different prompt version or model version, it will create a new evaluation row.
+
+Each row will represent one screenshot evaluation for a specific Region, Operator, and Stage.
+
+The proposed columns are:
+
+- evaluation_id: Unique identifier for the evaluation
+- evaluation_key: Prevents the same evaluation from being created twice
+- source_filename: Original PNG filename and screenshot identifier
+- image_sha256: Screenshot fingerprint used for audit and integrity checks
+- region: Region from the screenshot filename
+- operator: Operator from the screenshot filename
+- stage: Screenshot stage, such as Stage A or Stage B
+- captured_at: Date and time when the screenshot was captured
+- source_status: Indicates whether screenshot capture succeeded
+- processing_status: Indicates whether technical processing succeeded
+- validation_result: Pass, fail, or blank when no valid visual result exists
+- validation_reason: Reason provided for the pass or fail result
+- prompt_version: Version of the prompt used for the evaluation
+- model_id: Model version used for the evaluation
+- attempt_count: Number of processing attempts
+- error_code: Technical error category
+- error_message: Technical error details
+- created_at: Date and time when the evaluation row was created
+- completed_at: Date and time when processing finished
+
+Technical errors will be stored in the same table. They will be recorded as follows:
+
+processing_status = error
+validation_result = blank
+error_code = populated
+error_message = populated
+
+This ensures that a technical processing problem is not incorrectly reported as a visual failure.
+
+If screenshot capture fails before visual validation, the row will be recorded as follows:
+
+source_status = capture_failed
+processing_status = skipped
+validation_result = blank
+
+Raw model responses will not be stored in the reporting table.
+
+Please confirm whether you require any additional columns beyond those listed above.
+
+Thanks.
