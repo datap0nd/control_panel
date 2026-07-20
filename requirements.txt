@@ -1,21 +1,85 @@
-# Dashboard To-Do
+createOrReplace
 
-## Done
+	ref table Measures_table
 
-- Cancellation-rate calculation confirmed.
-- B2B Plan mapping closed.
-- E-Store versus Other attach bucket reviewed.
-- September corrected to `Sep`.
-- Paid-monthly population start explained by the 2026 launch.
-- ERP and channel-mapping questions sent.
-- Historical Active Policies TMDL applied and the trend checked.
-
-## Next
-
-1. **Fix Plan comparison:** prorate the open-month Plan by elapsed calendar days and update the Information page.
-
-2. **Wait for replies:** ERP scope, deeper channel mapping, export identification, and confirmation of the June cancellation spike.
-
-3. **Implement the decisions:** build ERP only after its scope is confirmed, and add deeper attach detail only when the mapping exists.
-
-4. **Final cleanup and QA:** rename `Active Partners` to `Partners with New Policies`, remove misleading placeholders and debug content, run the final DAX benchmark, reload Desktop, and visually check every page.
+		measure 'Sales Plan QTY' =
+				VAR _SourceType = SELECTEDVALUE ( 'Source'[Source Type] )
+				VAR _UnsupportedDetailFilter =
+					ISFILTERED ( Sales[Country Code] )
+						|| ISFILTERED ( Sales[Sales Channel] )
+						|| ISFILTERED ( Sales[Device Category] )
+						|| ISFILTERED ( Sales[Device Model] )
+						|| ISFILTERED ( Sales[Product Type] )
+						|| ISFILTERED ( Sales[Payment Type] )
+						|| ISFILTERED ( Sales[SC+ Plan Rollup] )
+						|| ISFILTERED ( Sales[SC+ Plan Type] )
+						|| ISFILTERED ( Sales[Account / Partner] )
+						|| ISINSCOPE ( Sales[Country Code] )
+						|| ISINSCOPE ( Sales[Sales Channel] )
+						|| ISINSCOPE ( Sales[Device Category] )
+						|| ISINSCOPE ( Sales[Device Model] )
+						|| ISINSCOPE ( Sales[Product Type] )
+						|| ISINSCOPE ( Sales[Payment Type] )
+						|| ISINSCOPE ( Sales[SC+ Plan Rollup] )
+						|| ISINSCOPE ( Sales[SC+ Plan Type] )
+						|| ISINSCOPE ( Sales[Account / Partner] )
+				VAR _PeriodStart = [KPI Comparison Period Start Date]
+				VAR _RequestedPeriodEnd = [KPI Comparison Period End Date]
+				VAR _SalesDataEnd =
+					CALCULATE (
+						MAX ( Sales[Reporting Date] ),
+						REMOVEFILTERS ()
+					)
+				VAR _ComparablePeriodEnd =
+					IF (
+						NOT ISBLANK ( _RequestedPeriodEnd )
+							&& NOT ISBLANK ( _SalesDataEnd ),
+						MIN ( _RequestedPeriodEnd, _SalesDataEnd )
+					)
+				VAR _MonthScope =
+					CALCULATETABLE (
+						SUMMARIZE (
+							'Date',
+							'Date'[YearMonth],
+							'Date'[StartOfMonth]
+						),
+						REMOVEFILTERS ( 'Date' ),
+						REMOVEFILTERS ( 'Date Filter' ),
+						DATESBETWEEN ( 'Date'[Date], _PeriodStart, _ComparablePeriodEnd )
+					)
+				VAR _SelectedSubsidiaries = VALUES ( 'Subsidiary Master'[Subsidiary] )
+				VAR _ProratedPlan =
+					SUMX (
+						_MonthScope,
+						VAR _MonthKey = 'Date'[YearMonth]
+						VAR _MonthStart = 'Date'[StartOfMonth]
+						VAR _MonthEnd = EOMONTH ( _MonthStart, 0 )
+						VAR _EffectiveStart = MAX ( _PeriodStart, _MonthStart )
+						VAR _EffectiveEnd = MIN ( _ComparablePeriodEnd, _MonthEnd )
+						VAR _SelectedDays =
+							MAX ( 0, DATEDIFF ( _EffectiveStart, _EffectiveEnd, DAY ) + 1 )
+						VAR _DaysInMonth = DAY ( _MonthEnd )
+						VAR _MonthlyPlan =
+							CALCULATE (
+								SUM ( 'Sales Plan'[plan_value] ),
+								'Sales Plan'[Sales Plan Type] = "Sales",
+								REMOVEFILTERS ( 'Sales Plan'[Sales Channel] ),
+								TREATAS ( { _MonthKey }, 'Sales Plan'[Month Key] ),
+								TREATAS ( _SelectedSubsidiaries, 'Sales Plan'[Subsidiary] )
+							)
+						RETURN
+							_MonthlyPlan * DIVIDE ( _SelectedDays, _DaysInMonth )
+					)
+				RETURN
+					IF (
+						_SourceType IN { "Revenue", "Policy" }
+							|| _UnsupportedDetailFilter
+							|| ISBLANK ( _PeriodStart )
+							|| ISBLANK ( _ComparablePeriodEnd )
+							|| _PeriodStart > _ComparablePeriodEnd,
+						BLANK (),
+						_ProratedPlan
+					)
+			formatString: #,##0
+			displayFolder: Sales Plan and Revenue Plan
+			lineageTag: a5ab6581-81ba-4b51-aeea-b812edfd5ac8
