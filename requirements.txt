@@ -5,23 +5,17 @@
 - Cancellation-rate calculation confirmed.
 - B2B Plan mapping closed.
 - E-Store versus Other attach bucket reviewed.
-- Paid-monthly start-date question sent to the table owner.
-- Historical Active Policies TMDL applied.
+- September corrected to `Sep`.
+- Paid-monthly population start explained by the 2026 launch.
+- ERP and channel-mapping questions sent.
+- Historical Active Policies TMDL applied and the trend checked.
 
 ## Next
 
-1. **Validate Active Policies:** refresh the model and confirm the trend shows month-end stock, the latest partial month stops at the data cutoff, and future months are blank.
+1. **Fix Plan comparison:** prorate the open-month Plan by elapsed calendar days and update the Information page.
 
-2. **Get the remaining business answers:**
-   - Why does the paid-monthly population begin in February 2026?
-   - Are the January-March and June cancellation spikes genuine?
-   - Should ERP show total-subsidiary revenue or program-only revenue?
-   - What identifies export versus retained Sellout?
+2. **Wait for replies:** ERP scope, deeper channel mapping, export identification, and confirmation of the June cancellation spike.
 
-3. **Fix Plan comparison:** change `Sept` to `Sep`, prorate the open-month Plan by elapsed calendar days, and update the Information page.
+3. **Implement the decisions:** build ERP only after its scope is confirmed, and add deeper attach detail only when the mapping exists.
 
-4. **Improve detail only when mappings exist:** add one level below E-Store versus Other, replace the export placeholder, and rename `Active Partners` to `Partners with New Policies`.
-
-5. **Final QA last:** remove misleading ERP placeholders and leftover debug content, run one complete DAX benchmark, reload Desktop, and visually check every report page.
-
-Do not build ERP visuals until the total-subsidiary versus program-only question is answered.
+4. **Final cleanup and QA:** rename `Active Partners` to `Partners with New Policies`, remove misleading placeholders and debug content, run the final DAX benchmark, reload Desktop, and visually check every page.
