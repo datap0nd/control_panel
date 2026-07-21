@@ -1,206 +1,83 @@
-createOrReplace
+# ERP P&L Stage - Apply And Validate
 
-	ref table Measures_table
+This stage imports the ERP P&L source and the SC+ material master without changing any existing dashboard KPI, alias, HTML measure, relationship, or report visual.
 
-		measure 'Paid Monthly Raw Cancellation Events' =
-				VAR _PeriodStart = [Policy Period Start Date]
-				VAR _PeriodEnd = [Policy Period End Date]
-				VAR _PolicyRows =
-					CALCULATETABLE (
-						Policy,
-						REMOVEFILTERS ( 'Date' ),
-						REMOVEFILTERS ( 'Date Filter' ),
-						REMOVEFILTERS ( Policy[Policy Created Date] ),
-						REMOVEFILTERS ( Policy[Warranty Start Date] ),
-						REMOVEFILTERS ( Policy[Warranty End Date] ),
-						REMOVEFILTERS ( Policy[Cancellation Date] )
-					)
-				RETURN
-					IF (
-						ISBLANK ( _PeriodStart )
-							|| ISBLANK ( _PeriodEnd )
-							|| _PeriodStart > _PeriodEnd,
-						BLANK (),
-						COUNTROWS (
-							FILTER (
-								_PolicyRows,
-								COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-									&& NOT ISBLANK ( Policy[Cancellation Date] )
-									&& Policy[Cancellation Date] >= _PeriodStart
-									&& Policy[Cancellation Date] <= _PeriodEnd
-							)
-						)
-					)
-			formatString: #,##0
-			isHidden
-			displayFolder: Helper
+## 1. Prepare `erp_master.xlsx`
 
-		measure 'Paid Monthly Cancellation Events' =
-				VAR _PeriodStart = [Policy Period Start Date]
-				VAR _PeriodEnd = [Policy Period End Date]
-				VAR _PolicyRows =
-					CALCULATETABLE (
-						Policy,
-						REMOVEFILTERS ( 'Date' ),
-						REMOVEFILTERS ( 'Date Filter' ),
-						REMOVEFILTERS ( Policy[Policy Created Date] ),
-						REMOVEFILTERS ( Policy[Warranty Start Date] ),
-						REMOVEFILTERS ( Policy[Warranty End Date] ),
-						REMOVEFILTERS ( Policy[Cancellation Date] )
-					)
-				RETURN
-					IF (
-						ISBLANK ( _PeriodStart )
-							|| ISBLANK ( _PeriodEnd )
-							|| _PeriodStart > _PeriodEnd,
-						BLANK (),
-						COUNTROWS (
-							FILTER (
-								_PolicyRows,
-								VAR _CoverageStart =
-									COALESCE (
-										Policy[Warranty Start Date],
-										Policy[Policy Created Date]
-									)
-								RETURN
-									COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-										&& NOT ISBLANK ( _CoverageStart )
-										&& NOT ISBLANK ( Policy[Cancellation Date] )
-										&& Policy[Cancellation Date] >= _PeriodStart
-										&& Policy[Cancellation Date] <= _PeriodEnd
-										&& _CoverageStart <= Policy[Cancellation Date]
-										&& (
-											ISBLANK ( Policy[Warranty End Date] )
-												|| Policy[Warranty End Date] >= Policy[Cancellation Date]
-										)
-							)
-						)
-					)
-			formatString: #,##0
-			isHidden
-			displayFolder: Helper
+1. Save `erp_master.xlsx` in the folder configured by the Care+ `DataPath` parameter.
+2. Open the workbook in Excel.
+3. Confirm the material list is an Excel table, not only a worksheet range.
+4. Set the table name to `erp_master`.
+5. Confirm the table contains a column named exactly `Material`.
+6. Keep `Material` formatted as text so leading zeros are preserved.
 
-		measure 'Paid Monthly Invalid Cancellation Events' =
-				VAR _RawEvents = [Paid Monthly Raw Cancellation Events]
-				VAR _ValidEvents = [Paid Monthly Cancellation Events]
-				RETURN
-					IF (
-						ISBLANK ( _RawEvents ),
-						BLANK (),
-						_RawEvents - _ValidEvents
-					)
-			formatString: #,##0
-			isHidden
-			displayFolder: Policy Diagnostics
+Additional columns are allowed, but the staged model imports only `Material`.
 
-		measure 'Paid Monthly At-Risk Exposure' =
-				VAR _PeriodStart = [Policy Period Start Date]
-				VAR _PeriodEnd = [Policy Period End Date]
-				VAR _ValidPeriod =
-					NOT ISBLANK ( _PeriodStart )
-						&& NOT ISBLANK ( _PeriodEnd )
-						&& _PeriodStart <= _PeriodEnd
-				VAR _SafeStart =
-					IF ( _ValidPeriod, _PeriodStart, DATE ( 1900, 1, 1 ) )
-				VAR _SafeEnd =
-					IF ( _ValidPeriod, _PeriodEnd, _SafeStart )
-				VAR _PolicyRows =
-					CALCULATETABLE (
-						Policy,
-						REMOVEFILTERS ( 'Date' ),
-						REMOVEFILTERS ( 'Date Filter' ),
-						REMOVEFILTERS ( Policy[Policy Created Date] ),
-						REMOVEFILTERS ( Policy[Warranty Start Date] ),
-						REMOVEFILTERS ( Policy[Warranty End Date] ),
-						REMOVEFILTERS ( Policy[Cancellation Date] )
-					)
-				VAR _MonthStarts =
-					DISTINCT (
-						SELECTCOLUMNS (
-							CALENDAR ( _SafeStart, _SafeEnd ),
-							"MonthStart", DATE ( YEAR ( [Date] ), MONTH ( [Date] ), 1 )
-						)
-					)
-				RETURN
-					IF (
-						NOT _ValidPeriod,
-						BLANK (),
-						SUMX (
-							_MonthStarts,
-							VAR _MonthStart = [MonthStart]
-							VAR _SliceStart = MAX ( _PeriodStart, _MonthStart )
-							VAR _SliceEnd = MIN ( _PeriodEnd, EOMONTH ( _MonthStart, 0 ) )
-							RETURN
-								COUNTROWS (
-									FILTER (
-										_PolicyRows,
-										VAR _CoverageStart =
-											COALESCE (
-												Policy[Warranty Start Date],
-												Policy[Policy Created Date]
-											)
-										RETURN
-											COALESCE ( Policy[Product Monthly Amount], 0 ) > 0
-												&& NOT ISBLANK ( _CoverageStart )
-												&& _CoverageStart <= _SliceEnd
-												&& (
-													ISBLANK ( Policy[Warranty End Date] )
-														|| Policy[Warranty End Date] >= _SliceStart
-												)
-												&& (
-													ISBLANK ( Policy[Cancellation Date] )
-														|| Policy[Cancellation Date] >= _SliceStart
-												)
-									)
-								)
-						)
-					)
-			formatString: #,##0
-			isHidden
-			displayFolder: Helper
+## 2. Set the P&L workbook paths
 
-		measure 'Paid Monthly Opening Exposure' =
-				[Paid Monthly At-Risk Exposure]
-			formatString: #,##0
-			isHidden
-			displayFolder: Helper
+Open `powerbi/CareDashboard.SemanticModel/TMDLScripts/ERP P&L Stage.tmdl` and replace these three placeholder values with the actual workbook paths available on the work PC:
 
-		measure 'Monthly Cancellation Rate' =
-				DIVIDE (
-					[Paid Monthly Cancellation Events],
-					[Paid Monthly At-Risk Exposure]
-				)
-			formatString: 0.0%
-			displayFolder: Policy Metrics
+```text
+<SET_2024_ACTUAL_WORKBOOK_PATH>
+<SET_2025_ACTUAL_WORKBOOK_PATH>
+<SET_CURRENT_ACTUAL_WORKBOOK_PATH>
+```
 
-		measure 'Monthly Cancellation Rate LY' =
-				VAR _DataStart = [Policy Data Start Date]
-				VAR _PeriodStart = [Policy Period Start Date]
-				VAR _PeriodEnd = [Policy Period End Date]
-				VAR _PriorStart = EDATE ( _PeriodStart, -12 )
-				VAR _PriorEnd = EDATE ( _PeriodEnd, -12 )
-				RETURN
-					IF (
-						ISBLANK ( _PriorStart )
-							|| ISBLANK ( _PriorEnd )
-							|| _PriorStart < _DataStart,
-						BLANK (),
-						CALCULATE (
-							[Monthly Cancellation Rate],
-							REMOVEFILTERS ( 'Date' ),
-							REMOVEFILTERS ( 'Date Filter' ),
-							DATESBETWEEN ( 'Date'[Date], _PriorStart, _PriorEnd )
-						)
-					)
-			formatString: 0.0%
-			displayFolder: Policy Metrics
+Replace only the placeholder text inside the existing double quotes. Do not commit the edited private paths.
 
-		measure 'Policy KPI Validation' =
-				"PeriodStart=" & FORMAT ( [Policy Period Start Date], "yyyy-mm-dd" )
-					& " | PeriodEnd=" & FORMAT ( [Policy Period End Date], "yyyy-mm-dd" )
-					& " | RawEvents=" & FORMAT ( [Paid Monthly Raw Cancellation Events], "0" )
-					& " | ValidEvents=" & FORMAT ( [Paid Monthly Cancellation Events], "0" )
-					& " | InvalidEvents=" & FORMAT ( [Paid Monthly Invalid Cancellation Events], "0" )
-					& " | AtRisk=" & FORMAT ( [Paid Monthly At-Risk Exposure], "0" )
-					& " | Rate=" & FORMAT ( [Monthly Cancellation Rate], "0.0000%" )
-			displayFolder: Policy Diagnostics
+The staged script expects:
+
+- The older workbook to contain the `2024 Raw Data` worksheet used by the source model.
+- The prior-year workbook to contain one worksheet with the required 2025 actual columns.
+- The recurring workbook to contain one worksheet with `Version`, the current calendar year, Net Sales, and Sales Deduction.
+
+## 3. Apply the TMDL
+
+1. Open the Care+ report in Power BI Desktop.
+2. Open TMDL View.
+3. Create a new TMDL script tab.
+4. Paste the complete contents of `ERP P&L Stage.tmdl`.
+5. Select Apply.
+6. Refresh the semantic model.
+
+If Apply or refresh fails, stop and capture the complete error. Do not modify column names or remove validation steps to force the refresh through.
+
+After a successful refresh, the model contains:
+
+- Hidden table `ERP Master`.
+- Hidden table `ERP P&L`.
+- Staged measures under `ERP P&L\Stage` in `Measures_table`.
+- No new relationships.
+- No changes to current ERP dashboard measures or visuals.
+
+## 4. Run the DAX validation queries
+
+Open `docs/generated/erp_pnl_stage_validation.dax`. Run one numbered query block at a time in DAX Query View.
+
+Capture screenshots for:
+
+1. Source years, Version values, months, rows, Gross, Net, and Sales Deduction.
+2. P&L company codes that do not match `Subsidiary Master[Subsidiary]`.
+3. Master rows, blank materials, key matches, collisions, unmatched companies, and Version count.
+4. Every seven-character collision or candidate key that would include a P&L exact code absent from the master.
+5. Raw values, scaling, grouping, and scaled values.
+6. Exact-key and seven-character SC+ Gross and Net candidates by month and subsidiary.
+7. Gross minus Net plus Sales Deduction by source year, Version, month, and company.
+8. ERP history coverage compared with the shared Date table.
+
+For Query 1 and Query 5, include enough screenshots to show every distinct current-year Version and Grouping value.
+
+## 5. Activation gate
+
+Do not bind staged measures to report visuals yet.
+
+The production activation script will be created only after the screenshots establish:
+
+- Which `Version` represents posted actuals.
+- Whether current-year values require the source model's one-million scale.
+- Whether the correct rows are identified by the source Grouping field.
+- Whether `Material` matches `ItemPart` exactly or only at the seven-character candidate grain.
+- Whether P&L company codes match the current subsidiary master without an extra mapping.
+- Whether the posted-actual Version includes an incomplete open month.
+
+If seven-character matching is required and collisions exist, activation remains blocked until the eligibility grain is confirmed or a more precise material mapping is supplied.
