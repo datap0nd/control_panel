@@ -1,9 +1,14 @@
-1. In erp_master.xlsx, create a plain worksheet with Material in cell A1 and the material codes below it.
-2. If the codes are currently in a PivotTable, copy the row labels and paste them as values into this plain worksheet first.
-3. Select the Material header and all material-code rows.
-4. Press Ctrl+T.
-5. Check My table has headers, then select OK.
-6. Click anywhere inside the new table.
-7. Open the Table Design tab.
-8. In the Table Name box at the far left, replace the current name with erp_master and press Enter.
-9. Save and close the workbook.
+EVALUATE
+SUMMARIZECOLUMNS (
+    'ERP P&L'[Source Year],
+    'ERP P&L'[Version],
+    'ERP P&L'[Month Key],
+    "Rows", COUNTROWS ( 'ERP P&L' ),
+    "Gross", CALCULATE ( SUM ( 'ERP P&L'[Amount] ), 'ERP P&L'[P&L Line] = "Gross Sales Amt" ),
+    "Net", CALCULATE ( SUM ( 'ERP P&L'[Amount] ), 'ERP P&L'[P&L Line] = "Net Sales Amt" ),
+    "SalesDeduction", CALCULATE ( SUM ( 'ERP P&L'[Amount] ), 'ERP P&L'[P&L Line] = "Sales Deduction" )
+)
+ORDER BY
+    'ERP P&L'[Source Year],
+    'ERP P&L'[Version],
+    'ERP P&L'[Month Key]
