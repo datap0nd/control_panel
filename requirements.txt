@@ -1,15 +1,34 @@
 EVALUATE
-VAR _PnlCompanies =
-    SELECTCOLUMNS (
-        FILTER ( VALUES ( 'ERP P&L'[Company Key] ), NOT ISBLANK ( 'ERP P&L'[Company Key] ) ),
-        "Company Key", 'ERP P&L'[Company Key]
-    )
-VAR _MasterCompanies =
-    SELECTCOLUMNS (
-        FILTER ( VALUES ( 'Subsidiary Master'[Subsidiary] ), NOT ISBLANK ( 'Subsidiary Master'[Subsidiary] ) ),
-        "Company Key", UPPER ( TRIM ( 'Subsidiary Master'[Subsidiary] ) )
+VAR _SCPlusCompanies =
+    { "SGE", "SETK", "SESAR" }
+VAR _CurrentSourceYear =
+    CALCULATE ( MAX ( 'ERP P&L'[Source Year] ), REMOVEFILTERS ( 'ERP P&L' ) )
+VAR _PostedActuals =
+    FILTER (
+        ALL ( 'ERP P&L'[Source Year], 'ERP P&L'[Version] ),
+        (
+            'ERP P&L'[Source Year] < _CurrentSourceYear
+                && 'ERP P&L'[Version] = "Actual"
+        )
+            || (
+                'ERP P&L'[Source Year] = _CurrentSourceYear
+                    && 'ERP P&L'[Version] = "0"
+            )
     )
 RETURN
-    EXCEPT ( _PnlCompanies, _MasterCompanies )
+    SUMMARIZECOLUMNS (
+        'ERP P&L'[Company Key],
+        TREATAS ( _SCPlusCompanies, 'ERP P&L'[Company Key] ),
+        _PostedActuals,
+        "FactRows", [ERP Fact Rows Stage],
+        "ExactMatchedItemKeys", [ERP Exact Matched Item Keys Stage],
+        "SevenCharacterMatchedItemKeys", [ERP 7 Matched Item Keys Stage],
+        "Pnl7KeyCollisions", [ERP P&L 7 Key Collision Count Stage],
+        "Ambiguous7CandidateKeys", [ERP 7 Ambiguous Candidate Key Count Stage],
+        "GrossExact", [ERP Gross Sales SC+ Exact Candidate Stage],
+        "NetExact", [ERP Net Sales SC+ Exact Candidate Stage],
+        "Gross7", [ERP Gross Sales SC+ 7 Candidate Stage],
+        "Net7", [ERP Net Sales SC+ 7 Candidate Stage]
+    )
 ORDER BY
-    [Company Key]
+    'ERP P&L'[Company Key]
