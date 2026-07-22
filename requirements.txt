@@ -1,11 +1,9 @@
-Refresh error:
-ERP Master source must contain an Excel table named erp_master.
-
-Fix:
-1. Open erp_master.xlsx in Excel.
-2. Select the material list, including the Material header.
-3. Press Ctrl+T and confirm My table has headers.
-4. Open Table Design and set Table Name to erp_master.
-5. Confirm the column header is exactly Material.
-6. Save and close erp_master.xlsx.
-7. Return to Power BI and refresh again.
+1. In erp_master.xlsx, create a plain worksheet with Material in cell A1 and the material codes below it.
+2. If the codes are currently in a PivotTable, copy the row labels and paste them as values into this plain worksheet first.
+3. Select the Material header and all material-code rows.
+4. Press Ctrl+T.
+5. Check My table has headers, then select OK.
+6. Click anywhere inside the new table.
+7. Open the Table Design tab.
+8. In the Table Name box at the far left, replace the current name with erp_master and press Enter.
+9. Save and close the workbook.
