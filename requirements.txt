@@ -1,11 +1,5 @@
 EVALUATE
-ROW (
-    "ERP Master Rows", COUNTROWS ( 'ERP Master' ),
-    "ERP P&L Rows", COUNTROWS ( 'ERP P&L' ),
-    "2024 Rows", CALCULATE ( COUNTROWS ( 'ERP P&L' ), 'ERP P&L'[Source Year] = 2024 ),
-    "2025 Rows", CALCULATE ( COUNTROWS ( 'ERP P&L' ), 'ERP P&L'[Source Year] = 2025 ),
-    "Current Rows", CALCULATE ( COUNTROWS ( 'ERP P&L' ), 'ERP P&L'[Source Year] >= 2026 ),
-    "Min Month", MIN ( 'ERP P&L'[Month Start] ),
-    "Max Month", MAX ( 'ERP P&L'[Month Start] ),
-    "Versions", DISTINCTCOUNT ( 'ERP P&L'[Version] )
+FILTER (
+    INFO.PARTITIONS (),
+    CONTAINSSTRING ( [Name], "ERP" )
 )
