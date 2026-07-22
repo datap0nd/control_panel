@@ -1,14 +1,11 @@
 EVALUATE
-SUMMARIZECOLUMNS (
-    'ERP P&L'[Source Year],
-    'ERP P&L'[Version],
-    'ERP P&L'[Month Key],
-    "Rows", COUNTROWS ( 'ERP P&L' ),
-    "Gross", CALCULATE ( SUM ( 'ERP P&L'[Amount] ), 'ERP P&L'[P&L Line] = "Gross Sales Amt" ),
-    "Net", CALCULATE ( SUM ( 'ERP P&L'[Amount] ), 'ERP P&L'[P&L Line] = "Net Sales Amt" ),
-    "SalesDeduction", CALCULATE ( SUM ( 'ERP P&L'[Amount] ), 'ERP P&L'[P&L Line] = "Sales Deduction" )
+ROW (
+    "ERP Master Rows", COUNTROWS ( 'ERP Master' ),
+    "ERP P&L Rows", COUNTROWS ( 'ERP P&L' ),
+    "2024 Rows", CALCULATE ( COUNTROWS ( 'ERP P&L' ), 'ERP P&L'[Source Year] = 2024 ),
+    "2025 Rows", CALCULATE ( COUNTROWS ( 'ERP P&L' ), 'ERP P&L'[Source Year] = 2025 ),
+    "Current Rows", CALCULATE ( COUNTROWS ( 'ERP P&L' ), 'ERP P&L'[Source Year] >= 2026 ),
+    "Min Month", MIN ( 'ERP P&L'[Month Start] ),
+    "Max Month", MAX ( 'ERP P&L'[Month Start] ),
+    "Versions", DISTINCTCOUNT ( 'ERP P&L'[Version] )
 )
-ORDER BY
-    'ERP P&L'[Source Year],
-    'ERP P&L'[Version],
-    'ERP P&L'[Month Key]
