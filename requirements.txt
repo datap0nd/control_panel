@@ -1,13 +1,15 @@
 EVALUATE
-ROW (
-    "FactRows", [ERP Fact Rows Stage],
-    "MasterRows", [ERP Master Rows Stage],
-    "BlankMasterMaterials", [ERP Master Blank Material Count Stage],
-    "Master7KeyCollisions", [ERP Master 7 Key Collision Count Stage],
-    "Pnl7KeyCollisions", [ERP P&L 7 Key Collision Count Stage],
-    "Ambiguous7CandidateKeys", [ERP 7 Ambiguous Candidate Key Count Stage],
-    "ExactMatchedItemKeys", [ERP Exact Matched Item Keys Stage],
-    "SevenCharacterMatchedItemKeys", [ERP 7 Matched Item Keys Stage],
-    "UnmatchedCompanies", [ERP Unmatched Company Count Stage],
-    "VersionCount", [ERP Version Count Stage]
-)
+VAR _PnlCompanies =
+    SELECTCOLUMNS (
+        FILTER ( VALUES ( 'ERP P&L'[Company Key] ), NOT ISBLANK ( 'ERP P&L'[Company Key] ) ),
+        "Company Key", 'ERP P&L'[Company Key]
+    )
+VAR _MasterCompanies =
+    SELECTCOLUMNS (
+        FILTER ( VALUES ( 'Subsidiary Master'[Subsidiary] ), NOT ISBLANK ( 'Subsidiary Master'[Subsidiary] ) ),
+        "Company Key", UPPER ( TRIM ( 'Subsidiary Master'[Subsidiary] ) )
+    )
+RETURN
+    EXCEPT ( _PnlCompanies, _MasterCompanies )
+ORDER BY
+    [Company Key]
