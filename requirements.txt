@@ -1,5 +1,13 @@
 EVALUATE
-FILTER (
-    INFO.PARTITIONS (),
-    CONTAINSSTRING ( [Name], "ERP" )
+ROW (
+    "FactRows", [ERP Fact Rows Stage],
+    "MasterRows", [ERP Master Rows Stage],
+    "BlankMasterMaterials", [ERP Master Blank Material Count Stage],
+    "Master7KeyCollisions", [ERP Master 7 Key Collision Count Stage],
+    "Pnl7KeyCollisions", [ERP P&L 7 Key Collision Count Stage],
+    "Ambiguous7CandidateKeys", [ERP 7 Ambiguous Candidate Key Count Stage],
+    "ExactMatchedItemKeys", [ERP Exact Matched Item Keys Stage],
+    "SevenCharacterMatchedItemKeys", [ERP 7 Matched Item Keys Stage],
+    "UnmatchedCompanies", [ERP Unmatched Company Count Stage],
+    "VersionCount", [ERP Version Count Stage]
 )
