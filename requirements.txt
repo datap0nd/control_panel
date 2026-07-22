@@ -1,14 +1,11 @@
-EVALUATE
-SUMMARIZECOLUMNS (
-    'ERP P&L'[Source Year],
-    'ERP P&L'[Version],
-    'ERP P&L'[Month Key],
-    "Rows", COUNTROWS ( 'ERP P&L' ),
-    "Gross", CALCULATE ( SUM ( 'ERP P&L'[Amount] ), 'ERP P&L'[P&L Line] = "Gross Sales Amt" ),
-    "Net", CALCULATE ( SUM ( 'ERP P&L'[Amount] ), 'ERP P&L'[P&L Line] = "Net Sales Amt" ),
-    "SalesDeduction", CALCULATE ( SUM ( 'ERP P&L'[Amount] ), 'ERP P&L'[P&L Line] = "Sales Deduction" )
-)
-ORDER BY
-    'ERP P&L'[Source Year],
-    'ERP P&L'[Version],
-    'ERP P&L'[Month Key]
+Refresh error:
+ERP Master source must contain an Excel table named erp_master.
+
+Fix:
+1. Open erp_master.xlsx in Excel.
+2. Select the material list, including the Material header.
+3. Press Ctrl+T and confirm My table has headers.
+4. Open Table Design and set Table Name to erp_master.
+5. Confirm the column header is exactly Material.
+6. Save and close erp_master.xlsx.
+7. Return to Power BI and refresh again.
