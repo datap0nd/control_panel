@@ -1,34 +1,51 @@
-EVALUATE
-VAR _SCPlusCompanies =
-    { "SGE", "SETK", "SESAR" }
-VAR _CurrentSourceYear =
-    CALCULATE ( MAX ( 'ERP P&L'[Source Year] ), REMOVEFILTERS ( 'ERP P&L' ) )
-VAR _PostedActuals =
-    FILTER (
-        ALL ( 'ERP P&L'[Source Year], 'ERP P&L'[Version] ),
-        (
-            'ERP P&L'[Source Year] < _CurrentSourceYear
-                && 'ERP P&L'[Version] = "Actual"
-        )
-            || (
-                'ERP P&L'[Source Year] = _CurrentSourceYear
-                    && 'ERP P&L'[Version] = "0"
-            )
-    )
-RETURN
-    SUMMARIZECOLUMNS (
-        'ERP P&L'[Company Key],
-        TREATAS ( _SCPlusCompanies, 'ERP P&L'[Company Key] ),
-        _PostedActuals,
-        "FactRows", [ERP Fact Rows Stage],
-        "ExactMatchedItemKeys", [ERP Exact Matched Item Keys Stage],
-        "SevenCharacterMatchedItemKeys", [ERP 7 Matched Item Keys Stage],
-        "Pnl7KeyCollisions", [ERP P&L 7 Key Collision Count Stage],
-        "Ambiguous7CandidateKeys", [ERP 7 Ambiguous Candidate Key Count Stage],
-        "GrossExact", [ERP Gross Sales SC+ Exact Candidate Stage],
-        "NetExact", [ERP Net Sales SC+ Exact Candidate Stage],
-        "Gross7", [ERP Gross Sales SC+ 7 Candidate Stage],
-        "Net7", [ERP Net Sales SC+ 7 Candidate Stage]
-    )
-ORDER BY
-    'ERP P&L'[Company Key]
+SC+ TO GSCM PARTNER MAPPING
+
+Confirmed scope
+- The stakeholder request covers only SC+ and GSCM.
+- Do not discuss downstream systems, dashboard implementation, or other
+  mapping layers in the request.
+- Hyeonmin and Zouhir are jointly responsible for validating the same SC+ to
+  GSCM mapping.
+
+Objective
+Map the SC+ partner names in Policy to the GSCM account master.
+
+What was attempted
+1. Exact GSCM Sold To ID matches.
+2. Exact account-name matches.
+3. Partner-name and Sold To name matches.
+4. Grouping multiple GSCM stores under one SC+ partner.
+
+Why manual validation is required
+1. The SC+ partner-code field is blank in the Policy data. The only available
+   partner-level identifier is partner_name.
+2. SC+ and GSCM often use different names for the same partner. Some SC+
+   values are abbreviations, numeric values, operational labels, or grouped
+   partner names.
+3. One SC+ partner may represent several GSCM stores, accounts, or Sold To
+   IDs. Some SC+ values represent a complete channel instead of one partner.
+4. Some GSCM account names are generic or shared by multiple partners.
+
+Required deliverable
+Provide one Excel mapping table with the following columns:
+
+- SC+ Country
+- SC+ Channel
+- SC+ Partner Name
+- GSCM Country
+- GSCM Sales Channel
+- GSCM Account Name
+- GSCM Sold To ID
+
+Use one row per mapping relationship. If one SC+ partner represents multiple
+GSCM accounts, include one row for every GSCM account.
+
+Stakeholder request
+Hyeonmin and Zouhir should review the proposed relationships and complete or
+correct the unresolved SC+ to GSCM mappings.
+
+Communication requirements
+- Keep the message short and use simple English.
+- Organize it under: objective, what was attempted, challenges, and requested
+  output.
+- Ask for one action only: return the completed Excel mapping table.
