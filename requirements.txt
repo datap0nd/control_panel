@@ -1,14 +1,31 @@
--- Replace ROLE_NAME, SCHEMA_NAME, and TABLE_NAME before running.
+-- Replace SCHEMA_NAME and TABLE_NAME before running.
+-- This diagnostic is read-only.
 
 SELECT
     current_database() AS connected_database,
     current_user AS executing_user,
-    has_schema_privilege('ROLE_NAME', '"SCHEMA_NAME"', 'USAGE') AS schema_usage,
-    has_table_privilege('ROLE_NAME', '"SCHEMA_NAME"."TABLE_NAME"', 'SELECT') AS table_select;
-
-GRANT USAGE ON SCHEMA "SCHEMA_NAME" TO ROLE_NAME;
-GRANT SELECT ON TABLE "SCHEMA_NAME"."TABLE_NAME" TO ROLE_NAME;
+    session_user AS login_user,
+    r.rolsuper AS executing_user_is_superuser
+FROM pg_roles AS r
+WHERE r.rolname = current_user;
 
 SELECT
-    has_schema_privilege('ROLE_NAME', '"SCHEMA_NAME"', 'USAGE') AS schema_usage_after,
-    has_table_privilege('ROLE_NAME', '"SCHEMA_NAME"."TABLE_NAME"', 'SELECT') AS table_select_after;
+    n.nspname AS schema_name,
+    pg_get_userbyid(n.nspowner) AS schema_owner
+FROM pg_namespace AS n
+WHERE n.nspname = 'SCHEMA_NAME';
+
+SELECT
+    n.nspname AS schema_name,
+    c.relname AS object_name,
+    c.relkind AS object_kind,
+    pg_get_userbyid(c.relowner) AS object_owner
+FROM pg_class AS c
+JOIN pg_namespace AS n
+    ON n.oid = c.relnamespace
+WHERE n.nspname = 'SCHEMA_NAME'
+  AND c.relname = 'TABLE_NAME';
+
+-- The reported owner or a database administrator must run:
+GRANT USAGE ON SCHEMA "SCHEMA_NAME" TO ROLE_NAME;
+GRANT SELECT ON TABLE "SCHEMA_NAME"."TABLE_NAME" TO ROLE_NAME;
