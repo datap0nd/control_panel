@@ -1,22 +1,14 @@
----
-name: artifact-template-meto-newsletter-infographic
-description: "Create an image using the METO Newsletter Infographic template and its retained reference file. Use when the user selects this template, names METO Newsletter Infographic, or explicitly invokes $artifact-template-meto-newsletter-infographic. Create one-page internal newsletter infographics with the same editorial structure, navy and cobalt palette, restrained office imagery, compact diagrams, and Outlook-ready proportions."
----
+-- Replace ROLE_NAME, SCHEMA_NAME, and TABLE_NAME before running.
 
-# METO Newsletter Infographic
+SELECT
+    current_database() AS connected_database,
+    current_user AS executing_user,
+    has_schema_privilege('ROLE_NAME', '"SCHEMA_NAME"', 'USAGE') AS schema_usage,
+    has_table_privilege('ROLE_NAME', '"SCHEMA_NAME"."TABLE_NAME"', 'SELECT') AS table_select;
 
-Create an image from this template. Keep the reference file unchanged.
+GRANT USAGE ON SCHEMA "SCHEMA_NAME" TO ROLE_NAME;
+GRANT SELECT ON TABLE "SCHEMA_NAME"."TABLE_NAME" TO ROLE_NAME;
 
-## Workflow
-
-1. Read `artifact-template.json` and resolve its paths relative to this skill directory.
-2. Load [@Product Design](plugin://product-design@openai-curated-remote) and use the retained PNG as the visual template for the user's requested product-design workflow.
-3. Treat the user's prompt and available sources as the content input. Do not invent factual claims merely to fill the composition.
-4. Preserve the reference's visual language unless the user explicitly requests a deviation.
-5. Follow the Product Design workflow through visual verification, then return its final result.
-
-## Fidelity
-
-Preserve the reference image's composition, visual hierarchy, palette, typography, material treatment, lighting, and recurring brand elements.
-
-User instructions control requested content and explicit deviations. The retained reference controls layout and formatting where the user has not requested a change.
+SELECT
+    has_schema_privilege('ROLE_NAME', '"SCHEMA_NAME"', 'USAGE') AS schema_usage_after,
+    has_table_privilege('ROLE_NAME', '"SCHEMA_NAME"."TABLE_NAME"', 'SELECT') AS table_select_after;
