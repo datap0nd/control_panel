@@ -1,28 +1,117 @@
-SELECT
-    current_user,
-    session_user,
-    current_database(),
-    inet_server_addr(),
-    inet_server_port();
+Act as a live evidence collector for a Python Playwright scanner of the GSCM Nexacro portal. Do not modify source code yet. Do not guess selectors or propose a final patch without inspecting the live page.
 
-SELECT
-    pg_has_role(current_user, 'EXPECTED_ROLE', 'member') AS is_expected_role_or_member;
+Repository context:
 
-WITH target AS (
-    SELECT
-        to_regnamespace('TARGET_SCHEMA') AS schema_oid,
-        to_regclass('"TARGET_SCHEMA"."TARGET_TABLE"') AS table_oid
-)
-SELECT
-    current_user AS effective_user,
-    schema_oid IS NOT NULL AS schema_visible,
-    table_oid::text AS resolved_table,
-    CASE
-        WHEN schema_oid IS NULL THEN NULL
-        ELSE has_schema_privilege(current_user, schema_oid, 'USAGE')
-    END AS has_schema_usage,
-    CASE
-        WHEN table_oid IS NULL THEN NULL
-        ELSE has_table_privilege(current_user, table_oid, 'SELECT')
-    END AS has_table_select
-FROM target;
+- Inspect the latest `origin/main`, expected commit `7dda2c5`.
+- Relevant file: `app/flow_gscm.py`.
+- Relevant functions and scripts: `_VISIBLE_TEXT_JS`, `visible_text()`, `read_favorite_tree()`, `collect_favorite_tree()`, `_row_has_actions()`, and `_leaf_entries()`.
+- Current bad scan result under Public: `Biz InfoAXSCMChannelPromotionMDMSupplyNews`.
+- Likely defect: `_VISIBLE_TEXT_JS` reads `element.textContent` from every visible element. A parent container containing the separate buttons Biz Info, AX, SCM, Channel, Promotion, MDM, Supply, and News is therefore interpreted as one label. `read_favorite_tree()` also does not appear to restrict collected text to the actual Favorite tree container.
+
+Safety rules:
+
+- Do not reveal passwords, cookies, SSO tokens, authorization headers, employee identifiers, or session data.
+- Do not create, rename, save, pin, unpin, delete, or edit bookmarks.
+- Never click Save, Unselect, Delete, Remove, Apply, pin controls, or similar controls.
+- You may open Setting > Favorite, switch Private/Public/Custom tabs, scroll the tree, and expand or collapse folders.
+
+Collect the following live evidence:
+
+1. Open GSCM, then Setting > Favorite > Public. Wait until rendering and network activity settle. Capture a full screenshot that includes the dialog, tree, scope tabs, and surrounding navigation.
+
+2. Inspect the element whose text is exactly or contains `Biz InfoAXSCMChannelPromotionMDMSupplyNews`. For every match, return:
+   - tag name
+   - exact DOM id
+   - class names
+   - direct text owned by the element, excluding descendant elements
+   - full `textContent`
+   - `innerText`
+   - title, aria-label, role, and value
+   - bounding rectangle
+   - display, visibility, position, overflow, and z-index
+   - the same summary for up to eight ancestors
+   - a summary of every immediate child, including its id, text, and rectangle
+
+3. Identify the exact DOM or Nexacro component that contains only the Favorite tree. Return:
+   - its exact id and a usable selector
+   - ancestor chain
+   - bounding rectangle
+   - clientHeight, scrollHeight, and scrollTop
+   - whether it is the virtualized scroll container
+   - evidence that Private, Public, Custom, Save, Go, Close, and global navigation are outside it
+
+4. Enumerate every currently visible row inside that tree only. Return JSON records with:
+   - exact visible label
+   - full descendant `textContent`
+   - row/component id
+   - label element id
+   - x, y, width, and height
+   - indentation relative to the tree container
+   - parent component identifiers
+   - icons on the same row, with ids and rectangles
+   - whether the row is a folder or bookmark
+   - the concrete DOM or Nexacro evidence supporting that classification
+
+5. Include at least:
+   - one collapsed folder
+   - the same folder after expansion
+   - one expanded folder
+   - one real bookmark row
+   - one bookmark nested at least two folder levels deep
+   - one case where folders or rows have similar names
+
+6. Scroll the Favorite tree down one page and collect the row evidence again. Report:
+   - which DOM ids remained stable
+   - which were regenerated
+   - whether rows are recycled by virtualization
+   - the correct scroll container
+   - whether geometry and indentation remain reliable after scrolling
+
+7. In the Network panel, inspect the existing browser request whose path ends with:
+   `common/biz/treeconfig/usertreeUserDefinedList.do`
+
+   Do not reproduce cookies or authorization headers. Return:
+   - request method and URL path
+   - request and response content types
+   - sanitized request-body structure
+   - raw response body saved as a text attachment, with personal identifiers redacted
+   - parsed dataset names and column names
+   - five sanitized sample records covering folders, bookmarks, and different depths
+   - whether the response directly identifies tab/scope, hierarchy, row type, name, report id, parent id, and ordering
+
+8. Run or reproduce the scanner’s current visible-text extraction against this live screen. Return every extracted record whose text contains any of:
+   `Biz Info`, `AX`, `SCM`, `Channel`, `Promotion`, `MDM`, `Supply`, or `News`.
+
+9. Confirm or refute each hypothesis separately:
+   - a parent container’s descendant `textContent` creates the bad combined name
+   - global navigation is not excluded from `read_favorite_tree()`
+   - action icons elsewhere on the same y-coordinate can make a non-tree label look like a bookmark
+   - scoping extraction to the Favorite tree would remove the bad entry
+   - the backend SSV response is a safer source of bookmark identity and hierarchy than visual geometry
+
+10. Recommend the most reliable implementation approach, ranked:
+   - parse the already-issued SSV favorites response
+   - inspect exact Nexacro tree components or datasets
+   - scope DOM extraction to the verified tree container
+   - geometry-only fallback
+
+Do not provide a generic Selenium or Playwright tutorial. Base every conclusion on collected evidence.
+
+Deliver these artifacts:
+
+- `gscm-favorite-public.png`
+- `gscm-dom-probe.json`
+- `gscm-favorites-response.txt`, if accessible
+- `gscm-findings.md`
+
+End `gscm-findings.md` with:
+
+- confirmed root cause
+- exact stable selectors or component paths
+- exact folder-versus-bookmark rule
+- exact hierarchy rule
+- scrolling and virtualization behavior
+- remaining uncertainty
+- three known real bookmark paths suitable for acceptance testing
+
+Return the artifact paths and paste the complete findings so they can be sent directly to another coding agent.
