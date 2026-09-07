@@ -1,11 +1,11 @@
 # B2B Local Data bootstrap
 
-`setup.ps1` here is the installer from the private `datap0nd/b2b-local-data` repository. It is the only file a work PC needs: it downloads the application source, the SHA-256-verified portable Python, and all libraries from that private repository using the data-governance GitHub token (`dg_github_token`), then stages and selects the release. No Git client, administrator rights, pip, Node.js, or system Python is required.
+`setup.ps1` here is the installer from the private `datap0nd/b2b-local-data` repository. It is the only file a work PC needs: it downloads the application source, the SHA-256-verified portable Python, and all libraries from that private repository using the data-governance GitHub token (`PAT_CODE`), then stages and selects the release. No Git client, administrator rights, pip, Node.js, or system Python is required.
 
 ## Install
 
 1. Create an empty install folder, for example `C:\B2B`, and save this `setup.ps1` into it (open the file on GitHub, choose **Raw**, save as `setup.ps1`).
-2. The installer reads the GitHub token from the `dg_github_token` environment variable that data governance already sets on work PCs. Nothing else is needed. If that variable is absent, create a `.env` file in the same folder with one line, `dg_github_token=<the token>`.
+2. The installer reads the GitHub token from the `PAT_CODE` environment variable that data governance already sets on work PCs. Nothing else is needed. If that variable is absent, create a `.env` file in the same folder with one line, `PAT_CODE=<the token>`.
 3. Open PowerShell in that folder and run:
 
 ```powershell
@@ -24,10 +24,10 @@
 
 ## Update
 
-Run `.\setup.ps1` or `.\update_app.ps1` from the install folder again. `dg_github_token` authenticates every download; unchanged archives are reused, and `.env`, `business_rules.md`, and `data\` are preserved.
+Run `.\setup.ps1` or `.\update_app.ps1` from the install folder again. `PAT_CODE` authenticates every download; unchanged archives are reused, and `.env`, `business_rules.md`, and `data\` are preserved.
 
 ## Rules
 
-- The token lives only in the `dg_github_token` environment variable or `.env`. Never put it in prompts, scripts, or logs.
+- The token lives only in the `PAT_CODE` environment variable or `.env`. Never put it in prompts, scripts, or logs.
 - Salesforce exports, result downloads, and test reports stay on the work PC.
 - `setup.ps1` sends the PAT to GitHub only; the application never sends it to SQL or Qwen.
