@@ -5,12 +5,7 @@
 ## Install
 
 1. Create an empty install folder, for example `C:\B2B`, and save this `setup.ps1` into it (open the file on GitHub, choose **Raw**, save as `setup.ps1`).
-2. In the same folder create a text file named `.env` with one line, using a fine-grained PAT that has **Contents: read** on `datap0nd/b2b-local-data`:
-
-```dotenv
-B2B_GITHUB_TOKEN=<the PAT>
-```
-
+2. The installer reads the GitHub token from the `PAT_Code` environment variable that data governance already sets on work PCs. Nothing else is needed. If that variable is absent, create a `.env` file in the same folder with one line, `B2B_GITHUB_TOKEN=<the PAT>`; a token there takes precedence.
 3. Open PowerShell in that folder and run:
 
 ```powershell
@@ -29,10 +24,10 @@ B2B_GITHUB_TOKEN=<the PAT>
 
 ## Update
 
-Run `.\setup.ps1` or `.\update_app.ps1` from the install folder again. The PAT in `.env` authenticates every download; unchanged archives are reused, and `.env`, `business_rules.md`, and `data\` are preserved.
+Run `.\setup.ps1` or `.\update_app.ps1` from the install folder again. `PAT_Code` (or `B2B_GITHUB_TOKEN`) authenticates every download; unchanged archives are reused, and `.env`, `business_rules.md`, and `data\` are preserved.
 
 ## Rules
 
-- The PAT lives only in `.env` (or a process environment variable). Never put it in prompts, scripts, or logs.
+- The token lives only in the `PAT_Code` environment variable or `.env`. Never put it in prompts, scripts, or logs.
 - Salesforce exports, result downloads, and test reports stay on the work PC.
 - `setup.ps1` sends the PAT to GitHub only; the application never sends it to SQL or Qwen.
