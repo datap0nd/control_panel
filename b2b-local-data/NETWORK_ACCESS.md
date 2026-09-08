@@ -128,6 +128,76 @@ No router port forwarding is needed for access on the same LAN. Do not forward t
 
 ## Troubleshooting
 
+### Work PC: port 8765 has no listener
+
+If the command for port `8765` reports that no matching `MSFT_NetTCPConnection` object was found, Windows Firewall is not yet the immediate problem. That result means no application is listening on the port. Run this complete block in PowerShell on the work PC. It updates only the two network settings in `.env`, preserves the remaining configuration, and starts B2B in the same window so any startup error remains visible:
+
+```powershell
+$installRoot = "C:\Users\meto.mx\Documents\B2B_Salesforce_AI"
+$envPath = Join-Path $installRoot ".env"
+$startScript = Join-Path $installRoot "start.ps1"
+
+if (-not (Test-Path -LiteralPath $envPath)) {
+    throw "Missing $envPath. Run setup.ps1 first or correct installRoot."
+}
+
+if (-not (Test-Path -LiteralPath $startScript)) {
+    throw "Missing $startScript. Run setup.ps1 first or correct installRoot."
+}
+
+$envText = Get-Content -LiteralPath $envPath -Raw
+
+foreach ($setting in @{
+    B2B_LISTEN_HOST = "0.0.0.0"
+    APP_PORT = "8765"
+}.GetEnumerator()) {
+    $escapedName = [Regex]::Escape($setting.Key)
+    $pattern = "(?m)^\s*$escapedName\s*=.*$"
+    $replacement = "$($setting.Key)=$($setting.Value)"
+
+    if ([Regex]::IsMatch($envText, $pattern)) {
+        $envText = [Regex]::Replace($envText, $pattern, $replacement)
+    } else {
+        if ($envText.Length -gt 0 -and -not $envText.EndsWith("`n")) {
+            $envText += "`r`n"
+        }
+        $envText += "$replacement`r`n"
+    }
+}
+
+[IO.File]::WriteAllText(
+    $envPath,
+    $envText,
+    [Text.UTF8Encoding]::new($false)
+)
+
+Write-Host "B2B network settings:"
+Select-String -LiteralPath $envPath `
+    -Pattern '^(B2B_LISTEN_HOST|APP_PORT)='
+
+$listener = Get-NetTCPConnection `
+    -LocalPort 8765 `
+    -State Listen `
+    -ErrorAction SilentlyContinue
+
+if ($listener) {
+    Write-Host "Port 8765 is already in use by:"
+    $listener |
+        Select-Object LocalAddress, LocalPort, OwningProcess
+    Get-Process -Id ($listener.OwningProcess | Select-Object -Unique) |
+        Select-Object Id, ProcessName, Path
+    throw "Stop here: another process already owns port 8765."
+}
+
+Set-Location -LiteralPath $installRoot
+Write-Host "Starting B2B. Keep this window open."
+& $startScript -InstallDir $installRoot
+```
+
+Successful startup prints a line ending in `listening on 0.0.0.0`. Keep that PowerShell window open. On the B2B PC, test `http://127.0.0.1:8765`. Only after that local address works should another PC test `http://<B2B-PC-IPv4>:8765`.
+
+If startup prints an error and returns to the PowerShell prompt, keep the full error visible for diagnosis. If it reports that port `8765` is already in use, the block identifies the owning process; do not change the B2B port until that process has been identified.
+
 ### No network profile found for `Wi-Fi`
 
 ```text
@@ -147,7 +217,7 @@ If Windows says the category cannot be changed because the network is domain aut
 
 ### No listening connection appears
 
-If `Get-NetTCPConnection -LocalPort 8765 -State Listen` returns nothing, confirm that `.env` contains `B2B_LISTEN_HOST=0.0.0.0` and restart the application with `.\start.ps1`.
+Use the complete **Work PC: port 8765 has no listener** block above. A firewall rule opens a path to a listening application; it does not start the application or create the listener.
 
 ### The remote connection test fails
 
