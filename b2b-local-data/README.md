@@ -22,6 +22,8 @@
 
    and open `http://127.0.0.1:8765`.
 
+To let colleagues on the same trusted LAN connect, follow [NETWORK_ACCESS.md](NETWORK_ACCESS.md) to configure the listener and Windows Firewall safely.
+
 ## Update
 
 Run `.\setup.ps1` or `.\update_app.ps1` from the install folder again. `DG_GITHUB_TOKEN` authenticates every download; unchanged archives are reused, and `.env`, `business_rules.md`, and `data\` are preserved.
