@@ -27,16 +27,39 @@ Get-NetConnectionProfile |
         NetworkCategory, IPv4Connectivity
 ```
 
-Copy the `InterfaceIndex` shown for the trusted connection. Replace `12` below with that number. Using the numeric index avoids assuming that the connection is named `Wi-Fi`.
+### Work PC: copy and paste this complete block
+
+The current work PC uses interface `4`. This block detects whether Windows classifies it as `DomainAuthenticated` or `Private`, then applies the firewall rule to the matching profile. It does not try to change a domain-authenticated network to Private, which Windows prohibits.
 
 ```powershell
-$interfaceIndex = 12 # Replace with the trusted connection's InterfaceIndex
+$interfaceIndex = 4
 $appPort = 8765
 $ruleName = "B2B Local Data TCP 8765"
 
-Set-NetConnectionProfile `
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
+$isAdministrator = $principal.IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator
+)
+
+if (-not $isAdministrator) {
+    throw "Close this window and open PowerShell with Run as administrator."
+}
+
+$networkProfile = Get-NetConnectionProfile `
     -InterfaceIndex $interfaceIndex `
-    -NetworkCategory Private
+    -ErrorAction Stop
+
+$firewallProfile = switch ($networkProfile.NetworkCategory.ToString()) {
+    "DomainAuthenticated" { "Domain" }
+    "Private" { "Private" }
+    "Public" {
+        throw "Interface 4 is Public. Stop and confirm the trusted network before changing it."
+    }
+    default {
+        throw "Unsupported network category: $($networkProfile.NetworkCategory)"
+    }
+}
 
 $existingRule = Get-NetFirewallRule `
     -DisplayName $ruleName `
@@ -48,7 +71,7 @@ if ($existingRule) {
         -Enabled True `
         -Direction Inbound `
         -Action Allow `
-        -Profile Private
+        -Profile $firewallProfile
 } else {
     New-NetFirewallRule `
         -DisplayName $ruleName `
@@ -56,11 +79,22 @@ if ($existingRule) {
         -Action Allow `
         -Protocol TCP `
         -LocalPort $appPort `
-        -Profile Private
+        -Profile $firewallProfile
 }
+
+$networkProfile |
+    Format-List Name, InterfaceAlias, InterfaceIndex, `
+        NetworkCategory, DomainAuthenticationKind
+
+Get-NetFirewallRule -DisplayName $ruleName |
+    Format-List DisplayName, Enabled, Direction, Action, Profile
+
+Get-NetFirewallRule -DisplayName $ruleName |
+    Get-NetFirewallPortFilter |
+    Format-List Protocol, LocalPort
 ```
 
-The rule applies only while Windows classifies the connection as Private.
+The expected result is an enabled inbound Allow rule for TCP port `8765`, using the Domain profile on a domain-authenticated corporate network or the Private profile on a trusted private network.
 
 ## 3. Find and test the address
 
@@ -107,13 +141,17 @@ The connection on that PC has a different interface name. Run `Get-NetConnection
 
 The PowerShell window is not elevated. Close it, search for PowerShell, choose **Run as administrator**, and rerun the complete block—including the three variable assignments at its beginning.
 
+### Network category cannot be changed
+
+If Windows says the category cannot be changed because the network is domain authenticated, do not run `Set-NetConnectionProfile`. Domain membership controls that category. Use the complete interface-`4` block above; it automatically selects the Domain firewall profile.
+
 ### No listening connection appears
 
 If `Get-NetTCPConnection -LocalPort 8765 -State Listen` returns nothing, confirm that `.env` contains `B2B_LISTEN_HOST=0.0.0.0` and restart the application with `.\start.ps1`.
 
 ### The remote connection test fails
 
-If `Test-NetConnection` reports `TcpTestSucceeded: False`, confirm that both PCs are on the same LAN, the B2B PC's network profile is Private, the firewall rule is enabled, and the application is listening. Guest Wi-Fi networks may block communication between devices even when the PC settings are correct.
+If `Test-NetConnection` reports `TcpTestSucceeded: False`, confirm that both PCs are on the same LAN, the firewall rule matches the B2B PC's Domain or Private network profile, the rule is enabled, and the application is listening. Guest Wi-Fi networks and corporate policy may block communication between devices even when the local PC settings are correct.
 
 ## Undo network access
 
