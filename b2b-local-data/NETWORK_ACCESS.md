@@ -19,22 +19,23 @@ Restart the application from that folder:
 
 ## 2. Allow the port through Windows Firewall
 
-Open PowerShell **as Administrator**. First inspect the active connection and confirm that it is a trusted network:
+Open PowerShell **as Administrator**. The window title must begin with `Administrator:`. First inspect the available connections and confirm which one is the trusted LAN:
 
 ```powershell
 Get-NetConnectionProfile |
-    Select-Object Name, InterfaceAlias, NetworkCategory, IPv4Connectivity
+    Select-Object InterfaceIndex, Name, InterfaceAlias, `
+        NetworkCategory, IPv4Connectivity
 ```
 
-Replace `Wi-Fi` below if the active interface has another name. Mark the trusted connection as Private, then create or enable the inbound rule:
+Copy the `InterfaceIndex` shown for the trusted connection. Replace `12` below with that number. Using the numeric index avoids assuming that the connection is named `Wi-Fi`.
 
 ```powershell
-$interfaceAlias = "Wi-Fi"
+$interfaceIndex = 12 # Replace with the trusted connection's InterfaceIndex
 $appPort = 8765
 $ruleName = "B2B Local Data TCP 8765"
 
 Set-NetConnectionProfile `
-    -InterfaceAlias $interfaceAlias `
+    -InterfaceIndex $interfaceIndex `
     -NetworkCategory Private
 
 $existingRule = Get-NetFirewallRule `
@@ -90,6 +91,29 @@ Test-NetConnection 192.168.0.58 -Port 8765
 ```
 
 No router port forwarding is needed for access on the same LAN. Do not forward this port to the internet. The app's name prompt separates local conversation history; it is not network authentication.
+
+## Troubleshooting
+
+### No network profile found for `Wi-Fi`
+
+```text
+Set-NetConnectionProfile: No MSFT_NetConnectionProfile objects found
+with InterfaceAlias equal to 'Wi-Fi'
+```
+
+The connection on that PC has a different interface name. Run `Get-NetConnectionProfile` and use its actual `InterfaceIndex` as shown above. Do not use `Wi-Fi` unless it appears exactly in the command output.
+
+### `New-NetFirewallRule: Access is denied`
+
+The PowerShell window is not elevated. Close it, search for PowerShell, choose **Run as administrator**, and rerun the complete block—including the three variable assignments at its beginning.
+
+### No listening connection appears
+
+If `Get-NetTCPConnection -LocalPort 8765 -State Listen` returns nothing, confirm that `.env` contains `B2B_LISTEN_HOST=0.0.0.0` and restart the application with `.\start.ps1`.
+
+### The remote connection test fails
+
+If `Test-NetConnection` reports `TcpTestSucceeded: False`, confirm that both PCs are on the same LAN, the B2B PC's network profile is Private, the firewall rule is enabled, and the application is listening. Guest Wi-Fi networks may block communication between devices even when the PC settings are correct.
 
 ## Undo network access
 
