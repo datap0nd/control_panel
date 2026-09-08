@@ -128,6 +128,59 @@ No router port forwarding is needed for access on the same LAN. Do not forward t
 
 ## Troubleshooting
 
+### `.env` says another port, but startup still prints `8765`
+
+The application gives a Windows process environment variable precedence over `.env`. A stale `APP_PORT=8765` in the PowerShell environment therefore overrides the file. This complete block sets port `8766` for the current launch, saves it for later launches by this Windows user, updates `.env`, creates the matching firewall rule, and starts B2B:
+
+```powershell
+$installRoot = "C:\Users\meto.mx\Documents\B2B_Salesforce_AI"
+$newPort = "8766"
+$interfaceIndex = 4
+$envPath = Join-Path $installRoot ".env"
+$ruleName = "B2B Local Data TCP $newPort"
+
+if (-not (Test-Path -LiteralPath $envPath)) {
+    throw "Missing $envPath. Correct installRoot or run setup.ps1 first."
+}
+
+$envText = Get-Content -LiteralPath $envPath -Raw
+$pattern = "(?m)^\s*APP_PORT\s*=.*$"
+if ([Regex]::IsMatch($envText, $pattern)) {
+    $envText = [Regex]::Replace($envText, $pattern, "APP_PORT=$newPort")
+} else {
+    $envText += [Environment]::NewLine + "APP_PORT=$newPort" + [Environment]::NewLine
+}
+[IO.File]::WriteAllText($envPath, $envText, [Text.UTF8Encoding]::new($false))
+
+[Environment]::SetEnvironmentVariable("APP_PORT", $newPort, "User")
+$env:APP_PORT = $newPort
+
+$networkProfile = Get-NetConnectionProfile -InterfaceIndex $interfaceIndex -ErrorAction Stop
+$firewallProfile = switch ($networkProfile.NetworkCategory.ToString()) {
+    "DomainAuthenticated" { "Domain" }
+    "Private" { "Private" }
+    "Public" { throw "Interface 4 is Public. Stop and confirm the trusted network." }
+    default { throw "Unsupported network category: $($networkProfile.NetworkCategory)" }
+}
+
+$existingRule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
+if ($existingRule) {
+    Set-NetFirewallRule -DisplayName $ruleName -Enabled True -Direction Inbound -Action Allow -Profile $firewallProfile
+} else {
+    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort ([int]$newPort) -Profile $firewallProfile
+}
+
+Write-Host "File value:"
+Select-String -LiteralPath $envPath -Pattern "^APP_PORT="
+Write-Host "Value used by this launch: APP_PORT=$env:APP_PORT"
+
+Set-Location -LiteralPath $installRoot
+Write-Host "Starting B2B on port $newPort. Keep this window open."
+& ".\start.ps1" -InstallDir $installRoot
+```
+
+Successful startup must print `http://127.0.0.1:8766`. Use `http://<B2B-PC-IPv4>:8766` from the other PC. To use a different port, change only `$newPort = "8766"` at the top.
+
 ### Work PC: port 8765 has no listener
 
 If the command for port `8765` reports that no matching `MSFT_NetTCPConnection` object was found, Windows Firewall is not yet the immediate problem. That result means no application is listening on the port. Run this complete block in PowerShell on the work PC. It updates only the two network settings in `.env`, preserves the remaining configuration, and starts B2B in the same window so any startup error remains visible:
