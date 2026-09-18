@@ -1,12 +1,10 @@
-$codeDir = Split-Path -Parent (Resolve-Path .\setup.ps1)
-$auditorRoot = Join-Path (Split-Path -Parent $codeDir) 'auditor'
-$account = "$env:USERDOMAIN\$env:USERNAME"
+$capacity = Invoke-RestMethod http://127.0.0.1:8000/api/system/flows
 
-# Confirm the exact folder before changing its permissions
-$auditorRoot
-
-takeown.exe /F $auditorRoot /R /D Y
-icacls.exe $auditorRoot /reset /T /C
-icacls.exe $auditorRoot /grant "${account}:(OI)(CI)F" /T /C
-
-powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File .\setup.ps1
+$capacity | Select-Object `
+    total_capacity,
+    headless_capacity,
+    online_capacity,
+    active_headless,
+    headed_capacity,
+    online_headed_capacity,
+    active_headed
